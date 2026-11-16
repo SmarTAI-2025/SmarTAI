@@ -576,48 +576,52 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
     manual_review = operation.operation_type == "submission_manual_review"
     from backend.services.submission_source_state import load_source_states
     source_states = load_source_states(operation)
-    manually_resolved_sources = set()
-    unresolved_sources = set()
-    if manual_review:
-        students = current_students if current_students is not None else _serialize_student_data(
-            workflow.assignment_id, owner_id, _active_submissions(workflow.assignment_id, owner_id))
-        for student in students.values():
-            if student.get("identity_status") == "matched" and not any(
-                _answer_recognition_failures(answer.get("flag"))
-                for answer in student["stu_ans"]
-            ):
-                manually_resolved_sources.add(student.get("source_id"))
-            else:
-                unresolved_sources.add(student.get("source_id"))
-        manually_resolved_sources -= unresolved_sources
+    manual_container = (operation.checkpoint or {}).get("manual_student_container_source_id") if manual_review else None
+    def current_source_id(presentation):
+        return presentation.source_id or (manual_container if presentation.identity_match_method == "manual_review" else None)
     # Recognition checkpoints are immutable history. Once attached, review
     # edits and confirmations on the current submission are authoritative.
     current_diagnostics = {}
     diagnostic_sources = {result.source.id for result in results}
-    if diagnostic_sources and not manual_review and operation.status not in {"pending", "running"}:
+    if diagnostic_sources and operation.status not in {"pending", "running"}:
         answers_by_source = defaultdict(list)
         if current_students is None:
-            fields_by_source = defaultdict(list)
+            # Manual count handoff can put several students in one container.
+            # Detect duplicate assignments within each student before grouping by source.
+            fields_by_student = defaultdict(list)
             for answer in workflow_repository.current_source_answer_review_fields(
                 workflow.assignment_id, owner_id=owner_id, source_ids=diagnostic_sources,
+                manual_container_source_id=manual_container,
             ):
-                fields = fields_by_source[answer.source_id]
+                fields = fields_by_student[(answer.source_id, answer.student_id)]
                 if answer.id is not None:
                     fields.append(answer)
             if questions is None:
                 questions = assignment_repository.list_questions(workflow.assignment_id, teacher_id=owner_id)
-            for source_id, answers in fields_by_source.items():
-                answers_by_source[source_id] = _serialize_review_answers(
+            for (source_id, _student_id), answers in fields_by_student.items():
+                answers_by_source[source_id].extend(_serialize_review_answers(
                     answers, {answer.id: answer.review_status or "pending" for answer in answers},
                     questions, diagnostics_only=True,
-                )
+                ))
         else:
             for presentation in presentations.values():
                 student = current_students.get(presentation.display_student_id)
-                if presentation.is_active and presentation.source_id in diagnostic_sources and student is not None:
-                    answers_by_source[presentation.source_id].extend(student["stu_ans"])
+                source_id = current_source_id(presentation)
+                if presentation.is_active and source_id in diagnostic_sources and student is not None:
+                    answers_by_source[source_id].extend(student["stu_ans"])
         current_diagnostics = {source_id: public_answer_diagnostics(answers, limit=None)
                                for source_id, answers in answers_by_source.items()}
+    manually_resolved_sources = set()
+    if manual_review:
+        identities_by_source = defaultdict(list)
+        for presentation in presentations.values():
+            if presentation.is_active:
+                identities_by_source[current_source_id(presentation)].append(presentation.identity_status == "matched")
+        manually_resolved_sources = {
+            source_id for source_id, diagnostics in current_diagnostics.items()
+            if all(identities_by_source.get(source_id, [False]))
+            and not public_answer_diagnostics(diagnostics, limit=None, required_only=True)
+        }
     rows: list[dict] = []
     summary = dict(empty)
     for result in results:
@@ -680,7 +684,7 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             internal_status = outcome.status
             summary["failed"] += 1
         summary["uploaded"] += 1
-        diagnostic_state = source_states.get(result.source.stored_file_id, {})
+        diagnostic_state = {} if manual_review else source_states.get(result.source.stored_file_id, {})
         if result.source.id in current_diagnostics:
             diagnostics = current_diagnostics[result.source.id]
             diagnostic_state = {**diagnostic_state, "answer_diagnostics": diagnostics[:20],
@@ -704,9 +708,9 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             "recognition_reason_code": safe_reason,
             "page_diagnostics": source_states.get(result.source.stored_file_id, {}).get("page_diagnostics"),
             "answer_diagnostics": public_answer_diagnostics(
-                diagnostic_state.get("answer_diagnostics", [])) if not manual_review else [],
-            "answer_diagnostic_count": diagnostic_state.get("answer_diagnostic_count", 0) if not manual_review else 0,
-            "answer_required_diagnostic_count": diagnostic_state.get("answer_required_diagnostic_count") if not manual_review else 0,
+                diagnostic_state.get("answer_diagnostics", [])),
+            "answer_diagnostic_count": diagnostic_state.get("answer_diagnostic_count", 0),
+            "answer_required_diagnostic_count": diagnostic_state.get("answer_required_diagnostic_count", 0 if manual_review else None),
             "resolution_status": (
                 "identity_resolved"
                 if outcome

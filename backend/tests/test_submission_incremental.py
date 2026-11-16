@@ -819,3 +819,77 @@ async def test_state_poll_batches_current_diagnostics_without_serializing_answer
     assert len(conflict["answer_diagnostics"]) == 2
     assert all("answer_assignment_conflict" in answer["flag"] for answer in conflict["answer_diagnostics"])
     registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container", [False, True])
+async def test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads(monkeypatch, container):
+    from backend.services.submission_source_state import load_source_states
+    from backend.db import source_outcome_repository
+
+    owner, task = _seed_task(with_question=True)
+    add_reviewed_question(task, teacher_id=owner, q_id="q2", order_index=1,
+        number="2", type="concept", stem="Second question", criterion="Correct answer: 10 points", max_score=10)
+    registry = _registry(monkeypatch, lambda _: pytest.fail("Manual handoff called a model"))
+    filename, content, content_type = "S1_Alice.txt", b"saved original", "text/plain"
+    if container:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w"):
+            pass  # A real empty archive cannot establish a student count.
+        filename, content, content_type = "answers.zip", archive.getvalue(), "application/zip"
+    args = dict(task_id=task, owner_id=owner)
+    queued = task_facade.queue_task_submission_parsing(**args, filename=filename, content=content,
+        content_type=content_type, registry=registry)
+    stop_task_run(**args, job_id=queued["job_id"],
+        expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    paused = task_facade.get_task(**args)
+    await continue_manually(**args, job_id=queued["job_id"], expected_revision=paused["workflow_revision"])
+    manual = task_facade.get_task(**args)
+    if container:
+        assert manual["manual_student_count_required"]
+        await continue_manually(**args, job_id=manual["parse_job_id"],
+            expected_revision=manual["workflow_revision"], student_count=2)
+        manual = task_facade.get_task(**args)
+    for index, display_id in enumerate(manual["student_data"]):
+        for q_id in ("q1", "q2"):
+            current = task_facade.get_task(**args)
+            task_facade.update_student_answer(**args, display_student_id=display_id, q_id=q_id,
+                patch={"content": "Teacher transcribed answer " * 1000, "review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+        current = task_facade.get_task(**args)
+        task_facade.update_student_identity(**args, current_display_id=display_id,
+            new_display_id=f"S{index+1}", new_display_name=f"Synthetic learner {index+1}",
+            expected_revision=current["workflow_revision"])
+    clean = task_facade.get_task(**args)
+    assert clean["submission_sources"][0]["resolution_status"] == "manual_resolved"
+    assert clean["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    assert task_facade.grading_readiness(**args)["ready"]
+    operation = workflow_repository.get_operation(clean["parse_job_id"], owner_id=owner)
+    history = load_source_states(operation)
+    outcomes = source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt)
+    original = next(answer for answer in clean["student_data"]["S1"]["stu_ans"] if answer["q_id"] == "q1")
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q1",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q2"}, expected_revision=clean["workflow_revision"])
+    conflicted = task_facade.get_task(**args)
+    source = conflicted["submission_sources"][0]
+    print(f"manual container={container}: status={source['resolution_status']}, required={source['answer_required_diagnostic_count']}")
+    assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 2
+    assert source["resolution_status"] == source["status"] == "manual_review"
+    assert len(source["answer_diagnostics"]) == 2
+    assert all("answer_assignment_conflict" in answer["flag"] for answer in source["answer_diagnostics"])
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", lambda *a, **kw: pytest.fail("Manual poll loaded complete answers"))
+        assert task_facade.task_state(**args)["submission_sources"] == conflicted["submission_sources"]
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q2",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q1"}, expected_revision=conflicted["workflow_revision"])
+    repaired = task_facade.get_task(**args)
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", lambda *a, **kw: pytest.fail("Manual poll loaded complete answers"))
+        assert task_facade.task_state(**args)["submission_sources"] == repaired["submission_sources"]
+    assert repaired["submission_sources"][0]["resolution_status"] == "manual_resolved"
+    assert repaired["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    assert task_facade.grading_readiness(**args)["ready"]
+    assert load_source_states(workflow_repository.get_operation(operation.id, owner_id=owner)) == history
+    assert source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt) == outcomes
+    registry.provider.ainvoke.assert_not_awaited()

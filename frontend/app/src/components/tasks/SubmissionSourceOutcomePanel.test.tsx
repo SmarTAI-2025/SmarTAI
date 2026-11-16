@@ -256,3 +256,20 @@ it("renders both responses with the same conflicted question ID without duplicat
     expect(errors).not.toHaveBeenCalled();
   } finally { errors.mockRestore(); }
 });
+
+it.each(["zh-CN", "en-US"] as const)("shows current conflicts after manual handoff instead of a resolved label (%s)", async (locale) => {
+  const zh = locale === "zh-CN";
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale={locale} sources={[{
+    ...sources[0], status: "manual_review", resolution_status: "manual_review",
+    reason_code: "operation_cancelled", recognition_reason_code: "operation_cancelled",
+    answer_required_diagnostic_count: 2, answer_diagnostic_count: 2,
+    answer_diagnostics: [1, 2].map(() => ({ q_id: "q2", number: "2", has_content: true, flag: ["answer_assignment_conflict"] })),
+  }]} /></MemoryRouter>);
+  expect(screen.getByText(zh ? /有 2 份作答需要处理/ : /2 responses need attention/)).toBeVisible();
+  expect(screen.getAllByText(zh ? "第 2 题" : "Question 2")).toHaveLength(2);
+  expect(screen.getByText(zh ? "识别未完成，等待人工处理" : "Recognition incomplete; awaiting manual review").closest("details")).toHaveAttribute("open");
+  await userEvent.setup().click(screen.getByText(zh ? "诊断信息" : "Diagnostic details"));
+  expect(screen.getByText(zh ? "等待人工处理" : "Awaiting manual review")).toBeVisible();
+  expect(screen.queryByText(zh ? "教师已完成处理" : "Resolved by the teacher")).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: zh ? "重新选择文件" : "Choose files again" })).not.toBeInTheDocument();
+});

@@ -81,6 +81,15 @@ async def test_postgres_current_source_diagnostics_remain_lightweight_and_match_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("container", [False, True])
+async def test_postgres_manual_source_diagnostics_follow_conflicts_and_repairs(pg_database, monkeypatch, container):
+    from backend.tests.test_submission_incremental import (
+        test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads,
+    )
+    await test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads(monkeypatch, container)
+
+
+@pytest.mark.asyncio
 async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
     from backend.tests.test_adaptive_admission_lifecycle import (
         test_failed_generation_save_refreshes_and_allows_later_verified_save,
