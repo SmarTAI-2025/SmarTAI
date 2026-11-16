@@ -16,7 +16,10 @@ async def prepared_grading(provider):
     if windows is None:
         windows = {}
         loop._smartai_grading_windows = windows
-    key = id(provider)
+    # Owner/quota guards are ephemeral; their underlying runtime model is not.
+    # Do not key by a public model name, which can conflate independent clients.
+    identity = getattr(provider, "preparation_identity", provider)
+    key = id(identity)
     entry = windows.setdefault(key, [asyncio.Semaphore(HARD_LIMIT), 0])
     entry[1] += 1
     try:

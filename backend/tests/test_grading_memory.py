@@ -8,11 +8,99 @@ from backend.llm import memory_reclaim
 from backend.llm.concurrency import HARD_LIMIT, ModelScheduler
 from backend.services.grading_memory import prepared_grading
 from backend.tests.test_automatic_model_scheduling import FakeClock, FakeHost
+from backend.tests.test_frontier_demo_session import enabled  # noqa: F401
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("demo", [True, False])
+async def test_fresh_shared_wrappers_share_one_preparation_window(enabled, monkeypatch, demo):
+    import json
+    from unittest.mock import AsyncMock
+    from backend.config import settings
+    from backend.llm.registry import _build_scoped_registry
+    from backend.services.frontier_demo import renew_token
+    from backend.tests.test_frontier_demo_session import issue, FakeProvider
+    from backend.skills.calculation import CalculationSkill
+    from backend.skills import math_grading
+    from backend.llm.providers import LLMResponse
+    from backend.services.math_grading_context import math_plans_context
+    from backend.tests.test_math_grading import problem, answer, plan_for, assessment
+    if demo:
+        owner, _ = renew_token(issue(enabled)["token"])
+    else:
+        from backend.models import User
+        from backend.state import register_user
+        monkeypatch.setattr(settings, "shared_pool_enabled", True)
+        monkeypatch.setattr(settings, "shared_pool_daily_request_limit", 500)
+        monkeypatch.setattr(settings, "shared_pool_daily_estimated_token_limit", 10000000)
+        owner = User(id="shared-owner", username="memory-shared", role="teacher", password_hash="synthetic")
+        register_user(owner)
+    registry = _build_scoped_registry(owner)
+    key = registry.list_available()[0].provider_id
+    providers = [registry.get(key) if i % 2 else registry.list_available()[0] for i in range(217)]
+    assert len({id(p) for p in providers}) == 217
+    entered = []
+    block = asyncio.Event()
+    async def invoke(self, messages, **kwargs):
+        entered.append(sum(len(m.content) for m in messages))
+        await block.wait()
+        return LLMResponse(json.dumps(assessment().model_dump()), self.provider_id, self.model, 1)
+    monkeypatch.setattr(FakeProvider, "ainvoke", invoke)
+    monkeypatch.setattr(math_grading.kb_tool, "retrieve_for_grading", AsyncMock(return_value=[]))
+    with math_plans_context({"q1": plan_for()}):
+        tasks = [asyncio.create_task(CalculationSkill(p).grade(problem(), answer())) for p in providers]
+        try:
+            for _ in range(10):
+                await asyncio.sleep(0)
+            assert len(entered) == HARD_LIMIT
+            assert all(chars > 10000 for chars in entered)  # Actual fully prepared prompts.
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+    assert asyncio.get_running_loop()._smartai_grading_windows == {}
+    # Cancelled waiters cannot poison later work through another fresh wrapper.
+    block.set()
+    with math_plans_context({"q1": plan_for()}):
+        result = await asyncio.wait_for(CalculationSkill(registry.get(key)).grade(problem(), answer()), 1)
+    assert result.score == 8 and not result.error_kind
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("needs_review", [False, True])
+async def test_agreed_experts_bypass_busy_preparation_but_real_review_waits(monkeypatch, needs_review):
+    from contextlib import AsyncExitStack
+    from unittest.mock import AsyncMock
+    from backend.skills import math_grading as grading
+    from backend.services.math_grading_context import math_plans_context
+    from backend.tests.test_math_grading import problem, answer, plan_for, assessment, expert_for, response
+    provider = SimpleNamespace(provider_id="mock:math")
+    p, a, plan = problem(), answer(), plan_for()
+    experts = [expert_for(assessment(needs_review=needs_review), plan, a.content) for _ in range(2)]
+    call = AsyncMock(return_value=(grading.ExpertReview(revisions=[]), response()))
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    async with AsyncExitStack() as occupied:
+        for _ in range(HARD_LIMIT):
+            await occupied.enter_async_context(prepared_grading(provider))
+        with math_plans_context({p.q_id: plan}), grading.math_review_scope():
+            task = asyncio.create_task(grading.review_math_experts(p, a, experts, provider))
+            try:
+                for _ in range(5):
+                    await asyncio.sleep(0)
+                assert task.done() is (not needs_review)
+                assert call.await_count == 0
+                await occupied.aclose()
+                assert await asyncio.wait_for(task, 1) == experts
+                assert call.await_count == int(needs_review)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
 async def test_prepared_window_is_bounded_and_other_expert_keeps_running():
-    slow, fast = SimpleNamespace(), SimpleNamespace()  # Unhashable providers work too.
+    # Equal display names cannot conflate independent runtime clients.
+    slow, fast = SimpleNamespace(provider_id="same"), SimpleNamespace(provider_id="same")
     blocked = asyncio.Event()
     entered = []
 

@@ -4967,7 +4967,8 @@ def grading_activity_history(*, task_id: str, owner_id: str, run_id: str, after:
     run = grading_repository.get_run(run_id, actor_id=owner_id)
     if run.assignment_id != task_id:
         raise NotFound("grading_run")
-    rows = grading_repository.list_events(run_id, actor_id=owner_id, after_sequence=after, limit=limit + 1)
+    rows = grading_repository.list_events(run_id, actor_id=owner_id, after_sequence=after, limit=limit + 1,
+        omit_payloads=("grading_math_final_trace", "grading_expert_checkpoint", "grading_math_rubric_plan"))
     page = rows[:limit]
     return {"run_id": run_id,
             "events": [event for row in page if (event := public_event(row))],

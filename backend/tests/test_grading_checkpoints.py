@@ -63,6 +63,14 @@ def test_progress_reads_one_snapshot_without_materializing_final_traces(case, mo
     assert progress["saved_units"] == progress["fully_saved_units"] == 1
     assert progress["activity_cursor"] == full[-1]["sequence"]
     assert len(calls) == 1 and calls[0]["actor_id"] == case[1]
+    # The expanded activity feed must use the same SQL payload omission, without
+    # skipping the trace's sequence or changing the next-page cursor.
+    calls.clear()
+    history = task_facade.grading_activity_history(task_id=case[0], owner_id=case[1],
+        run_id=run_id, after=full[-2]["sequence"], limit=1)
+    assert history == {"run_id": run_id, "events": [], "cursor": full[-1]["sequence"], "has_more": False}
+    assert calls[0].get("omit_payloads") == (
+        "grading_math_final_trace", "grading_expert_checkpoint", "grading_math_rubric_plan")
 
 
 @pytest.mark.parametrize("multi_sample", [False, True])

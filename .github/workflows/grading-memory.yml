@@ -6,6 +6,7 @@ on:
     paths:
       - backend/llm/concurrency.py
       - backend/llm/memory_reclaim.py
+      - backend/llm/registry.py
       - backend/services/grading_memory.py
       - backend/skills/math_grading.py
       - backend/recognition/local_cache.py

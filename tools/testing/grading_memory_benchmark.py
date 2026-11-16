@@ -141,8 +141,20 @@ def progress_benchmark():
         measurements.append(dict(seconds=time.perf_counter()-started, peak_mib=tracemalloc.get_traced_memory()[1]/MIB))
         del progress
         gc.collect()
+    history_measurements = []
+    for _ in range(5):
+        tracemalloc.reset_peak()
+        started = time.perf_counter()
+        page = task_facade.grading_activity_history(task_id=seeded["assignment_id"], owner_id=seeded["owner_id"],
+            run_id=run_id, after=100+3560+434, limit=200)
+        assert page["events"] == [] and page["cursor"] == 100+3560+434+200 and page["has_more"]
+        history_measurements.append(dict(seconds=time.perf_counter()-started,
+            peak_mib=tracemalloc.get_traced_memory()[1]/MIB))
+        del page
+        gc.collect()
     tracemalloc.stop()
-    return dict(mode="progress", progress_events=3560, expert_events=434, final_traces=217, polls=measurements)
+    return dict(mode="progress", progress_events=3560, expert_events=434, final_traces=217,
+        polls=measurements, history_polls=history_measurements)
 
 
 async def grade_benchmark(pressure):

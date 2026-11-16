@@ -8,6 +8,16 @@ Linux's allocator to return free pages when the idle scheduler observes low
 memory (at most once per 30 seconds). Existing admission reserves and limits,
 provider retry policy, prompts, frozen scoring rules and settlement are retained.
 
+Shared/Demo guards use their underlying runtime model as the preparation
+identity; fresh wrappers from registry lookups share the same window, while
+independent clients with the same public name remain independent. Review's
+existing no-call exits run before queueing; only an actually needed review
+prepares its model context under a permit. Regression tests create 217 fresh
+wrappers through real local Demo/shared registries, build actual grading
+prompts, then block synthetic responses at the provider boundary. They verify
+the 50-context cap, bulk cancellation/restart, and both the no-review fast path
+and the queued necessary-review path under a saturated preparation window.
+
 `grading_memory_benchmark.py` runs against a supplied source checkout in a fresh
 process and temporary test directory. It never builds a network client. The
 same seven frozen synthetic proof rubrics and 31 submissions run through the
@@ -31,6 +41,10 @@ The Linux Actions workflow runs three separate-process pairs in each condition:
   expert assessments and 217 final traces; five polls record traced peak
   allocations and elapsed time. PostgreSQL checks verify the same SQL projection,
   owner filtering, cursors and checkpoint counts.
+  The expanded activity endpoint is measured separately: five requests for a
+  200-row page of final traces verify unchanged cursors/has-more while avoiding
+  private scoring payloads. Its SQL projection also omits expert checkpoint and
+  rubric-plan payloads, which are not used by the public activity projection.
 - **Allocator:** a separate Linux process measures physical RSS released from
   free native arenas and the duration of GC plus `malloc_trim(0)`. Unsupported
   allocators keep the existing admission guard.

@@ -26,11 +26,12 @@ for mode in ("normal", "pressure"):
           f"prepared {before['peak_prepared']} -> {after['peak_prepared']}; "
           f"active {before['peak_active']} -> {after['peak_active']}")
 before, after = read("baseline-progress"), read("candidate-progress")
-for field in ("peak_mib", "seconds"):
-    old = statistics.median(p[field] for p in before["polls"])
-    new = statistics.median(p[field] for p in after["polls"])
-    assert new < old * 1.1, (field, old, new)
-    print(f"progress {field}: {old:.3f} -> {new:.3f}")
+for projection in ("polls", "history_polls"):
+    for field in ("peak_mib", "seconds"):
+        old = statistics.median(p[field] for p in before[projection])
+        new = statistics.median(p[field] for p in after[projection])
+        assert new < old * 1.1, (projection, field, old, new)
+        print(f"{projection} {field}: {old:.3f} -> {new:.3f}")
 allocator = read("allocator")
 assert allocator["supported"] and allocator["released_mib"] > 64, allocator
 assert allocator["pause_seconds"] < 1, allocator
