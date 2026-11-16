@@ -599,3 +599,62 @@ def test_maximum_source_diagnostics_fit_parent_without_discarding_page_evidence(
     source = {"page_diagnostics": diagnostics, "invalidated_question_ids": [f"q{i}" for i in range(500)]}
     assert workflow_repository._validate_json_object(source, field="payload",
         max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES) == source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirm_blank", [False, True])
+@pytest.mark.parametrize("second_unresolved", [False, True])
+async def test_source_attention_tracks_current_answers_after_teacher_repairs(monkeypatch, confirm_blank, second_unresolved):
+    from backend.services.submission_source_state import load_source_states
+    owner, task = _seed_task()
+    for i in range(1, 4):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{i}", order_index=i-1,
+            number=str(i), type="programming", stem=f"Question {i}: print the requested value.",
+            criterion="Award up to 10 points for correct code.", max_score=10)
+    registry = _registry(monkeypatch, lambda _: SimpleNamespace(content=json.dumps(dict(
+        stu_id="S1", stu_name="Sample Student", stu_ans=[dict(q_id="q1", number="1", type="programming", content="print(1)", flag=[])]))))
+    content = b"# Question 1\ndef solve():\n    return 1\n"
+    filename, content_type = "S1_Sample.py", "text/x-python"
+    if second_unresolved:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr(filename, content)
+            zipped.writestr("S9_Other.py", content)
+        filename, content, content_type = "submissions.zip", archive.getvalue(), "application/zip"
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=content, content_type=content_type, registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    before = task_facade.get_task(**args)
+    source = before["submission_sources"][0]
+    assert source["status"] == "parsed", (source["reason_code"], source["internal_status"], registry.provider.ainvoke.await_count)
+    assert source["answer_required_diagnostic_count"] == 2
+    original = load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner))
+    calls = registry.provider.ainvoke.await_count
+    display_id = next(iter(before["student_data"]))
+    task_facade.update_student_answer(**args, display_student_id=display_id, q_id="q2",
+        patch={"content": "print(2)", "review_status": "confirmed"}, expected_revision=before["workflow_revision"])
+    after_one = task_facade.get_task(**args)
+    current = after_one["submission_sources"][0]
+    assert current["answer_required_diagnostic_count"] == 1
+    assert [a["q_id"] for a in current["answer_diagnostics"]] == ["q3"]
+    task_facade.update_student_identity(**args, current_display_id=display_id,
+        new_display_id="RepairedS1", new_display_name="Corrected Student", expected_revision=after_one["workflow_revision"])
+    current_task = task_facade.get_task(**args)
+    assert current_task["submission_sources"][0]["answer_required_diagnostic_count"] == 1
+    patch = {"content": "" if confirm_blank else "print(3)", "review_status": "confirmed"}
+    if confirm_blank:
+        patch["flag"] = ["manual_blank_confirmed"]
+    task_facade.update_student_answer(**args, display_student_id="RepairedS1", q_id="q3", patch=patch,
+        expected_revision=current_task["workflow_revision"])
+    for final in [task_facade.get_task(**args), task_facade.task_state(**args)]:
+        projected = final["submission_sources"][0]
+        assert projected["answer_diagnostics"] == []
+        assert projected["answer_diagnostic_count"] == projected["answer_required_diagnostic_count"] == 0
+        if second_unresolved:
+            other = final["submission_sources"][1]
+            assert other["answer_required_diagnostic_count"] == 2
+            assert {a["q_id"] for a in other["answer_diagnostics"]} == {"q2", "q3"}
+    assert ("submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]) is second_unresolved
+    assert load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner)) == original
+    assert registry.provider.ainvoke.await_count == calls  # Reading/repairing does not rerun recognition.

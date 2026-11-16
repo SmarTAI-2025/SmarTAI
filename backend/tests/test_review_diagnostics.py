@@ -63,3 +63,11 @@ def test_programming_evidence_remains_a_mandatory_reason_in_safe_diagnostics():
     rows, _ = public_grading_diagnostics([source])
     assert rows[0]["review_reasons"] == ["programming_ai_only"]
     assert "programming_evidence" not in rows[0]["expert_results"][0]
+
+
+def test_current_confirmed_advisories_disappear_but_required_evidence_is_not_suppressed():
+    assert public_answer_diagnostics([dict(q_id="q1", content="Verified answer", recognition_confidence=.2,
+        flag=[], review_status="confirmed")]) == []
+    unresolved = public_answer_diagnostics([dict(q_id="q2", content="", flag=["no_matching_answer"],
+        review_status="confirmed")], required_only=True)
+    assert unresolved[0]["q_id"] == "q2"

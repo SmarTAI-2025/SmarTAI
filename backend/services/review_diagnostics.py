@@ -13,6 +13,11 @@ _ANSWER_FLAGS = frozenset({
 
 
 def public_answer_diagnostics(answers, limit=20, *, required_only=False):
+    def required(row):
+        return any(flag in {"answer_assignment_conflict", "recognition_matching_review", "recognition_failed",
+                           "parse_failed", "no_matching_answer", "recognition_manual_pending",
+                           "recognition_paused", "recognition_incomplete"}
+                   or flag.startswith("recognition_invalid_fields:") for flag in row["flag"])
     rows = []
     for answer in answers or []:
         if not isinstance(answer, dict):
@@ -39,17 +44,14 @@ def public_answer_diagnostics(answers, limit=20, *, required_only=False):
                    "very_low_confidence", "recognition_low_confidence", "low_confidence"}
         visible_flags = [flag for flag in flags if flag not in ignored
                          and not flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:"))]
+        if answer.get("review_status") == "confirmed" and not required({"flag": flags}):
+            continue
         if not visible_flags and not confidence_needs_attention(confidence):
             continue
         rows.append({"q_id": str(answer.get("q_id") or "")[:120],
                      "number": str(answer.get("number") or "")[:120], "flag": list(dict.fromkeys(flags)),
                      "recognition_confidence": confidence,
                      "has_content": answer.get("has_content") is True or bool(str(answer.get("content") or "").strip())})
-    def required(row):
-        return any(flag in {"answer_assignment_conflict", "recognition_matching_review", "recognition_failed",
-                           "parse_failed", "no_matching_answer", "recognition_manual_pending",
-                           "recognition_paused", "recognition_incomplete"}
-                   or flag.startswith("recognition_invalid_fields:") for flag in row["flag"])
     # Preserve severe issues even when advisory rows precede the bounded page.
     rows = [row for row in rows if required(row)] if required_only else sorted(rows, key=lambda row: not required(row))
     return rows[:limit] if limit is not None else rows
