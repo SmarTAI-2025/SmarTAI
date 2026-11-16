@@ -1528,10 +1528,20 @@ class MathGradingSkill(GradingSkill):
 
     async def _assess(self, plan, *, system_prompt, user_prompt, validator, part_output=FrozenPartAssessment):
         if plan.part_rubric:
-            assessment, response = await structured_llm_call(self.provider,
+            validated = None
+
+            def validate_part(candidate):
+                nonlocal validated
+                assessment = candidate.assessment()
+                validator(assessment)
+                validated = assessment
+
+            _, response = await structured_llm_call(self.provider,
                 output_model=part_output, system_prompt=system_prompt, user_prompt=user_prompt,
-                validate_output=lambda candidate: validator(candidate.assessment()))
-            return assessment.assessment(), response
+                validate_output=validate_part)
+            # Keep source text resolved by validation, including after a repair.
+            assert validated is not None
+            return validated, response
         return await structured_llm_call(self.provider, output_model=MathAssessment,
             system_prompt=system_prompt, user_prompt=user_prompt, validate_output=validator)
 

@@ -245,6 +245,13 @@ def _amount(value):
     return Fraction(str(value))
 
 
+def _span_identity(span):
+    """Ignore edge whitespace without merging distinct excerpts or occurrences."""
+    start = span.start + len(span.text) - len(span.text.lstrip())
+    end = span.end - (len(span.text) - len(span.text.rstrip()))
+    return start, end
+
+
 def _obligation_span(question, scope, fragment, question_lines):
     """Resolve omissions to offsets in this part, including original question line IDs."""
     if not fragment.startswith("question:"):
@@ -285,7 +292,7 @@ def settle_parts(rules, decisions, answer, question):
     # Step evidence may cite several source lines. Each is a possible origin
     # in its own right; the unquoted text between them is never evidence.
     verified_errors = {
-        (span.start, span.end)
+        _span_identity(span)
         for decision in decisions
         for step in decision.steps if step.outcome == "missed"
         for span in support(step.evidence)
@@ -296,7 +303,7 @@ def settle_parts(rules, decisions, answer, question):
             for event in decision.errors:
                 origin = _student_span(answer, event.origin_quote)
                 if origin is not None:
-                    verified_errors.add((origin.start, origin.end))
+                    verified_errors.add(_span_identity(origin))
     total = Fraction(0)
     rows = []
     for part in rules.parts:
@@ -401,7 +408,7 @@ def settle_parts(rules, decisions, answer, question):
                     downstream = support(awarded.evidence)
                     if (
                         not origin
-                        or (origin.start, origin.end) not in verified_errors
+                        or _span_identity(origin) not in verified_errors
                         or origin.end > min(span.start for span in downstream)
                     ):
                         raise ValueError(
@@ -456,9 +463,9 @@ def settle_parts(rules, decisions, answer, question):
                 ):
                     raise ValueError("Use only the selected deduction rule.")
                 identity = (
-                    ("student", location.start, location.end)
+                    ("student", *_span_identity(location))
                     if location
-                    else ("target", target.start, target.end)
+                    else ("target", *_span_identity(target))
                 )
                 if identity in seen:
                     raise ValueError(
