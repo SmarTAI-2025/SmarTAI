@@ -15,6 +15,12 @@ from backend.db.models import AdminAuditLogRecord
 from backend.services.model_quota import admit_model_call, ModelQuotaError, model_usage
 from backend.tests.test_admin_business_config import client, headers, save
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """Retain coverage of the explicitly selected legacy quota policy."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 def usage():
     with session_scope() as session:
         return model_usage(session, "teacher")

@@ -800,14 +800,16 @@ def _verification_error_code(exc: Exception) -> str:
 
 
 def _verification_http_status(error_code: str) -> int:
-    if error_code in {"expert_verification_rate_limited", "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached"}:
+    if error_code in {"expert_verification_rate_limited", "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached", "shared_pool_weekly_limit_reached", "shared_pool_budget_pending"}:
         return status.HTTP_429_TOO_MANY_REQUESTS
     if error_code in {
         "expert_verification_timeout",
         "expert_verification_connection_failed",
         "provider_endpoint_dns_failed",
+        "shared_pool_usage_unavailable",
+        "shared_pool_billing_unavailable",
     }:
         return status.HTTP_503_SERVICE_UNAVAILABLE
-    if error_code.startswith("provider_endpoint_"):
+    if error_code.startswith("provider_endpoint_") or error_code == "shared_pool_request_too_large":
         return status.HTTP_422_UNPROCESSABLE_ENTITY
     return status.HTTP_502_BAD_GATEWAY

@@ -18,6 +18,12 @@ from backend.models import ProviderConfig, User
 from backend.tests.test_custom_provider_api import _teacher
 from backend.tests.test_shared_vision_quota import client, shared_registry, FakeProvider, save, usage
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """Retain coverage of the explicitly selected legacy quota policy."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 
 def reply(content):
     return LLMResponse(content=content, provider="openai:synthetic", model="synthetic", duration_ms=1)

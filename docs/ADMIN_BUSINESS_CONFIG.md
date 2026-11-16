@@ -14,6 +14,7 @@
 | email_verification_hourly_ip_limit | 20 | 1–1000 整数 | 0、空字符串非法；null 继承 |
 | unfinished_source_quota_bytes | 536870912 | 0–1099511627776 整数字节 | 0 禁止新增占用；null 继承 |
 | knowledge_storage_quota_bytes | 536870912 | 0–1099511627776 整数字节 | 同上 |
+| shared_pool_weekly_limit_cents | 500 | 0–1000000 美分 | 0 禁止；null 继承（当前共享模式） |
 | shared_pool_daily_request_limit | 100 | -1–1000000 次 | -1 无限；0 禁止；null 继承 |
 | shared_pool_daily_estimated_token_limit | 100000 | -1–1000000000 | -1 无限；0 禁止；null 继承 |
 | history_query_llm_daily_limit | 20 | -1–1000000 次 | 同上 |
@@ -86,7 +87,9 @@
 - `docs/ADMIN_BUSINESS_CONFIG.md`
 
 
-## 2026-10-03 模型日额度补齐
+## 2026-10-03 模型日额度补齐（保留的旧模式）
+
+以下共享日额度只在 `daily_estimated` 生效；当前默认周金额规则见文末。
 
 复用原 business_configuration / user_storage_configuration 的 JSON 覆盖和版本。
 后者保留历史表名，现允许三项模型键；不是第二套配置来源。优先级仍是用户覆盖 →
@@ -121,3 +124,45 @@ BYOK 或共享）沿用原来的独立调用上限；共享 Ask 同时经过两�
 或使用 BYOK。历史 Ask 额度不足时保留确定性关键词查询。降低额度不删除已有数据或
 停止历史批改任务，只拒绝后续不满足额度的模型准入。账号销户级联删除自己的账本；
 全站清空连同全部用户覆盖、全局覆盖和计数删除，回到部署初始规则。
+
+## 2026-11-16：共享模型周金额模式
+
+当前默认 `SMARTAI_SHARED_POOL_QUOTA_MODE=weekly_usd`。Luna、Terra、Sol 每用户
+合计每周 5 美元，周一 00:00 Asia/Singapore 重置；没有 Sol 单独上限。个人 BYOK
+不扣共享金额，任务 Ask 的独立日次数规则、匿名 Demo 规则保持原有行为。
+
+`shared_pool_weekly_limit_cents` 默认 500，支持 0–1000000 美分的全局/用户覆盖，
+`null` 恢复继承；后台输入和显示美元，存储整数美分。0 禁止新的共享调用，调整
+上限不清空已用金额。原日请求、估算 Token、Sol 半额代码和账本保留，但只有部署
+显式选择 `daily_estimated` 才启用；缺失用量、配置错误和上游故障绝不回落到旧模式。
+
+共享调用固定使用官方全球端点的 Responses API、Standard (`default`) 服务层级、
+30 分钟缓存，无付费工具。先调用 `/responses/input_tokens` 获取实际输入数量，按
+最贵输入类别及输出上限原子预留；余额不足时缩小输出上限，最低 16 token。预留
+不是消费；响应到达后使用官方 `usage` 的输入、缓存读取、缓存写入、输出数结算，
+释放余额。推理 token 已包含在输出内，不重复收费。缺失/矛盾 usage、取消、超时
+或不确定的失败保留待结算金额；明确的请求拒绝释放预留，不估算补账或自动重试。
+
+价格版本 `openai-standard-20261116`（美元/百万 token）：
+
+| 模型 | 普通输入 | 缓存读取 | 30m 缓存写入 | 输出（含推理） |
+| --- | --- | --- | --- | --- |
+| [gpt-6-luna](https://developers.openai.com/api/docs/models/gpt-6-luna) | 0.10 | 0.01 | 0.125 | 0.50 |
+| [gpt-6.1-terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra) | 1.00 | 0.05 | 1.25 | 5.00 |
+| [gpt-6.1-sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol) | 2.00 | 0.10 | 2.50 | 10.00 |
+
+输入超过 272000 时，整次请求输入类价格乘 2、输出乘 1.5。
+实际费用 = (输入−缓存读取−缓存写入)×普通输入价 + 缓存读取×读取价 +
+缓存写入×写入价 + 输出×输出价。内部用整数纳美元计算，显示才转美元；这是官方
+标价下的用量费用，不是含税、赠金或账户折扣后的账单金额。单次响应不提供美元账单。
+参考：[Token counting](https://developers.openai.com/api/docs/guides/token-counting)、
+[Prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)。
+
+启动前运行迁移至 `0035_shared_weekly_budget`。新表 `shared_model_charges` 保存
+owner、周、模型、预留/结算状态、真实计数、响应 ID、价格版本和金额，不保存题目或
+学生文本。SQLite 写锁/PostgreSQL owner 行锁保证并发不能重复使用余额；响应跨周
+按准入所在周结算，重启不释放未确认金额。未知用量保留到该周结束，不伪造 0 费用。
+原日账本不迁移成美元，历史缺失 usage 的调用不能准确补采。
+
+部署验证需确认该项目密钥可访问 Responses 及输入计数接口，并用少量受控请求核对
+官方 usage/Costs。仅本地模拟协议测试通过不代表真实凭据、模型权限或生产接入已验证。

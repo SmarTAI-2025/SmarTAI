@@ -93,4 +93,8 @@ def model_usage(session, owner_id: str, *, config=None, now=None):
         "request_limit": _half_limit(result["shared"]["request_limit"]),
         "estimated_token_limit": _half_limit(result["shared"]["estimated_token_limit"]),
     }
+    result["shared_quota_mode"] = settings.shared_pool_quota_mode
+    if settings.shared_pool_quota_mode == "weekly_usd":
+        from backend.services.shared_weekly_budget import weekly_usage
+        result["shared_weekly"] = weekly_usage(session, owner_id, config=config, now=moment)
     return result

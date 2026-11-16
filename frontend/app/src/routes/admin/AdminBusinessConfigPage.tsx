@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, SectionHeader } from "@/components/ui/Card";
 
 const labels: Record<BusinessConfigKey, string> = {
+  shared_pool_weekly_limit_cents: "共享模型每周金额（美元）",
   shared_pool_daily_request_limit: "共享模型每日请求次数",
   shared_pool_daily_estimated_token_limit: "共享模型每日估算输入 token",
   history_query_llm_daily_limit: "任务 Ask 每日模型调用次数",
@@ -27,12 +28,14 @@ const groups: Array<{ title: string; hint: string; keys: BusinessConfigKey[] }> 
   { title: "用户存储配额", hint: "每人分别计算两类占用。512 MiB = 536870912 字节。0 表示禁止新增占用；降低配额不删除已有数据，超过额度时仍可释放空间。", keys: storageKeys },
   { title: "模型日额度", hint: "按每用户每天计量，UTC 00:00 重置。0 禁止调用，-1 无限制。失败及中断保留次数；SDK 内部重试计一次，重新发起模型调用计新的一次。共享池开关仍由部署管理；普通 BYOK 批改不受共享池额度限制。token 为输入估算，不是实际用量或费用。降低额度不删除数据，已超额用户须等待重置或由管理员调整。", keys: ["shared_pool_daily_request_limit", "shared_pool_daily_estimated_token_limit", "history_query_llm_daily_limit"] },
 ];
+function inputValue(key: string, value: string | number) { return String(key === "shared_pool_weekly_limit_cents" ? Number(value) / 100 : value); }
 type Draft = Partial<Record<BusinessConfigKey, { inherit: boolean; text: string }>>;
 function initialDraft(config: BusinessConfiguration): Draft {
-  return Object.fromEntries(Object.entries(config.fields).map(([key, field]) => [key, { inherit: field.override === null, text: String(field.override ?? field.effective) }]));
+  return Object.fromEntries(Object.entries(config.fields).map(([key, field]) => [key, { inherit: field.override === null, text: inputValue(key, field.override ?? field.effective) }]));
 }
 function displayValue(key: BusinessConfigKey, value: string | number) {
   if (key === "allowed_email_domains") return value === "" ? "全部拒绝" : value === "*" ? "允许全部域名" : String(value);
+  if (key === "shared_pool_weekly_limit_cents") return `$${(Number(value) / 100).toFixed(2)}`;
   if (value === -1) return "无限制";
   return storageKeys.includes(key) ? `${Number(value).toLocaleString()} 字节（${(Number(value) / 1048576).toLocaleString(undefined, { maximumFractionDigits: 2 })} MiB）` : String(value);
 }
@@ -50,7 +53,7 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
   const userScope = snapshot.scope === "user";
   const changedKeys = (Object.keys(snapshot.fields) as BusinessConfigKey[]).filter(key => {
     const field = snapshot.fields[key]!, item = draft[key]!;
-    return item.inherit ? field.override !== null : field.override === null || item.text !== String(field.override);
+    return item.inherit ? field.override !== null : field.override === null || item.text !== inputValue(key, field.override);
   });
   const dirty = changedKeys.length > 0;
   const localDraft = useDraftProtection({ scope: `admin-config:${snapshot.scope}:${snapshot.owner_id ?? "global"}`, value: { draft, reason }, baseline: { draft: initialDraft(snapshot), reason: "" }, version: JSON.stringify([snapshot.version, snapshot.global_version]), busy, onRestore: restored => { setDraft(restored.draft); setReason(restored.reason); } });
@@ -68,7 +71,13 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
       const item = draft[key]!, bounds = snapshot.fields[key]!.bounds;
       if (item.inherit) changes[key] = null;
       else if (key === "allowed_email_domains") changes[key] = item.text;
-      else {
+      else if (key === "shared_pool_weekly_limit_cents") {
+        const cents = Math.round(Number(item.text) * 100);
+        if (!/^\d+(?:\.\d{1,2})?$/.test(item.text) || !Number.isSafeInteger(cents) || (bounds && (cents < bounds[0] || cents > bounds[1]))) {
+          setError("周金额须为允许范围内的美元数，最多两位小数。"); return;
+        }
+        changes[key] = cents;
+      } else {
         const number = Number(item.text);
         if (!/^-?\d+$/.test(item.text) || !Number.isSafeInteger(number) || (bounds && (number < bounds[0] || number > bounds[1]))) {
           setError(`${labels[key]}须为 ${bounds?.[0]}–${bounds?.[1]} 之间的整数；恢复继承请使用按钮。`); return;
@@ -100,26 +109,28 @@ function ConfigEditor({ initial, reload, onDirty, onSaved }: { initial: Business
     catch { setError("重新载入失败，当前修改仍保留，请重试。"); }
     finally { active.current = false; setBusy(false); }
   }
-  const visibleGroups = userScope ? [{ ...groups[2], title: "该用户的存储覆盖" }, groups[3]] : groups;
+  const modelGroup = snapshot.shared_quota_mode === "weekly_usd" ? { title: "共享模型周额度", hint: "三个模型共用，每周一新加坡时间 00:00 重置。0 禁止共享调用。按 OpenAI 真实用量和官方价格结算；个人 BYOK 独立。任务 Ask 仍使用每日次数上限。", keys: ["shared_pool_weekly_limit_cents", "history_query_llm_daily_limit"] as BusinessConfigKey[] } : groups[3];
+  const visibleGroups = userScope ? [{ ...groups[2], title: "该用户的存储覆盖" }, modelGroup] : [...groups.slice(0, 3), modelGroup];
   return <form onSubmit={event => void submit(event)} className="space-y-5" aria-label={userScope ? "用户配额表单" : "全局配置表单"}>
-    {visibleGroups.map(group => <Card key={group.title} id={!userScope ? ({ "注册规则": "registration-rules", "邮件发送限制": "mail-limits", "用户存储配额": "default-quotas", "模型日额度": "model-limits" } as Record<string, string>)[group.title] : undefined} className="scroll-mt-6 space-y-5">
+    {visibleGroups.map(group => <Card key={group.title} id={!userScope ? ({ "注册规则": "registration-rules", "邮件发送限制": "mail-limits", "用户存储配额": "default-quotas", "模型日额度": "model-limits", "共享模型周额度": "model-limits" } as Record<string, string>)[group.title] : undefined} className="scroll-mt-6 space-y-5">
       <div><h2 className="text-lg font-semibold">{group.title}</h2><p className="mt-2 text-sm text-muted-foreground">{group.hint}</p></div>
       {group.keys.filter(key => snapshot.fields[key]).map(key => {
         const field = snapshot.fields[key]!, item = draft[key]!, usage = snapshot.usage?.[key];
         return <div key={key} className="space-y-2 border-t pt-4">
           <label className="grid gap-2 text-sm font-medium"><span>{labels[key]}</span>
-            <input className="h-10 w-full rounded-md border bg-background px-3 font-normal disabled:bg-muted" value={item.text} disabled={item.inherit || busy} inputMode={key === "allowed_email_domains" ? "text" : "numeric"} maxLength={key === "allowed_email_domains" ? 4096 : 16} onChange={e => change(key, { inherit: false, text: e.target.value })} />
+            <input className="h-10 w-full rounded-md border bg-background px-3 font-normal disabled:bg-muted" value={item.text} disabled={item.inherit || busy} inputMode={key === "allowed_email_domains" ? "text" : key === "shared_pool_weekly_limit_cents" ? "decimal" : "numeric"} maxLength={key === "allowed_email_domains" ? 4096 : 16} onChange={e => change(key, { inherit: false, text: e.target.value })} />
           </label>
           <p className="break-words text-sm text-muted-foreground">当前生效：{displayValue(key, field.effective)} · 来源：{sources[field.source]}</p>
           {usage && <p className="text-sm">已占用 {usage.used_bytes.toLocaleString()} 字节（含预留 {usage.reserved_bytes.toLocaleString()} 字节）{usage.used_bytes > usage.limit_bytes ? "，已超过当前配额，新增占用将被拒绝。" : "。"}</p>}
-          {field.bounds && <p className="text-xs text-muted-foreground">允许范围：{field.bounds[0].toLocaleString()}–{field.bounds[1].toLocaleString()}。</p>}
-          <div className="flex flex-wrap items-center gap-2"><Button disabled={busy} variant="secondary" onClick={() => change(key, { inherit: !item.inherit, text: String(field.effective) })}>{item.inherit ? `设置${userScope ? "用户" : "全局"}覆盖` : "恢复继承"}</Button><span className="text-xs text-muted-foreground">{item.inherit ? `保存后继承${userScope ? "全局配置或部署默认值" : "部署默认值"}` : "保存后使用此覆盖值"}</span></div>
+          {field.bounds && <p className="text-xs text-muted-foreground">允许范围：{inputValue(key, field.bounds[0])}–{inputValue(key, field.bounds[1])}。</p>}
+          <div className="flex flex-wrap items-center gap-2"><Button disabled={busy} variant="secondary" onClick={() => change(key, { inherit: !item.inherit, text: inputValue(key, field.effective) })}>{item.inherit ? `设置${userScope ? "用户" : "全局"}覆盖` : "恢复继承"}</Button><span className="text-xs text-muted-foreground">{item.inherit ? `保存后继承${userScope ? "全局配置或部署默认值" : "部署默认值"}` : "保存后使用此覆盖值"}</span></div>
           {key === "allowed_email_domains" && <div className="space-y-1 text-xs text-muted-foreground"><p>多个根域名用英文逗号分隔。example.edu 同时允许 @example.edu、@mail.example.edu；拒绝 @badexample.edu 和 @example.edu.evil。</p><p>空字符串明确表示全部拒绝；单独 * 表示全部允许。恢复继承请使用按钮。域名修改不封禁已有账号，后台管理域名后找回密码独立于注册域名。</p></div>}
         </div>;
       })}
       {group.title === "邮件发送限制" && <p className="text-xs text-muted-foreground">新邮件采用新冷却时间；已发注册邮件保留已有冷却截止时间。验证链接有效期：{snapshot.read_only?.email_verification_expiry_seconds ?? 1800} 秒（只读）。管理员协助找回密码也受上述限制。</p>}
     </Card>)}
-    {snapshot.model_usage && <Card className="text-sm space-y-2"><h2 className="font-semibold">今日模型使用 · UTC</h2><p>共享池已准入 {snapshot.model_usage.shared.requests} 次；估算输入 {snapshot.model_usage.shared.estimated_input_tokens} token。任务 Ask 已准入 {snapshot.model_usage.history.requests} 次。</p><p>下次重置：{snapshot.model_usage.resets_at}。调整上限不清零已有计数。</p></Card>}
+    {snapshot.model_usage && snapshot.shared_quota_mode !== "weekly_usd" && <Card className="text-sm space-y-2"><h2 className="font-semibold">今日模型使用 · UTC</h2><p>共享池已准入 {snapshot.model_usage.shared.requests} 次；估算输入 {snapshot.model_usage.shared.estimated_input_tokens} token。任务 Ask 已准入 {snapshot.model_usage.history.requests} 次。</p><p>下次重置：{snapshot.model_usage.resets_at}。调整上限不清零已有计数。</p></Card>}
+    {snapshot.shared_quota_mode === "weekly_usd" && snapshot.model_usage?.shared_weekly && <Card className="text-sm space-y-2"><h2 className="font-semibold">本周共享用量</h2><p>已用 ${snapshot.model_usage.shared_weekly.spent_usd.toFixed(2)} / ${snapshot.model_usage.shared_weekly.limit_usd.toFixed(2)}；待结算预留 ${snapshot.model_usage.shared_weekly.reserved_usd.toFixed(2)}。</p><p>下次重置：{snapshot.model_usage.shared_weekly.resets_at}</p></Card>}
     <Card className="space-y-3">
       <label className="grid gap-2 text-sm">修改原因<input className="h-10 rounded-md border bg-background px-3" maxLength={80} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} placeholder="填写本次调整原因，记录到审计日志" /></label>
       {dirty && <p role="status" className="text-sm text-amber-700">有未保存的修改。</p>}
@@ -153,7 +164,7 @@ export function AdminBusinessConfigPage() {
   const users = useQuery({ queryKey: ["admin-business-config-users", query], queryFn: () => adminListUsers({ search: query || undefined, page: 1, page_size: 25 }), retry: false });
   const items = Array.isArray(users.data) ? users.data : users.data?.items ?? [];
   return <div className="max-w-4xl space-y-6">
-    <SectionHeader title="业务配置管理" description="调整注册、邮件、存储和模型日额度规则。优先使用用户覆盖，其次全局覆盖，最后继承部署设置或代码默认值。" />
+    <SectionHeader title="业务配置管理" description="调整注册、邮件、存储和模型额度规则。优先使用用户覆盖，其次全局覆盖，最后继承部署设置或代码默认值。" />
     <nav aria-label="配置项目" className="flex flex-wrap gap-2 text-sm">{[["registration-rules", "注册规则"], ["mail-limits", "邮件限制"], ["default-quotas", "存储配额"], ["model-limits", "模型额度"], ["user-quotas", "单用户配额"]].map(([id, label]) => <a key={id} href={`#${id}`} className="rounded-md border bg-card px-3 py-2 text-primary">{label}</a>)}</nav>
 
     {global.isPending ? <p role="status">正在载入全局配置…</p> : global.isError ? <Card role="alert">配置加载失败。<Button onClick={() => void global.refetch()}>重试</Button></Card> : <ConfigEditor initial={global.data} onDirty={setGlobalDirty} onSaved={() => { if (!userDirty) setUserEpoch(n => n + 1); }} reload={async () => { const result = await global.refetch(); if (!result.data || result.error) throw new Error("load"); return result.data; }} />}
@@ -167,6 +178,6 @@ export function AdminBusinessConfigPage() {
       </Card>
       {ownerId && (userConfig.isPending ? <p role="status">正在载入用户配额…</p> : userConfig.isError ? <Card role="alert">用户配额加载失败，账号可能已销户。<Button onClick={() => void userConfig.refetch()}>重试用户配额</Button></Card> : <ConfigEditor key={`${ownerId}:${userEpoch}`} initial={userConfig.data} onDirty={setUserDirty} reload={async () => { const result = await userConfig.refetch(); if (!result.data || result.error) throw new Error("load"); return result.data; }} />)}
     </section>
-    {global.data?.read_only && <Card className="space-y-2 text-sm text-muted-foreground"><h2 className="font-semibold text-foreground">模型额度计量说明</h2><p>共享池每日请求：{global.data.read_only.shared_pool_daily_request_limit}；估算 token：{global.data.read_only.shared_pool_daily_estimated_token_limit}；历史任务 Ask 每日调用：{global.data.read_only.history_query_llm_daily_limit}。</p><p>{global.data.read_only.model_quota_note}</p></Card>}
+    {global.data?.read_only && <Card className="space-y-2 text-sm text-muted-foreground"><h2 className="font-semibold text-foreground">模型额度计量说明</h2><p>{global.data.shared_quota_mode === "weekly_usd" ? `共享池每周金额：$${((global.data.read_only.shared_pool_weekly_limit_cents ?? 500) / 100).toFixed(2)}` : <>共享池每日请求：{global.data.read_only.shared_pool_daily_request_limit}；估算 token：{global.data.read_only.shared_pool_daily_estimated_token_limit}</>}；历史任务 Ask 每日调用：{global.data.read_only.history_query_llm_daily_limit}。</p><p>{global.data.read_only.model_quota_note}</p></Card>}
   </div>;
 }

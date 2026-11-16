@@ -19,6 +19,12 @@ from backend.tests.test_automatic_model_scheduling import FakeClock, FakeHost
 from backend.tests.test_image_capability import saved
 
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """The legacy Chat Completions fixtures explicitly opt into daily mode."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 def test_platform_profile_has_one_winner_for_insert_and_update():
     fingerprint = "a" * 64
     for generation in (1, 2):

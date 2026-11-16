@@ -29,6 +29,12 @@ from backend.skills.recognition_reader import LLMRecognitionEngine
 from backend.tests.test_admin_business_config import client, save
 from backend.tests.test_postgres_integration import pg_database
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """Retain coverage of the explicitly selected legacy quota policy."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 
 class FakeProvider(BaseProvider):
     provider_type = "openai"

@@ -100,7 +100,7 @@ def _iso_utc_timestamp(value: object) -> str | None:
 
 
 class SharedPoolLimitError(ProviderRequestError):
-    """Stable signal raised before an over-budget shared-pool invocation."""
+    """Stable non-retryable shared admission or settlement error."""
 
     retryable = False
 
@@ -181,15 +181,43 @@ class _GuardedSharedProvider:
             return
         if not settings.shared_pool_enabled:
             raise SharedPoolLimitError("shared_pool_disabled")
+        if settings.shared_pool_quota_mode != "daily_estimated":
+            raise SharedPoolLimitError("shared_pool_billing_unavailable")
         _shared_pool_usage.consume(self._owner_id, messages, image_count=image_count,
                                    sol=self.provider_type == "openai" and self.model == "gpt-6.1-sol")
 
     async def ainvoke(self, messages: List[Any], *, max_output_tokens: int | None = None) -> LLMResponse:
+        if not self._frontier_demo and settings.shared_pool_quota_mode == "weekly_usd":
+            if not settings.shared_pool_enabled:
+                raise SharedPoolLimitError("shared_pool_disabled")
+            from backend.llm.shared_weekly import invoke_weekly
+            from backend.services.model_quota import ModelQuotaError
+            try:
+                return await invoke_weekly(self._provider, self._owner_id, messages, max_output_tokens=max_output_tokens)
+            except ModelQuotaError as exc:
+                raise SharedPoolLimitError(str(exc)) from None
+        if not self._frontier_demo and settings.shared_pool_quota_mode != "daily_estimated":
+            raise SharedPoolLimitError("shared_pool_billing_unavailable")
         self._admit(messages)
         options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
         return await self._provider.ainvoke(messages, **options)
 
     async def ainvoke_vision(self, prompt: str, images: List[VisionImage], *, max_output_tokens: int | None = None) -> LLMResponse:
+        if not self._frontier_demo and settings.shared_pool_quota_mode != "daily_estimated":
+            from backend.llm.providers import _build_vision_messages, _validate_output_limit
+            from backend.llm.image_capability import is_explicit_image_rejection
+            if not self._provider.can_attempt_vision:
+                raise ProviderRequestError("provider_vision_not_supported", status_code=400)
+            if not images:
+                raise ValueError("ainvoke_vision requires at least one image.")
+            _validate_output_limit(max_output_tokens)
+            try:
+                return await self.ainvoke(_build_vision_messages(prompt, images), max_output_tokens=max_output_tokens)
+            except Exception as exc:
+                if is_explicit_image_rejection(exc):
+                    self._provider._record_image_rejection()
+                    raise ProviderRequestError("provider_vision_not_supported", status_code=400) from exc
+                raise
         self._admit([HumanMessage(content=prompt)], image_count=len(images))
         options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
         # Delegate on the underlying instance: its internal self.ainvoke and

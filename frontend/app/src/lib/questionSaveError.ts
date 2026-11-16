@@ -16,7 +16,15 @@ export function questionSaveError(error: unknown, locale: string) {
     case "provider_daily_quota_exceeded":
     case "shared_pool_daily_limit_reached":
     case "shared_pool_sol_daily_limit_reached":
+    case "shared_pool_weekly_limit_reached":
       return tx(locale, "请更换可用模型，或等模型额度恢复后再保存。", "Choose another available model, or save again once the model's quota is restored.");
+    case "shared_pool_budget_pending":
+      return tx(locale, "共享调用正在结算，请稍后再保存。", "Shared calls are settling. Please save again shortly.");
+    case "shared_pool_usage_unavailable":
+    case "shared_pool_billing_unavailable":
+      return tx(locale, "共享模型计费暂不可用，请联系管理员或选择自己的 BYOK 模型。", "Shared billing is unavailable. Contact an administrator or select your own BYOK model.");
+    case "shared_pool_request_too_large":
+      return tx(locale, "输入超出共享模型单次限制，请减少内容或选择自己的 BYOK 模型。", "Input exceeds the shared request limit. Reduce it or select your own BYOK model.");
     case "provider_model_not_found":
     case "provider_model_or_endpoint_not_found":
       return tx(locale, "请在 API 设置中核对模型名称和地址，再保存。", "Check the model name and endpoint in API settings, then save again.");

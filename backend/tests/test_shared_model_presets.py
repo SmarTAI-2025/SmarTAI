@@ -21,6 +21,12 @@ from backend.services.grading_input_security import provider_configuration_finge
 from backend.tests.test_admin_business_config import client, headers, save
 from backend.tests.test_shared_vision_quota import FakeProvider
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """Retain coverage of the explicitly selected legacy quota policy."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 LUNA = "openai:gpt-6-luna"
 TERRA = "openai:gpt-6.1-terra"
 SOL = "openai:gpt-6.1-sol"

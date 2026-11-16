@@ -1636,6 +1636,11 @@ function verificationReasonSummary(reason: string, zh: boolean) {
     provider_vision_not_supported: ["不支持图片", "No image support"],
     shared_pool_daily_limit_reached: ["今日共享额度用完", "Daily quota used"],
     shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完", "Sol daily half-allowance used"],
+    shared_pool_weekly_limit_reached: ["本周共享额度不足", "Insufficient weekly allowance"],
+    shared_pool_budget_pending: ["共享调用结算中", "Shared calls settling"],
+    shared_pool_usage_unavailable: ["调用用量待确认", "Usage unconfirmed"],
+    shared_pool_billing_unavailable: ["共享计费暂不可用", "Shared billing unavailable"],
+    shared_pool_request_too_large: ["输入超出共享限制", "Shared input limit exceeded"],
     shared_pool_disabled: ["共享模型已关闭", "Shared pool off"],
   };
   const aliases: Record<string, string> = {
@@ -1661,6 +1666,11 @@ function imageReasonLabel(reason: string, zh: boolean) {
     expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
     shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完，可选择 Luna、Terra 或自己的模型", "Sol's daily half-allowance is exhausted; choose Luna, Terra or your own model"],
+    shared_pool_weekly_limit_reached: ["本周共享额度不足，请等待每周一新加坡时间 00:00 重置或使用自己的 BYOK 模型", "Insufficient weekly allowance. Wait until Monday 00:00 Singapore time or use your own BYOK model"],
+    shared_pool_budget_pending: ["其他共享调用正在结算，请稍后重试", "Other shared calls are settling. Retry shortly"],
+    shared_pool_usage_unavailable: ["调用用量尚未确认，预留金额保留。请联系管理员或使用自己的 BYOK 模型", "Usage is unconfirmed and the reservation is held. Contact an administrator or use your own BYOK model"],
+    shared_pool_billing_unavailable: ["共享模型计费暂不可用，请联系管理员或使用自己的 BYOK 模型", "Shared billing is unavailable. Contact an administrator or use your own BYOK model"],
+    shared_pool_request_too_large: ["输入超出共享模型单次限制，请减少内容或使用自己的 BYOK 模型", "Input exceeds the shared request limit. Reduce it or use your own BYOK model"],
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
   return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US")

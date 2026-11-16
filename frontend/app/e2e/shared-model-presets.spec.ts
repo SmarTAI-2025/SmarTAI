@@ -13,7 +13,7 @@ for (const width of [1440, 390]) {
     }));
     const all = [...models, { ...models[0]!, provider_id: "pc-own", display_name: "My personal model",
       is_shared: false, scope: "owner", editable: true, is_default: true, verification_status: "unverified" }];
-    let probes = 0, sol = 0;
+    let probes = 0;
     await page.setViewportSize({ width, height: 1000 });
     page.on("pageerror", error => errors.push(error.message));
     page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
@@ -31,14 +31,16 @@ for (const width of [1440, 390]) {
       if (path === "/experts/available" || path === "/experts/stage-options") return json(all);
       if (path === "/experts/catalog") return json([]);
       if (path === "/experts/quota") return json({
+        shared_quota_mode: "weekly_usd",
+        shared_weekly: {limit_usd: 5, spent_usd: probes * 0.01, reserved_usd: 0, remaining_usd: 5 - probes * 0.01, unknown_requests: 0, resets_at: "2026-11-23T00:00:00+08:00"},
         shared_pool_enabled: true, resets_at: "2026-11-17T00:00:00Z",
         shared: { requests: probes, request_limit: 100, estimated_input_tokens: probes * 1024, estimated_token_limit: 100000 },
-        shared_sol: { requests: sol, request_limit: 50, estimated_input_tokens: sol * 1024, estimated_token_limit: 50000 },
+        shared_sol: { requests: 50, request_limit: 50, estimated_input_tokens: 50000, estimated_token_limit: 50000 },
         history: { requests: 0, request_limit: 10 },
       });
       if (/^\/experts\/openai:.*\/verify(-image)?$/.test(path)) {
         probes++;
-        if (path.includes("gpt-6.1-sol")) sol++;
+
         const model = all.find(item => path.includes(item.provider_id))!;
         if (path.endsWith("verify-image")) {
           model.image_capability_status = "passed";
@@ -57,8 +59,8 @@ for (const width of [1440, 390]) {
     await expect(page).toHaveURL(/\/settings\/byok/);
     await expect(page).toHaveTitle(/SmarTAI/i);
     await expect(page.getByRole("heading", { name: "Models & BYOK" })).toBeVisible();
-    const quota = page.getByRole("region", { name: "Daily model allowance" });
-    await expect(quota).toContainText("0 / 100");
+    const quota = page.getByRole("region", { name: "Weekly shared allowance" });
+    await expect(quota).toContainText("$0.00 / $5.00");
     const row = (name: string) => width >= 640
       ? page.getByRole("row").filter({ has: page.getByText(name, { exact: true }) })
       : page.locator("article").filter({ has: page.getByText(name, { exact: true }) });
@@ -73,14 +75,14 @@ for (const width of [1440, 390]) {
     await target.getByRole("button", { name: "Verify (optional)" }).click();
     expect(probes).toBe(0);
     await page.getByRole("dialog").getByRole("button", { name: "Run connectivity check" }).click();
-    await expect(quota).toContainText("1 / 100");
-    await expect(quota).toContainText("1 / 50");
+    await expect(quota).toContainText("$0.01 / $5.00");
+    await expect(quota).not.toContainText("half");
     await target.getByRole("button", { name: "Verify vision capability" }).click();
     expect(probes).toBe(1);
     await page.getByRole("dialog").getByRole("button", { name: "Run image test" }).click();
     await expect(target).toContainText("Passed");
-    await expect(quota).toContainText("2 / 100");
-    await expect(quota).toContainText("2 / 50");
+    await expect(quota).toContainText("$0.02 / $5.00");
+    await expect(quota).toContainText("Monday at 00:00 Singapore time");
     await expect(row("gpt-6.1-terra")).toContainText("Unverified");
     await row("My personal model").getByRole("button", { name: "Edit", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();

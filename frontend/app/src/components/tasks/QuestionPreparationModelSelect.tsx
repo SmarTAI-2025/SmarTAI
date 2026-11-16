@@ -7,6 +7,7 @@ const MODEL_ERRORS = new Set([
   "no_provider_configured", "recognition_provider_not_enabled", "provider_not_enabled",
   "provider_auth_failed", "provider_permission_denied", "provider_credentials_unavailable", "provider_credentials_required",
   "provider_quota_exceeded", "provider_zero_quota", "provider_daily_quota_exceeded", "shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached",
+  "shared_pool_weekly_limit_reached", "shared_pool_budget_pending", "shared_pool_usage_unavailable", "shared_pool_billing_unavailable", "shared_pool_request_too_large",
   "provider_model_not_found", "provider_model_or_endpoint_not_found", "provider_request_failed", "provider_upstream_unavailable",
 ]);
 export const isQuestionModelError = (error: unknown) => MODEL_ERRORS.has(getAPIErrorCode(error) ?? "");

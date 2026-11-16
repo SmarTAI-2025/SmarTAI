@@ -106,9 +106,11 @@ class Settings(BaseSettings):
     # ─── Shared environment model pool safety ───────────────────────
     # BYOK remains the default.  Environment keys are invisible to ordinary
     # teachers unless this explicit kill switch is enabled.  When enabled,
-    # every actual provider invocation is charged to an in-process per-owner
-    # daily request + estimated-token budget.
+    # Weekly shared billing uses official usage; legacy daily admission remains
+    # available only through the explicit daily_estimated mode.
     shared_pool_enabled: bool = False
+    shared_pool_quota_mode: Literal["weekly_usd", "daily_estimated"] = "weekly_usd"
+    shared_pool_weekly_limit_cents: int = Field(default=500, ge=0)
     shared_pool_daily_request_limit: int = 100
     shared_pool_daily_estimated_token_limit: int = 100_000
 

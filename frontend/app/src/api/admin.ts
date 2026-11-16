@@ -47,7 +47,7 @@ export interface AdminOverview {
   users: { total: number; active: number; with_email: number };
   education: { courses: number; assignments: number; grading_runs: number };
   usage: AdminMetricsResult;
-  shared_pool: { enabled: boolean; daily_request_limit: number; daily_estimated_token_limit: number; source: string };
+  shared_pool: { quota_mode?: "weekly_usd" | "daily_estimated"; weekly_limit_usd?: number; enabled: boolean; daily_request_limit: number; daily_estimated_token_limit: number; source: string };
 }
 
 export interface AdminMetricDefinition {

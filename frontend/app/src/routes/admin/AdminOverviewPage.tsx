@@ -17,8 +17,8 @@ export function AdminOverviewPage() {
           </div>
           <Card>
             <h2 className="font-semibold">平台共用额度</h2>
-            <p className="mt-2 text-sm text-muted-foreground">{overview.data.shared_pool.enabled ? "已由运行配置开启" : "默认关闭"}。页面只读。模型额度按用户和 UTC 日期持久化计数，支持跨进程限额；共享池开关仍由部署设置控制。模型与存储额度可在“业务配置”调整。</p>
-            <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2"><span>每日请求上限：{overview.data.shared_pool.daily_request_limit}</span><span>估算输入 token 上限：{overview.data.shared_pool.daily_estimated_token_limit.toLocaleString()}</span></div>
+            <p className="mt-2 text-sm text-muted-foreground">{overview.data.shared_pool.enabled ? "已由运行配置开启" : "默认关闭"}。页面只读。额度按用户持久化计量，支持跨进程限额；共享池开关仍由部署设置控制。模型与存储额度可在“业务配置”调整。</p>
+            {overview.data.shared_pool.quota_mode === "weekly_usd" ? <p className="mt-4 text-sm">每人每周：${overview.data.shared_pool.weekly_limit_usd?.toFixed(2)}；每周一新加坡时间 00:00 重置。</p> : <div className="mt-4 grid gap-2 text-sm sm:grid-cols-2"><span>每日请求上限：{overview.data.shared_pool.daily_request_limit}</span><span>估算输入 token 上限：{overview.data.shared_pool.daily_estimated_token_limit.toLocaleString()}</span></div>}
           </Card>
           <UsageSummary usage={overview.data.usage} />
         </>
