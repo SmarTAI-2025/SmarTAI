@@ -717,7 +717,7 @@ def start_grading(
 async def task_state(task_id: str, current: User = Depends(require_teacher)):
     try:
         state = await task_facade.async_task_state(task_id=task_id, owner_id=current.id)
-        return {**state, **progress_fields(state.get("status"), state.get("progress"), now=time.time())}
+        return {**state, **progress_fields(state.get("status"), state.get("progress"))}
     except DomainError as exc:
         return domain_error_response(exc)
 

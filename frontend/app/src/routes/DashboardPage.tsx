@@ -13,9 +13,9 @@ import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { modelDisplayName } from "@/lib/modelPresentation";
-import { formatTaskTime, getTaskDestination, isTaskProcessing } from "@/lib/taskFlow";
-import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone } from "@/lib/taskPresentation";
-import type { ExpertConfig, JobProgress, TaskLite, TaskStatus } from "@/types";
+import { formatTaskTime, getTaskDestination, isTaskPaused, isTaskProcessing } from "@/lib/taskFlow";
+import { TASK_STAGE_KEYS as STAGE_KEYS, TASK_ACTION_KEYS as ACTION_KEYS, taskStatusTone, selectTaskSnapshot } from "@/lib/taskPresentation";
+import type { ExpertConfig, TaskLite, TaskStatus } from "@/types";
 
 const PROCESSING_STATUSES = new Set<TaskStatus>([
   "extracting_problems",
@@ -345,14 +345,23 @@ interface DashboardTaskProps {
   deletion: TaskListDeletion;
 }
 
-function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
+function useDashboardTask(listedTask: TaskLite) {
+  const processing = isTaskProcessing(listedTask.status);
+  const { data } = useTaskProgress(listedTask.task_id, {
+    enabled: processing || isTaskPaused(listedTask.status),
+    refetchInterval: processing ? 1_500 : false,
+  });
+  return selectTaskSnapshot(listedTask, data);
+}
+
+function DesktopTaskRow({ task: listedTask, courseTags, deletion }: DashboardTaskProps) {
   const { locale, t } = useI18n();
+  const task = useDashboardTask(listedTask);
   const isProcessing = isTaskProcessing(task.status);
-  const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
-  const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
+  const progressValue = getProgressValue(task);
   const complete = task.status === "graded" || task.status === "finalized";
-  const etaSeconds = complete ? 0 : progressQuery.data?.eta_seconds ?? task.eta_seconds;
-  const eta = etaSeconds == null && isProcessing && progressQuery.progress?.phase !== "done"
+  const etaSeconds = complete ? 0 : task.eta_seconds;
+  const eta = etaSeconds == null && isProcessing
     ? t("dashboardEtaEstimating")
     : formatHistoryEta(etaSeconds, locale);
 
@@ -398,11 +407,10 @@ function DesktopTaskRow({ task, courseTags, deletion }: DashboardTaskProps) {
   );
 }
 
-function MobileTaskCard({ task, courseTags, deletion }: DashboardTaskProps) {
+function MobileTaskCard({ task: listedTask, courseTags, deletion }: DashboardTaskProps) {
   const { locale, t } = useI18n();
-  const isProcessing = isTaskProcessing(task.status);
-  const progressQuery = useTaskProgress(task.task_id, { enabled: isProcessing });
-  const progressValue = getProgressValue(task, progressQuery.progress, progressQuery.percent);
+  const task = useDashboardTask(listedTask);
+  const progressValue = getProgressValue(task);
 
   return (
     <article className="relative [overflow-wrap:anywhere]">
@@ -642,10 +650,10 @@ function compareExperts(a: ExpertConfig, b: ExpertConfig): number {
   return aName.localeCompare(bName);
 }
 
-function getProgressValue(task: TaskLite, progress: JobProgress | null, percent: number): string {
+function getProgressValue(task: TaskLite): string {
   if (["graded", "finalized"].includes(task.status)) return "100%";
-  if (!isTaskProcessing(task.status) || !progress) return "—";
-  return `${percent}%`;
+  if ((!isTaskProcessing(task.status) && !isTaskPaused(task.status)) || task.progress_percent == null || !Number.isFinite(task.progress_percent)) return "—";
+  return `${task.progress_percent}%`;
 }
 
 function buildInsightSummary(

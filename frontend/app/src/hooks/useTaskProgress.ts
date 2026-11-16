@@ -1,21 +1,19 @@
-import { useMemo } from "react";
 import { useTaskState } from "@/api/hooks/tasks";
-import type { JobProgress, TaskStatus } from "@/types";
 
 const ACTIVE_STATUSES = new Set(["extracting_problems", "parsing_submissions", "grading"]);
 
-export function useTaskProgress(taskId?: string, options: { enabled?: boolean } = {}) {
+export function useTaskProgress(taskId?: string, options: { enabled?: boolean; refetchInterval?: number | false } = {}) {
   const query = useTaskState(taskId, {
     enabled: options.enabled,
-    refetchInterval: options.enabled === false ? false : 1_500,
+    refetchInterval: options.enabled === false ? false : options.refetchInterval ?? 1_500,
   });
 
   const isActive = Boolean(query.data?.status && ACTIVE_STATUSES.has(query.data.status));
   const progress = query.data?.progress ?? null;
-  const percent = useMemo(
-    () => calculateProgressPercent(progress, query.data?.status),
-    [progress, query.data?.status],
-  );
+  // All three views consume the server projection, including unknown progress.
+  // Do not derive a second percentage or round unfinished work to 100%.
+  const value = query.data?.progress_percent;
+  const percent = typeof value === "number" && Number.isFinite(value) ? value : null;
 
   return {
     ...query,
@@ -24,82 +22,4 @@ export function useTaskProgress(taskId?: string, options: { enabled?: boolean } 
     percent,
     latestMessage: progress?.messages.at(-1) ?? null,
   };
-}
-
-export function calculateProgressPercent(
-  progress: JobProgress | null,
-  status?: TaskStatus | string,
-): number {
-  if (!progress) {
-    return 0;
-  }
-
-  if (
-    typeof progress.total_steps === "number" &&
-    progress.total_steps > 0 &&
-    typeof progress.completed_steps === "number"
-  ) {
-    const metrics = progress.stage_metrics ?? {};
-    const totalQuestions = metrics.solution_total_questions;
-    const completedQuestions = metrics.solution_completed_questions;
-    const hasQuestionGenerationProgress = progress.current_step === "generating_solutions"
-      && typeof totalQuestions === "number"
-      && Number.isFinite(totalQuestions)
-      && totalQuestions > 0
-      && typeof completedQuestions === "number"
-      && Number.isFinite(completedQuestions);
-    if (hasQuestionGenerationProgress) {
-      const generationFraction = Math.max(
-        0,
-        Math.min(1, completedQuestions / totalQuestions),
-      );
-      return Math.min(
-        100,
-        Math.max(
-          Math.round((progress.completed_steps / progress.total_steps) * 100),
-          Math.floor(((progress.completed_steps + generationFraction) / progress.total_steps) * 100),
-        ),
-      );
-    }
-    return Math.min(
-      100,
-      Math.round((progress.completed_steps / progress.total_steps) * 100),
-    );
-  }
-
-  if (progress.phase === "done") {
-    return 100;
-  }
-
-  const totalUnits = getProgressTotalUnits(progress, status);
-  if (totalUnits <= 0) {
-    return 0;
-  }
-  if ((status === "grading" || status === "grading_paused" || progress.workflow === "grading") && progress.model_progress?.length) {
-    // Count real completed steps: each model/sample assessment plus each
-    // finalized response. This is work progress, not a prediction of time.
-    const initialTotal = progress.model_progress.reduce((sum, model) => sum + model.total, 0);
-    const initialDone = progress.model_progress.reduce((sum, model) => sum + Math.min(model.total, model.succeeded + model.failed), 0);
-    if (initialTotal > 0) return Math.min(99, Math.max(0, Math.round(
-      ((initialDone + Math.min(totalUnits, progress.completed_units)) / (initialTotal + totalUnits)) * 100,
-    )));
-  }
-  return Math.min(100, Math.round((progress.completed_units / totalUnits) * 100));
-}
-
-export function getProgressTotalUnits(
-  progress: JobProgress,
-  status?: TaskStatus | string,
-): number {
-  if (status === "parsing_submissions" || status === "submissions_paused" || progress.phase === "parsing") {
-    return progress.total_students;
-  }
-
-  if (status === "grading" || status === "grading_paused" || progress.phase === "grading") {
-    if (progress.total_students > 0 && progress.total_questions > 0) {
-      return progress.total_students * progress.total_questions;
-    }
-  }
-
-  return Math.max(progress.total_students, progress.total_questions);
 }

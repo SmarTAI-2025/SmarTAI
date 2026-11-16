@@ -53,7 +53,7 @@ export function GradingProgressPage() {
     },
     [completedView, progress, state?.problem_count, state?.student_count, task?.problem_count, task?.student_count],
   );
-  const eta = useMemo(() => progressQuery.isError ? copy(locale, "estimating") : estimateRemaining(progress, queue.total, queue.completed, locale), [locale, progress, progressQuery.isError, progressQuery.dataUpdatedAt, queue.completed, queue.total]);
+  const eta = useMemo(() => progressQuery.isError ? copy(locale, "estimating") : estimateRemaining(progress, queue.total, queue.completed, locale, state?.eta_seconds), [locale, progress, progressQuery.isError, state?.eta_seconds, queue.completed, queue.total]);
   const latestError = progress?.error_detail
     ?? [...(progress?.messages ?? [])].reverse().find((event) => event.level === "error")?.message
     ?? state?.error
@@ -267,29 +267,13 @@ function deriveQueue(progress: JobProgress | null, problemCount: number, student
   return { total, completed, running, queued, errorSignals };
 }
 
-function estimateRemaining(progress: JobProgress | null, total: number, completed: number, locale: Locale): string {
+function estimateRemaining(progress: JobProgress | null, total: number, completed: number, locale: Locale, etaSeconds?: number | null): string {
   if (!progress || total <= 0) return copy(locale, "estimating");
-  if (progress.model_progress?.length) {
-    if (completed >= total) return copy(locale, "almostDone");
-    const remaining = progress.model_progress.filter((model) => model.succeeded + model.failed < model.total);
-    if (remaining.some((model) => model.retrying)) return locale === "zh-CN" ? "等待模型重试" : "Waiting for model retry";
-    return progress.grading_eta_seconds != null ? formatRemaining(progress.grading_eta_seconds, locale) : copy(locale, "estimating");
-  }
-  if (completed <= 0) return copy(locale, "waitingFirst");
   if (completed >= total) return copy(locale, "almostDone");
-  // One fast result is not a representative rate for a parallel batch. A
-  // stalled batch also cannot support an increasingly large time promise.
-  if (completed < Math.min(3, total)) return copy(locale, "estimating");
-  const lastCompletion = [...progress.messages].reverse().find((event) => event.message === "Completed one grading unit.");
-  const lastCompletedAt = normalizeTimestamp(lastCompletion?.ts);
-  if (!lastCompletedAt || Date.now() - lastCompletedAt > 60_000) return copy(locale, "estimating");
-  const startedAt = normalizeTimestamp(progress.started_at ?? progress.messages[0]?.ts);
-  if (!startedAt) return copy(locale, "estimating");
-  const elapsedSeconds = Math.max(1, (Date.now() - startedAt) / 1000);
-  const rate = completed / elapsedSeconds;
-  if (!Number.isFinite(rate) || rate <= 0) return copy(locale, "estimating");
-  const remainingSeconds = Math.max(1, Math.round((total - completed) / rate));
-  return formatRemaining(remainingSeconds, locale);
+  const remaining = (progress.model_progress ?? []).filter((model) => model.succeeded + model.failed < model.total);
+  if (remaining.some((model) => model.retrying)) return locale === "zh-CN" ? "等待模型重试" : "Waiting for model retry";
+  if (etaSeconds != null) return formatRemaining(etaSeconds, locale);
+  return copy(locale, completed <= 0 ? "waitingFirst" : "estimating");
 }
 
 function formatRemaining(remainingSeconds: number, locale: Locale) {
@@ -302,10 +286,6 @@ function formatRemaining(remainingSeconds: number, locale: Locale) {
   return copy(locale, "aboutHours").replace("{value}", String(hours));
 }
 
-function normalizeTimestamp(value?: number | null): number | null {
-  if (!value || !Number.isFinite(value)) return null;
-  return value > 1_000_000_000_000 ? value : value * 1000;
-}
 
 function QueueTable({ locale, queue, completed }: { locale: Locale; queue: QueueSummary; completed: boolean }) {
   const rows = [
