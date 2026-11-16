@@ -9,14 +9,16 @@ from backend.tests.test_math_method_review import case, choice, multipart_case, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('teacher', ['正确作答得10分。','参考解配方得10分。'])
 @pytest.mark.parametrize('reference,quote', [
     ('无需配方。用因式分解解得 1 和 2。', '配方'),
+    ('无需配方。', '配方'),
     ('Do not use substitution. Use factorization.', 'substitution'),
     ('x = 1 y = 2', 'x = 1 y = 2'),
 ])
-async def test_invalid_method_evidence_never_reaches_original_expert(reference, quote):
+async def test_invalid_method_evidence_never_reaches_original_expert(reference, quote, teacher):
     from backend.llm.providers import LLMResponse
-    p,a,plan,experts,_=case(reference=reference,teacher='正确作答得10分。')
+    p,a,plan,experts,_=case(reference=reference,teacher=teacher)
     calls=[]
     async def invoke(messages):
         calls.append(messages)
@@ -54,7 +56,7 @@ def test_frozen_answer_links_precede_equation_numbers():
         for i,part in enumerate(plan.part_rubric.parts))
     rules=plan.part_rubric.model_copy(update={'parts':parts,'answer_segments':tuple(
         AnswerSegment(id=f'a{i}',text=t,origin='teacher') for i,t in enumerate(refs))})
-    assert _method_passages(p.model_copy(update={'reference_answer':text}),rules)=={'p':[refs[0]],'p2':[refs[1]]}
+    assert _method_passages(p.model_copy(update={'reference_answer':text}),rules)=={'p':['正确作答',refs[0]],'p2':['正确作答',refs[1]]}
 
 
 @pytest.mark.parametrize('source,quote,expected', [
@@ -103,7 +105,7 @@ async def test_equation_numbered_reference_with_frozen_links_completes_reassessm
     assert [e.score for e in result]==[16,16]
     assert len(calls)==2 and len(regrades)==1
     passages=json.loads(calls[0][1].content)['method_reference_passages']
-    assert passages=={'p':[refs[0]]}
+    assert passages=={'p':['正确作答',refs[0]]}
 
 
 @pytest.mark.asyncio
@@ -115,3 +117,12 @@ async def test_unknown_student_part_scope_preserves_ordinary_review():
     assert len(calls)==1 and [e.score for e in result]==[8,16]
     assert grading.read_math_trace(result[0])['method_review']['status']=='student_scope_unavailable'
     assert 'selected_methods' not in json.loads(calls[0][1].content)
+
+
+@pytest.mark.parametrize('quote,expected', [
+    ('配方',False), ('用因式分解解得 1 和 2。',True),
+])
+def test_conflicting_context_requires_an_unambiguous_positive_quote(quote,expected):
+    from backend.skills.math_method_review import _supported_reference_quote
+    assert _supported_reference_quote(['参考解配方得10分。',
+        '无需配方。用因式分解解得 1 和 2。'],quote) is expected

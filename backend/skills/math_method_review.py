@@ -107,6 +107,16 @@ def _supported_method_quote(text, quote):
                                for start, end in _method_spans(text)))
 
 
+def _supported_reference_quote(passages, quote):
+    if not quote.strip():
+        return False
+    # A short excerpt shared by conflicting passages is ambiguous. Require
+    # positive support in every matching context, or a more complete quote.
+    # Include literal duplicates that the unique-source matcher rejects.
+    matches = [text for text in passages if quote.strip() in text or match_source_quote(text, quote)]
+    return bool(matches) and all(_supported_method_quote(text, quote) for text in matches)
+
+
 def _labelled_ranges(text, parts):
     from backend.services.question_structure import _normalize_label
     # Only explicit line headings are a fallback. Inline/trailing equation
@@ -143,7 +153,7 @@ def _method_passages(problem, rules):
             start, end = ranges[part.id]
             heading = re.match(r'\s*[（(][^）)]+[)）]\s*[:：]?\s*', reference[start:end])
             texts.append(reference[start + (heading.end() if heading else 0):end].strip())
-        result[part.id] = list(dict.fromkeys(text for text in texts if text.strip() and _has_method_evidence(text)))
+        result[part.id] = list(dict.fromkeys(text for text in texts if text.strip()))
     return result
 
 
@@ -248,7 +258,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             record(index, status, fallback=True)
         return revised, {}, True  # No common route was established; retain the ordinary review.
 
-    if not all(passages.values()):
+    if not all(any(_has_method_evidence(text) for text in texts) for texts in passages.values()):
         return joint_review_fallback("reference_unavailable")
     if any(not student_sources[key] for key in disputed):
         return joint_review_fallback("student_scope_unavailable")
@@ -261,7 +271,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
             if any(key not in student_sources[choice.part_id] for key in choice.student_source_ids):
                 raise ValueError("Cite original student source IDs belonging to this disputed part.")
             if choice.method != "undetermined" and (not choice.student_source_ids
-                    or not any(_supported_method_quote(text, choice.reference_quote) for text in passages[choice.part_id])):
+                    or not _supported_reference_quote(passages[choice.part_id], choice.reference_quote)):
                 raise ValueError("A determined method needs student evidence and a verbatim supplied method passage for this part.")
 
     payload = {"problem": problem.stem, "reference": problem.reference_answer, "answer": answer.content,

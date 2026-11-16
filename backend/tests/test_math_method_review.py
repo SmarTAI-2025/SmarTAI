@@ -397,9 +397,9 @@ def test_unlabelled_answer_only_uses_explicit_frozen_part_links():
     rules = plan.part_rubric.model_copy(update={"parts": tuple(parts), "answer_segments": tuple(
         AnswerSegment(id=f"a{i}", text=text, origin="teacher") for i, text in enumerate(texts))})
     p = p.model_copy(update={"reference_answer": "\n".join(texts)})
-    assert _method_passages(p, rules) == {"p": [texts[0]], "p2": [texts[1]]}
+    assert _method_passages(p, rules) == {"p": ["正确作答", texts[0]], "p2": ["正确作答", texts[1]]}
     unlinked = rules.model_copy(update={"parts": tuple(part.model_copy(update={"answer_refs": ()}) for part in parts)})
-    assert _method_passages(p, unlinked) == {"p": [], "p2": []}
+    assert _method_passages(p, unlinked) == {"p": ["正确作答"], "p2": ["正确作答"]}
 
 
 @pytest.mark.parametrize("text,expected", [
