@@ -1347,9 +1347,9 @@ class SafeRelayProvider(BaseProvider):
                     content = ""
                 if isinstance(content, list):
                     content = "".join(
-                        str(item.get("text", ""))
+                        item["text"]
                         for item in content
-                        if isinstance(item, dict)
+                        if isinstance(item, dict) and isinstance(item.get("text"), str)
                     )
                 usage = payload.get("usage", {})
                 input_tokens = usage.get("prompt_tokens")
@@ -1357,9 +1357,10 @@ class SafeRelayProvider(BaseProvider):
             elif self.wire_protocol == "anthropic_messages":
                 finish_reason = payload.get("stop_reason")
                 content = "".join(
-                    str(item.get("text", ""))
+                    item["text"]
                     for item in payload["content"]
                     if isinstance(item, dict) and item.get("type") == "text"
+                    and isinstance(item.get("text"), str)
                 )
                 usage = payload.get("usage", {})
                 input_tokens = usage.get("input_tokens")
@@ -1370,9 +1371,10 @@ class SafeRelayProvider(BaseProvider):
                 # A blocked Gemini response legitimately omits content/parts.
                 parts = (candidate.get("content") or {}).get("parts", []) if _safe_finish_reason(finish_reason) == "refused" else candidate["content"]["parts"]
                 content = "".join(
-                    str(item.get("text", ""))
+                    item["text"]
                     for item in parts
                     if isinstance(item, dict) and not item.get("thought")
+                    and isinstance(item.get("text"), str)
                 )
                 usage = payload.get("usageMetadata", {})
                 input_tokens = usage.get("promptTokenCount")
