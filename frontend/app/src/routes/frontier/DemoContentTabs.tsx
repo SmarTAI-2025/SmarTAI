@@ -55,9 +55,39 @@ export function DemoContentTabs({ stage, locale, materials, submissions, result,
 
 function feedbackParagraphs(text = "") {
   const normalized = text.replace(/\r\n?/g, "\n").trim();
-  // Keep fenced code and display-math blocks intact, including blank lines.
-  if (/(^|\n)[ \t]*(?:`{3,}|~{3,}|\$\$|\\\[)/.test(normalized)) return normalized ? [normalized] : [];
-  return normalized.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean);
+  const parts: string[] = [], lines: string[] = [];
+  let fence: string | null = null, mathEnd: string | null = null;
+  const flush = () => {
+    const part = lines.join("\n").trim();
+    if (part) parts.push(part);
+    lines.length = 0;
+  };
+  for (const line of normalized.split("\n")) {
+    if (fence) {
+      lines.push(line);
+      const closing = line.match(/^[ \t]*(`+|~+)[ \t]*$/)?.[1];
+      if (closing?.[0] === fence[0] && closing.length >= fence.length) { flush(); fence = null; }
+    } else if (mathEnd) {
+      lines.push(line);
+      if (line.includes(mathEnd)) { flush(); mathEnd = null; }
+    } else {
+      const code = line.match(/^[ \t]*(`{3,}|~{3,})/);
+      const math = line.match(/^[ \t]*(\$\$|\\\[)/);
+      if (code || math) {
+        flush();
+        lines.push(line);
+        if (code) fence = code[1];
+        else {
+          const end = math![1] === "$$" ? "$$" : "\\]";
+          if (line.slice(math![0].length).includes(end)) flush();
+          else mathEnd = end;
+        }
+      } else if (!line.trim()) flush();
+      else lines.push(line);
+    }
+  }
+  flush();
+  return parts;
 }
 
 /** Prefer attributed expert text; retain distinct summary and expert paragraphs. */
@@ -73,7 +103,7 @@ function demoFeedback(summary: string, experts: ExpertResult[]) {
     ![...shown].some(text => text === part || text.startsWith(part + "\n") || text.endsWith("\n" + part))).join("\n\n");
   // The weighted fallback wraps each saved comment in this exact provider header.
   // Remove that wrapper only for a known expert, never a guessed prose heading.
-  const distinctSummary = summary.split(/\n\n———\n\n/).map(block => {
+  const distinctSummary = summary.replace(/\r\n?/g, "\n").split(/\n\n———\n\n/).map(block => {
     const lines = block.split("\n");
     if (experts.some(expert => lines[0].startsWith(`【${expert.provider}（`) && lines[0].endsWith("）】"))) {
       const body = remaining(lines.slice(1).join("\n"));

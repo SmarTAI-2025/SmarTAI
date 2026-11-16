@@ -97,6 +97,29 @@ describe("DemoContentTabs", () => {
     expect(screen.getByText("The repeated equation is intentional.")).toBeVisible();
   });
 
+  it.each([
+    "$$\nx^2=1\n$$",
+    "$$\nx^2=1\n\nx=\\pm1\n$$",
+    "\\[\nx^2=1\n\\]",
+    "```text\nx=1\n\nx=1\n```",
+    "~~~~text\nx=1\n\nx=1\n~~~~~",
+  ])("deduplicates prose and protected blocks separately: %s", block => {
+    const graded = result();
+    const correction = graded.results![0].corrections[0];
+    const shared = `Shared mathematical explanation.\n\n${block}`;
+    correction.comment = `${shared}\n\nUnique aggregate conclusion.`;
+    correction.expert_results = [{ provider: "Model A", score: 4, max_score: 5, confidence: .9,
+      comment: `${shared}\n\nUnique expert reason.`, steps: correction.steps }];
+    render(view("results", "en-US", graded));
+    expect(screen.getAllByText("Shared mathematical explanation.")).toHaveLength(1);
+    expect(screen.getByText("Unique aggregate conclusion.")).toBeVisible();
+    expect(screen.getByText("Unique expert reason.")).toBeVisible();
+    if (block.includes("text")) {
+      expect(document.querySelectorAll("pre code")).toHaveLength(1);
+      expect(document.querySelector("pre code")?.textContent).toBe("x=1\n\nx=1\n");
+    } else expect(document.querySelectorAll(".katex-display")).toHaveLength(1);
+  });
+
   it.each([true, false])("keeps one copy of a single expert's repeated comment (same=%s)", same => {
     const graded = result();
     const correction = graded.results![0].corrections[0];
