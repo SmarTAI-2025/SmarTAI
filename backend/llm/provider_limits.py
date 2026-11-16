@@ -19,6 +19,35 @@ def _error_text(value) -> str:
 LIMIT_CODES = frozenset({"provider_rate_limited", "provider_daily_quota_exceeded",
                          "provider_zero_quota", "provider_quota_exceeded"})
 
+# Stable platform-budget reasons, kept distinct from upstream rate limits.
+SHARED_WEEKLY_FAILURES = {
+    "shared_pool_weekly_limit_reached": (
+        "本周共享额度不足。", "Insufficient weekly shared allowance.",
+        "请等待每周一新加坡时间 00:00 重置，或使用自己的 BYOK 模型。",
+        "Wait until Monday 00:00 Singapore time or use your own BYOK model."),
+    "shared_pool_budget_pending": (
+        "共享额度正在被其他请求占用。", "Other requests are using the shared allowance.",
+        "请等待正在运行的请求完成后重试，或使用自己的 BYOK 模型。",
+        "Wait for running requests to finish, then retry, or use your own BYOK model."),
+    "shared_pool_usage_unavailable": (
+        "共享模型用量暂时无法结算。", "Shared model usage could not be settled.",
+        "请使用自己的 BYOK 模型。", "Use your own BYOK model."),
+    "shared_pool_billing_unavailable": (
+        "共享模型计费配置暂不可用。", "Shared model billing is unavailable.",
+        "请使用自己的 BYOK 模型。", "Use your own BYOK model."),
+    "shared_pool_request_too_large": (
+        "本次请求超过共享模型单次限制。", "This request exceeds the shared model limit.",
+        "请减少本次输入，或使用自己的 BYOK 模型。", "Reduce the input or use your own BYOK model."),
+}
+
+
+def shared_weekly_error_code(value) -> str | None:
+    for item in _quota_error_chain(value):
+        for code in (getattr(item, "code", None), str(item).strip()):
+            if isinstance(code, str) and code in SHARED_WEEKLY_FAILURES:
+                return code
+    return None
+
 
 def structured_quota_code(value) -> str | None:
     """A QuotaFailure is a complete decision, including a non-daily limit.

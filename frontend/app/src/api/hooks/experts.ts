@@ -88,6 +88,7 @@ export function useVerifyExpert() {
     mutationFn: expertsApi.verifyExpert,
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: expertKeys.all });
+      queryClient.invalidateQueries({ queryKey: ["model-quota"] });
     },
   });
 }
@@ -106,6 +107,9 @@ export function useRemoveExpert() {
 export function useVerifyExpertImage() {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: expertsApi.verifyExpertImage, retry: false,
-    onSettled: () => { queryClient.invalidateQueries({ queryKey: expertKeys.all }); },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: expertKeys.all });
+      queryClient.invalidateQueries({ queryKey: ["model-quota"] });
+    },
   });
 }

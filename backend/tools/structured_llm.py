@@ -226,7 +226,9 @@ def _classify_exception(e: Exception) -> Exception:
     "provider_upstream_unavailable" would miss every branch below and fall
     into the default 3-attempt transient path.
     """
-    from backend.llm.provider_limits import quota_error_code
+    from backend.llm.provider_limits import quota_error_code, shared_weekly_error_code
+    if code := shared_weekly_error_code(e):
+        return PermanentLLMError(code)
     if getattr(e, "code", None) in {
         "submission_time_limit_reached", "question_preparation_time_limit_reached", "grading_time_limit_reached",
         "submission_wall_time_limit_reached", "question_preparation_wall_time_limit_reached",

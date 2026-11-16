@@ -585,7 +585,7 @@ async def test_optional_connectivity_check_is_not_an_enablement_gate(monkeypatch
     assert after is not None and after.config.enabled is True
 
 
-def test_first_relay_config_is_not_registered_into_transient_shared_pool(monkeypatch):
+def test_first_relay_config_is_registered_as_an_owner_entry_alongside_shared_pool(monkeypatch):
     from backend.api.experts import AddKeyRequest, add_key
 
     owner_id = "relay-api-first-byok"
@@ -598,7 +598,8 @@ def test_first_relay_config_is_not_registered_into_transient_shared_pool(monkeyp
     result = add_key(AddKeyRequest(**_payload()), current=current, registry=registry)
 
     assert result["provider_id"]
-    assert registry.registered == []
+    assert len(registry.registered) == 1
+    assert not registry.registered[0][1].get("shared_pool", False)
     stored = get_provider_config(
         owner_id,
         result["provider_id"],

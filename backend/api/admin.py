@@ -352,7 +352,7 @@ def admin_overview(current: User = Depends(require_admin)):
         "users": {"total": users_total, "active": users_active, "with_email": users_with_email},
         "education": {"courses": courses, "assignments": assignments, "grading_runs": grading_runs},
         "usage": usage,
-        "shared_pool": {"enabled": bool(settings.shared_pool_enabled), "daily_request_limit": int(config.values["shared_pool_daily_request_limit"]), "daily_estimated_token_limit": int(config.values["shared_pool_daily_estimated_token_limit"]), "source": "resolved_business_configuration"},
+        "shared_pool": {"enabled": bool(settings.shared_pool_enabled), "quota_mode": settings.shared_pool_quota_mode, "weekly_limit_usd": config.values["shared_pool_weekly_limit_cents"] / 100, "daily_request_limit": int(config.values["shared_pool_daily_request_limit"]), "daily_estimated_token_limit": int(config.values["shared_pool_daily_estimated_token_limit"]), "source": "resolved_business_configuration"},
     }
 
 

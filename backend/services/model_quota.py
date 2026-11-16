@@ -26,9 +26,15 @@ def _limits(config, scope):
         return int(config.values["history_query_llm_daily_limit"]), -1
     raise ValueError("Unknown model quota scope")
 
-def admit_model_call(owner_id: str, scope: str, *, estimated_input_tokens: int = 0, now=None):
+def _half_limit(limit: int) -> int:
+    return -1 if limit < 0 else limit // 2
+
+
+def admit_model_call(owner_id: str, scope: str, *, estimated_input_tokens: int = 0, shared_sol: bool = False, now=None):
     if type(estimated_input_tokens) is not int or estimated_input_tokens < 0:
         raise ValueError("Invalid estimate")
+    if shared_sol and scope != "shared":
+        raise ValueError("Sol sublimit requires shared scope")
     moment = (now or utc_now()).astimezone(timezone.utc)
     day = moment.date().isoformat()
     with get_session() as session:
@@ -44,15 +50,23 @@ def admit_model_call(owner_id: str, scope: str, *, estimated_input_tokens: int =
             requests, tokens = (row.requests, row.estimated_input_tokens) if row else (0, 0)
             if (request_limit >= 0 and requests + 1 > request_limit) or (token_limit >= 0 and tokens + estimated_input_tokens > token_limit):
                 raise ModelQuotaError("shared_pool_daily_limit_reached" if scope == "shared" else "history_query_daily_limit_reached")
+            if shared_sol:
+                sol_requests, sol_tokens = (row.sol_requests, row.sol_estimated_input_tokens) if row else (0, 0)
+                if (request_limit >= 0 and sol_requests + 1 > _half_limit(request_limit)) or (token_limit >= 0 and sol_tokens + estimated_input_tokens > _half_limit(token_limit)):
+                    raise ModelQuotaError("shared_pool_sol_daily_limit_reached")
             if scope == "history":
                 last = session.scalar(select(func.max(ModelDailyUsageRecord.last_admitted_at)).where(ModelDailyUsageRecord.owner_id == owner_id, ModelDailyUsageRecord.scope == scope))
                 if last is not None and moment.timestamp() - last < max(0, settings.history_query_llm_cooldown_seconds):
                     raise ModelQuotaError("history_query_cooldown")
             if row is None:
-                row = ModelDailyUsageRecord(owner_id=owner_id, scope=scope, day=day, requests=0, estimated_input_tokens=0)
+                row = ModelDailyUsageRecord(owner_id=owner_id, scope=scope, day=day, requests=0, estimated_input_tokens=0,
+                                            sol_requests=0, sol_estimated_input_tokens=0)
                 session.add(row)
             row.requests += 1
             row.estimated_input_tokens += estimated_input_tokens
+            if shared_sol:
+                row.sol_requests += 1
+                row.sol_estimated_input_tokens += estimated_input_tokens
             row.last_admitted_at = moment.timestamp()
             session.commit()
         except BaseException:
@@ -72,4 +86,15 @@ def model_usage(session, owner_id: str, *, config=None, now=None):
         req_limit, tok_limit = _limits(config, scope)
         result[scope] = {"requests": requests, "estimated_input_tokens": tokens, "request_limit": req_limit,
                          "estimated_token_limit": tok_limit, "remaining_requests": None if req_limit < 0 else max(0, req_limit-requests)}
+    row = rows.get("shared")
+    result["shared_sol"] = {
+        "requests": row.sol_requests if row else 0,
+        "estimated_input_tokens": row.sol_estimated_input_tokens if row else 0,
+        "request_limit": _half_limit(result["shared"]["request_limit"]),
+        "estimated_token_limit": _half_limit(result["shared"]["estimated_token_limit"]),
+    }
+    result["shared_quota_mode"] = settings.shared_pool_quota_mode
+    if settings.shared_pool_quota_mode == "weekly_usd":
+        from backend.services.shared_weekly_budget import weekly_usage
+        result["shared_weekly"] = weekly_usage(session, owner_id, config=config, now=moment)
     return result

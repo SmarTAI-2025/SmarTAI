@@ -372,7 +372,10 @@ def classify_skill_error(e: Exception) -> tuple[str, str]:
     """
     from backend.tools.structured_llm import StructuredOutputInvalidError
     s = str(e).lower()
-    from backend.llm.provider_limits import exhausted_quota_code
+    from backend.llm.provider_limits import exhausted_quota_code, shared_weekly_error_code, SHARED_WEEKLY_FAILURES
+    if code := shared_weekly_error_code(e):
+        message, _, suggestion, _ = SHARED_WEEKLY_FAILURES[code]
+        return code, "该题未完成批改：" + message + suggestion
     quota_code = exhausted_quota_code(e)
     if quota_code == "provider_zero_quota":
         return ("zero_quota", "该题未完成：服务商明确返回该模型配额为0，当前无可用配额。请检查服务商项目与模型权限或更换模型；调整后可主动重试。")

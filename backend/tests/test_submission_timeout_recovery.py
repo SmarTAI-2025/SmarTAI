@@ -87,6 +87,8 @@ async def test_legacy_recognition_dispatch_counts_underlying_model_not_shared_wr
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
         if shared:
+            from backend.config import settings
+            monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
             provider = _GuardedSharedProvider(provider, "synthetic-owner")
             monkeypatch.setattr(provider, "_admit", lambda *a, **k: None)
         engine = LLMRecognitionEngine(provider, route_id="synthetic-route", fingerprint="synthetic-config")

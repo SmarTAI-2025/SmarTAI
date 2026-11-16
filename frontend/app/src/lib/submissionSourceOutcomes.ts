@@ -226,6 +226,36 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   pdf_response_too_large: recognitionLimitCopy,
   pdf_structure_limit_exceeded: pdfLocalLimitCopy.pdf_structure_limit_exceeded,
   provider_credentials_required: recognitionProviderCopy,
+  shared_pool_weekly_limit_reached: (locale) => ({
+    title: tx(locale, "本周共享额度不足。", "Insufficient weekly allowance."),
+    description: tx(locale, "三个共享模型共用周金额额度。", "All three shared models use one weekly allowance."),
+    nextStep: tx(locale, "请选择自己的 BYOK 模型继续，或等待每周一新加坡时间 00:00 重置。", "Use your own BYOK model, or wait until Monday 00:00 Singapore time."),
+  }),
+  shared_pool_budget_pending: (locale) => ({
+    title: tx(locale, "共享调用结算中。", "Shared calls are settling."),
+    description: tx(locale, "其他调用暂时占用预留金额。", "Other calls temporarily hold reservations."),
+    nextStep: tx(locale, "请稍后重试。", "Retry shortly."),
+  }),
+  shared_pool_usage_unavailable: (locale) => ({
+    title: tx(locale, "调用用量待确认。", "Usage is unconfirmed."),
+    description: tx(locale, "预留金额暂未释放。", "The reservation remains held."),
+    nextStep: tx(locale, "请联系管理员或使用自己的 BYOK 模型。", "Contact an administrator or use your own BYOK model."),
+  }),
+  shared_pool_billing_unavailable: (locale) => ({
+    title: tx(locale, "共享计费暂不可用。", "Shared billing is unavailable."),
+    description: tx(locale, "当前无法确认共享调用费用。", "Shared call costs cannot currently be confirmed."),
+    nextStep: tx(locale, "请联系管理员或使用自己的 BYOK 模型。", "Contact an administrator or use your own BYOK model."),
+  }),
+  shared_pool_request_too_large: (locale) => ({
+    title: tx(locale, "输入超出共享模型单次限制。", "Input exceeds the shared request limit."),
+    description: tx(locale, "本次请求未发送。", "This request was not sent."),
+    nextStep: tx(locale, "请减少内容或使用自己的 BYOK 模型。", "Reduce input or use your own BYOK model."),
+  }),
+  shared_pool_sol_daily_limit_reached: (locale) => ({
+    title: tx(locale, "Sol 今日半额已用完。", "Sol's daily half-allowance is exhausted."),
+    description: tx(locale, "本次识别请求未发送。Sol 和其他共享模型共用总日额度。", "This recognition request was not sent. Sol and the other shared models use the same daily allowance."),
+    nextStep: tx(locale, "请选择 Luna、Terra 或自己的模型继续，或等待 UTC 00:00 重置。", "Choose Luna, Terra or your own model, or wait for UTC midnight."),
+  }),
   shared_pool_daily_limit_reached: (locale) => ({
     title: tx(locale, "共享模型日额度已用完。", "Shared model daily allowance exhausted."),
     description: tx(locale, "共享模型今日额度不足，本次识别请求未发送。", "The shared model daily allowance is insufficient. This recognition request was not sent."),

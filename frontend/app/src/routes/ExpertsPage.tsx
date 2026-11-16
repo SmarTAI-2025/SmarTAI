@@ -743,7 +743,7 @@ function ExpertTableRow({
       </td>
       <td className="px-3 text-center align-middle">
         <VerificationBadge expert={expert} locale={locale} />
-        {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+        <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={onVerify} disabled={verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
       </td>
       <td className="px-3 text-center align-middle">
         <ImageVerification expert={expert} locale={locale} disabled={verificationDisabled} onVerifyImage={onVerifyImage} />
@@ -796,6 +796,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-2">
               <p className="truncate font-semibold">{modelDisplayName(expert)}</p>
+              {expert.is_shared ? <span className="shrink-0 text-xs text-blue-700">{zh ? "平台" : "Platform"}</span> : null}
               {expert.is_default ? <DefaultBadge locale={locale} /> : null}
             </div>
             <p className="mt-1 truncate text-xs text-muted-foreground">
@@ -807,7 +808,7 @@ function ExpertMobileRow(props: ExpertRowProps) {
       </div>
       <div className="grid grid-cols-2 items-start gap-3 text-center text-xs text-muted-foreground">
         <div><p>{zh ? "文本测试" : "Text test"}</p><VerificationBadge expert={expert} locale={locale} />
-          {expert.editable !== false ? <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction> : null}
+          <RowAction label={zh ? "验证（可选）" : "Verify (optional)"} onClick={props.onVerify} disabled={props.verificationDisabled}><ShieldCheck aria-hidden="true" size={14} /></RowAction>
         </div>
         <div><p>{zh ? "图像测试" : "Image test"}</p><ImageVerification expert={expert} locale={locale} disabled={props.verificationDisabled} onVerifyImage={props.onVerifyImage} /></div>
       </div>
@@ -1554,6 +1555,11 @@ function safeExpertError(error: unknown, locale: "zh-CN" | "en-US") {
 function expertErrorMessage(code: string | null | undefined, locale: "zh-CN" | "en-US") {
   const zh = locale === "zh-CN";
   const messages: Record<string, [string, string]> = {
+    shared_pool_weekly_limit_reached: ["本周共享额度不足。请等待每周一新加坡时间 00:00 重置，或使用自己的 BYOK 模型。", "Insufficient weekly shared allowance. Wait until Monday 00:00 Singapore time or use your own BYOK model."],
+    shared_pool_budget_pending: ["共享额度正在被其他请求占用。请等待正在运行的请求完成后重试，或使用自己的 BYOK 模型。", "Other requests are using the shared allowance. Wait for running requests to finish, then retry, or use your own BYOK model."],
+    shared_pool_usage_unavailable: ["共享模型用量暂时无法结算，请使用自己的 BYOK 模型。", "Shared model usage could not be settled. Use your own BYOK model."],
+    shared_pool_billing_unavailable: ["共享模型计费配置暂不可用，请使用自己的 BYOK 模型。", "Shared model billing is unavailable. Use your own BYOK model."],
+    shared_pool_request_too_large: ["本次请求超过共享模型单次限制。请减少输入，或使用自己的 BYOK 模型。", "This request exceeds the shared model limit. Reduce the input or use your own BYOK model."],
     provider_api_key_invalid: ["API key 含有无法用于请求的字符（如中文、全角符号、换行或隐藏字符），请重新复制完整密钥后保存。", "The API key contains characters that cannot be sent in a request, such as non-ASCII or hidden characters. Copy the full key again and save."],
     expert_verification_encoding_error: ["验证请求包含无法编码的字符，请检查 API key 和配置内容。", "The verification request contains characters that cannot be encoded. Check the API key and configuration."],
     provider_model_access_denied: ["服务商或中转站以团队模型权限为由拒绝了本次请求。若该模型在其他调用中可用，请联系管理员核查本次请求。", "The provider or relay rejected this request due to team/model access. If the model works in other calls, ask the administrator to investigate this request."],
@@ -1634,6 +1640,12 @@ function verificationReasonSummary(reason: string, zh: boolean) {
     image_probe_response_truncated: ["测试响应未完成", "Response truncated"],
     provider_vision_not_supported: ["不支持图片", "No image support"],
     shared_pool_daily_limit_reached: ["今日共享额度用完", "Daily quota used"],
+    shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完", "Sol daily half-allowance used"],
+    shared_pool_weekly_limit_reached: ["本周共享额度不足", "Insufficient weekly allowance"],
+    shared_pool_budget_pending: ["共享调用结算中", "Shared calls settling"],
+    shared_pool_usage_unavailable: ["调用用量待确认", "Usage unconfirmed"],
+    shared_pool_billing_unavailable: ["共享计费暂不可用", "Shared billing unavailable"],
+    shared_pool_request_too_large: ["输入超出共享限制", "Shared input limit exceeded"],
     shared_pool_disabled: ["共享模型已关闭", "Shared pool off"],
   };
   const aliases: Record<string, string> = {
@@ -1658,6 +1670,12 @@ function imageReasonLabel(reason: string, zh: boolean) {
     expert_verification_connection_failed: ["网络连接失败", "Network connection failed"],
     expert_verification_model_not_found: ["模型或端点不存在", "Model or endpoint not found"],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完，可等待重置或配置自己的模型", "Shared daily allowance exhausted; wait for reset or use BYOK"],
+    shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完，可选择 Luna、Terra 或自己的模型", "Sol's daily half-allowance is exhausted; choose Luna, Terra or your own model"],
+    shared_pool_weekly_limit_reached: ["本周共享额度不足，请等待每周一新加坡时间 00:00 重置或使用自己的 BYOK 模型", "Insufficient weekly allowance. Wait until Monday 00:00 Singapore time or use your own BYOK model"],
+    shared_pool_budget_pending: ["其他共享调用正在结算，请稍后重试", "Other shared calls are settling. Retry shortly"],
+    shared_pool_usage_unavailable: ["调用用量尚未确认，预留金额保留。请联系管理员或使用自己的 BYOK 模型", "Usage is unconfirmed and the reservation is held. Contact an administrator or use your own BYOK model"],
+    shared_pool_billing_unavailable: ["共享模型计费暂不可用，请联系管理员或使用自己的 BYOK 模型", "Shared billing is unavailable. Contact an administrator or use your own BYOK model"],
+    shared_pool_request_too_large: ["输入超出共享模型单次限制，请减少内容或使用自己的 BYOK 模型", "Input exceeds the shared request limit. Reduce it or use your own BYOK model"],
     shared_pool_disabled: ["平台共享模型当前关闭", "The shared model pool is disabled"],
   };
   return labels[reason]?.[zh ? 0 : 1] ?? expertErrorMessage(reason, zh ? "zh-CN" : "en-US")

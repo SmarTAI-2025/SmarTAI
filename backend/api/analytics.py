@@ -525,7 +525,8 @@ def _finite_number(value: Any) -> bool:
 
 
 def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
-    limited = str(exc) == "shared_pool_daily_limit_reached"
+    limited = str(exc) in {"shared_pool_daily_limit_reached", "shared_pool_sol_daily_limit_reached", "shared_pool_weekly_limit_reached"}
+    sol_limited = str(exc) == "shared_pool_sol_daily_limit_reached"
     return HTTPException(
         status.HTTP_429_TOO_MANY_REQUESTS if limited else status.HTTP_503_SERVICE_UNAVAILABLE,
         detail={
@@ -533,7 +534,9 @@ def _provider_error(exc: SharedPoolLimitError) -> HTTPException:
                 "analytics_quota_exceeded"
                 if limited else "analytics_provider_unavailable"
             ),
-            "message": "共享模型日额度已用完，请等待 UTC 00:00 重置、联系管理员调整或使用 BYOK。" if limited else "共享模型暂不可用。"
+            "message": "本周共享额度已用完，请等待每周一新加坡时间 00:00 重置或使用 BYOK。" if str(exc) == "shared_pool_weekly_limit_reached" else ("Sol 今日半额已用完，可选择 Luna、Terra 或自己的模型。"
+                        if sol_limited else "共享模型日额度已用完，请等待 UTC 00:00 重置、联系管理员调整或使用 BYOK。")
+                        if limited else "共享模型暂不可用。"
         },
     )
 

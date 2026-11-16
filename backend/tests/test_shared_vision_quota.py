@@ -29,6 +29,12 @@ from backend.skills.recognition_reader import LLMRecognitionEngine
 from backend.tests.test_admin_business_config import client, save
 from backend.tests.test_postgres_integration import pg_database
 
+@pytest.fixture(autouse=True)
+def legacy_daily_mode(monkeypatch):
+    """Retain coverage of the explicitly selected legacy quota policy."""
+    monkeypatch.setattr(settings, "shared_pool_quota_mode", "daily_estimated")
+
+
 
 class FakeProvider(BaseProvider):
     provider_type = "openai"
@@ -67,6 +73,7 @@ def shared_registry(client, monkeypatch):
     monkeypatch.setattr(settings, "openai_api_key", "synthetic-platform-key")
     monkeypatch.setattr(settings, "openai_api_base", "https://api.openai.com/v1")
     monkeypatch.setattr(settings, "openai_model", "synthetic")
+    monkeypatch.setattr(registry_module, "SHARED_OPENAI_MODELS", ("synthetic",))
     monkeypatch.setattr(registry_module, "build_provider", FakeProvider)
     return registry_module._build_scoped_registry(SimpleNamespace(id="teacher"))
 
@@ -302,12 +309,12 @@ async def test_two_owners_and_byok_are_isolated(client, shared_registry):
     await other.pick_default().ainvoke_vision("read", IMAGES)
     assert usage()["requests"] == usage("other")["requests"] == 1
     assert save(client, {"shared_pool_daily_request_limit": 0}, user="teacher").status_code == 200
-    upsert_provider_config("teacher", ProviderConfig(provider_type="openai", model="owned", api_key="fake-byok"),
+    stored = upsert_provider_config("teacher", ProviderConfig(provider_type="openai", model="owned", api_key="fake-byok"),
                            master_key=settings.provider_encryption_key)
     owned = registry_module._build_scoped_registry(SimpleNamespace(id="teacher"))
-    assert not owned.uses_shared_pool() and not isinstance(owned.pick_default(), _GuardedSharedProvider)
-    await owned.pick_default().ainvoke_vision("read", IMAGES)
-    await owned.pick_default().ainvoke([])
+    assert owned.uses_shared_pool() and not isinstance(owned.get(stored.id), _GuardedSharedProvider)
+    await owned.get(stored.id).ainvoke_vision("read", IMAGES)
+    await owned.get(stored.id).ainvoke([])
     assert usage()["requests"] == 1
 
 

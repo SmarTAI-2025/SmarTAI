@@ -193,3 +193,21 @@ it("explicitly saves and restores admin input without a configuration mutation",
   expect(saveBusinessConfig).not.toHaveBeenCalled();
 
 });
+
+it("weekly configuration displays dollars, persists cents and hides legacy daily controls", async () => {
+  const config: BusinessConfiguration = {...globalConfig, shared_quota_mode:"weekly_usd", fields:{...globalConfig.fields,
+    shared_pool_weekly_limit_cents:{effective:500,override:null,source:"settings",bounds:[0,1000000]},
+    shared_pool_daily_request_limit:{effective:100,override:null,source:"settings",bounds:[0,1000]},
+    shared_pool_daily_estimated_token_limit:{effective:100000,override:null,source:"settings",bounds:[0,1000000]}}};
+  vi.mocked(getBusinessConfig).mockResolvedValue(config);
+  vi.mocked(saveBusinessConfig).mockResolvedValue(updated(config,"shared_pool_weekly_limit_cents",625));
+  mount();
+  const input=await screen.findByLabelText("共享模型每周金额（美元）");
+  expect(input).toHaveValue("5");
+  expect(screen.queryByLabelText("共享模型每日请求次数")).not.toBeInTheDocument();
+  const user=await edit("共享模型每周金额（美元）","6.25");
+  await user.type(screen.getByLabelText("修改原因"),"调整周额度");
+  await user.click(screen.getByRole("button",{name:"保存全局配置"}));
+  await screen.findByText("配置已保存，后续请求使用新设置。");
+  expect(saveBusinessConfig).toHaveBeenCalledWith({expected_version:0,changes:{shared_pool_weekly_limit_cents:625},reason:"调整周额度"},expect.any(String),undefined);
+});

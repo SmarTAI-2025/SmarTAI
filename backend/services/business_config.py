@@ -21,11 +21,13 @@ DEFAULTS: dict[str, str | int] = {
     "unfinished_source_quota_bytes": 536870912,
     "knowledge_storage_quota_bytes": 536870912,
 }
-MODEL_KEYS = frozenset(("shared_pool_daily_request_limit", "shared_pool_daily_estimated_token_limit", "history_query_llm_daily_limit"))
+MODEL_KEYS = frozenset(("shared_pool_daily_request_limit", "shared_pool_daily_estimated_token_limit", "history_query_llm_daily_limit", "shared_pool_weekly_limit_cents"))
 DEFAULTS.update(shared_pool_daily_request_limit=100, shared_pool_daily_estimated_token_limit=100000, history_query_llm_daily_limit=20)
+DEFAULTS["shared_pool_weekly_limit_cents"] = 500
 STORAGE_KEYS = frozenset(("unfinished_source_quota_bytes", "knowledge_storage_quota_bytes"))
 USER_CONFIG_KEYS = STORAGE_KEYS | MODEL_KEYS
 BOUNDS = {
+    "shared_pool_weekly_limit_cents": (0, 1000000),
     "shared_pool_daily_request_limit": (-1, 1000000),
     "shared_pool_daily_estimated_token_limit": (-1, 1000000000),
     "history_query_llm_daily_limit": (-1, 1000000),

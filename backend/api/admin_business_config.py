@@ -38,6 +38,7 @@ def _view(session, owner_id=None):
     keys = USER_CONFIG_KEYS if owner_id is not None else config.values.keys()
     overrides = config.user_overrides if owner_id is not None else config.global_overrides
     result = {
+        "shared_quota_mode": settings.shared_pool_quota_mode,
         "scope": "user" if owner_id is not None else "global", "owner_id": owner_id,
         "version": config.user_version if owner_id is not None else config.global_version,
         "global_version": config.global_version,
@@ -57,6 +58,7 @@ def _view(session, owner_id=None):
             usage["available_bytes"] = max(0, config.values[key] - usage["used_bytes"])
     else:
         result["read_only"] = {
+            "shared_pool_weekly_limit_cents": config.values["shared_pool_weekly_limit_cents"],
             "email_verification_expiry_seconds": settings.email_verification_expiry_seconds,
             "password_recovery_independent_of_registration": config.registration_rules_managed,
             "shared_pool_daily_request_limit": config.values["shared_pool_daily_request_limit"],
@@ -64,6 +66,8 @@ def _view(session, owner_id=None):
             "history_query_llm_daily_limit": config.values["history_query_llm_daily_limit"],
             "model_quota_note": "UTC 00:00 重置；持久化调用准入计数，失败/中断不退回，SDK 内部重试不重复计数；估算输入 token 不代表实际 token 或费用。",
         }
+        if settings.shared_pool_quota_mode == "weekly_usd":
+            result["read_only"]["model_quota_note"] = "三个共享模型共用周金额，每周一新加坡时间 00:00 重置。按 OpenAI 真实用量和官方价格结算；未知用量保留预留。旧日额度配置不在此模式中生效。任务 Ask 仍按每日次数计量。"
     return result
 
 

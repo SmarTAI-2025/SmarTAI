@@ -1543,3 +1543,77 @@ async def test_postgres_cleanup_rechecks_saved_inputs(pg_database, tmp_path, mon
 def test_postgres_shared_admission_profile_races(pg_database):
     from backend.tests.test_shared_admission import test_platform_profile_has_one_winner_for_insert_and_update
     test_platform_profile_has_one_winner_for_insert_and_update()
+
+
+def test_weekly_shared_budget_reservations_and_settlements_are_atomic(pg_database,monkeypatch):
+    from sqlalchemy import select,func
+    from backend.config import settings
+    from backend.db.session import session_scope,configure_database
+    from backend.db.model_quota_models import SharedModelChargeRecord,ModelDailyUsageRecord
+    from backend.services.shared_weekly_budget import reserve,finish
+    from backend.services.model_quota import ModelQuotaError
+    monkeypatch.setattr(settings,"shared_pool_quota_mode","weekly_usd")
+    monkeypatch.setattr(settings,"shared_pool_weekly_limit_cents",500)
+    owner=_seed_user("teacher")
+    def admit(_):
+        try:return reserve(owner,"gpt-6.1-sol",0,max_output_tokens=100000)[0]
+        except ModelQuotaError:return None
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        ids=[id for id in pool.map(admit,range(24)) if id]
+    assert len(ids) == 5
+    usage={"input_tokens":0,"output_tokens":100000,"total_tokens":100000,
+           "input_tokens_details":{"cached_tokens":0,"cache_write_tokens":0},"output_tokens_details":{"reasoning_tokens":40000}}
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        list(pool.map(lambda id:finish(owner,id,usage=usage),ids*3))
+    configure_database().dispose()
+    with pytest.raises(ModelQuotaError,match="weekly_limit_reached"):reserve(owner,"gpt-6-luna",0)
+    with session_scope() as session:
+        assert session.scalar(select(func.sum(SharedModelChargeRecord.cost_nano_usd))) == 5_000_000_000
+        assert session.scalar(select(ModelDailyUsageRecord)) is None
+
+
+def test_weekly_unknown_hold_does_not_block_waiting_for_live_reservations(pg_database, monkeypatch):
+    from backend.config import settings
+    from backend.db.model_quota_models import SharedModelChargeRecord
+    from backend.db.session import session_scope
+    from backend.services.shared_weekly_budget import reserve, finish
+    from backend.services.model_quota import ModelQuotaError
+    monkeypatch.setattr(settings, 'shared_pool_weekly_limit_cents', 500)
+    owner = _seed_user('teacher')
+    unknown, _ = reserve(owner, 'gpt-6-luna', 1000, max_output_tokens=16)
+    finish(owner, unknown)
+    held = [reserve(owner, 'gpt-6.1-sol', 0, max_output_tokens=100000)[0] for _ in range(5)]
+    with pytest.raises(ModelQuotaError, match='shared_pool_budget_pending'):
+        reserve(owner, 'gpt-6-luna', 1000)
+    finish(owner, held[0], usage={'input_tokens': 0, 'output_tokens': 100, 'total_tokens': 100,
+        'input_tokens_details': {'cached_tokens': 0, 'cache_write_tokens': 0}})
+    reserve(owner, 'gpt-6-luna', 1000)
+    with session_scope() as session:
+        row = session.get(SharedModelChargeRecord, unknown)
+        assert row.state == 'unknown' and row.cost_nano_usd is None
+
+
+@pytest.mark.parametrize("request_limit,token_limit", [(10, 1000), (100, 100)])
+def test_shared_sol_subcap_and_total_are_atomic_on_postgres(pg_database, monkeypatch, request_limit, token_limit):
+    from backend.config import settings
+    from backend.db.session import session_scope, configure_database
+    from backend.services.model_quota import admit_model_call, ModelQuotaError, model_usage
+    monkeypatch.setattr(settings, "shared_pool_daily_request_limit", request_limit)
+    monkeypatch.setattr(settings, "shared_pool_daily_estimated_token_limit", token_limit)
+    owner = _seed_user("teacher")
+    def call(sol):
+        try:
+            admit_model_call(owner, "shared", shared_sol=sol, estimated_input_tokens=10)
+            return True
+        except ModelQuotaError:
+            return False
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        assert sum(pool.map(call, [True] * 24)) == 5
+        assert sum(pool.map(call, [True, False] * 20)) == 5
+    configure_database().dispose()
+    with session_scope() as session:
+        usage = model_usage(session, owner)
+    assert usage["shared"]["requests"] == 10
+    assert usage["shared"]["estimated_input_tokens"] == 100
+    assert usage["shared_sol"]["requests"] == 5
+    assert usage["shared_sol"]["estimated_input_tokens"] == 50

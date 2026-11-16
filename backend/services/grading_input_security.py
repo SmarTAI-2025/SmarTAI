@@ -74,7 +74,7 @@ def _shared_provider_row(provider_id: str, *, frontier_demo: bool = False) -> di
     if not (settings.frontier_demo_enabled if frontier_demo else settings.shared_pool_enabled):
         return None
     from backend.llm.registry import shared_provider_configs
-    for config in shared_provider_configs():
+    for config in shared_provider_configs(frontier_demo=frontier_demo):
         provider_type, model = config.provider_type, config.model
         # Provider implementations use this descriptive id for environment
         # configs. Keep matching deliberately narrow; unknown ids fail closed.

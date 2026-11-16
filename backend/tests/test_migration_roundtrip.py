@@ -54,7 +54,7 @@ def test_admin_knowledge_merge_preserves_existing_users(previous_head, tmp_path,
     command.upgrade(cfg, "head")
     with engine.connect() as connection:
         assert connection.execute(text("SELECT password_hash, auth_version FROM users WHERE id='existing'")).one() == ("legacy-hash", 0)
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0033_shared_admission"]
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all() == ["0035_shared_weekly_budget"]
     assert {"admin_audit_logs", "admin_usage_events", "knowledge_ingestions", "business_configuration", "user_storage_configuration"} <= set(inspect(engine).get_table_names())
 
 
@@ -256,7 +256,7 @@ def test_mail_migrations_extend_provider_routing_as_one_head(tmp_path, monkeypat
     script = ScriptDirectory.from_config(cfg)
 
     assert [revision.revision for revision in script.get_revisions("heads")] == [
-        "0033_shared_admission"
+        "0035_shared_weekly_budget"
     ]
 
     command.upgrade(cfg, "0012_provider_routing_pref")
@@ -1381,3 +1381,22 @@ def test_postgresql_source_diagnostics_ddl_is_portable(monkeypatch):
     assert "fk_assignment_student_presentations_source" in sql
     assert "ON DELETE SET NULL" in sql
     assert "ix_assignment_student_presentations_source_id" in sql
+
+
+def test_weekly_ledger_migration_preserves_legacy_daily_and_sol_counts(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine,inspect,text
+    url=f"sqlite:///{tmp_path / 'weekly-legacy.db'}"
+    cfg=_alembic_config(url,monkeypatch)
+    command.upgrade(cfg,"0034_shared_sol_quota")
+    engine=create_engine(url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("INSERT INTO users (id, username, role, password_hash, is_active, created_at, updated_at) VALUES ('teacher', 'teacher', 'teacher', 'synthetic', true, 1, 1)"))
+            connection.execute(text("INSERT INTO model_daily_usage (owner_id, scope, day, requests, estimated_input_tokens, sol_requests, sol_estimated_input_tokens, last_admitted_at) VALUES ('teacher', 'shared', '2026-11-16', 7, 100, 3, 40, 1)"))
+        for target in ("head","0034_shared_sol_quota","head"):
+            (command.downgrade if target == "0034_shared_sol_quota" else command.upgrade)(cfg,target)
+            assert ("shared_model_charges" in inspect(engine).get_table_names()) == (target == "head")
+            with engine.connect() as connection:
+                assert connection.execute(text("SELECT requests, estimated_input_tokens, sol_requests, sol_estimated_input_tokens FROM model_daily_usage")).one() == (7,100,3,40)
+    finally:
+        engine.dispose()

@@ -1210,20 +1210,34 @@ export function classifyRecoverableError(
   if (code === "provider_zero_quota") {
     return { title: tx(locale, "该模型当前无可用配额", "No quota is currently available for this model"),
       description: tx(locale, "服务商明确返回配额为0，本轮自动重试已停止。请检查服务商项目与模型权限，调整后主动重试或更换模型。", "The provider explicitly reported a zero quota limit. Automatic retries have stopped. Check the provider project and model access, then retry after updating them or choose another model."),
-      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok",
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/byok", actionKind: "byok",
       tone: "warning", showUsageLinks: true, technicalDetails };
   }
   if (code === "provider_quota_exceeded") {
     return { title: tx(locale, "模型余额或可用额度已耗尽", "Model credits or quota exhausted"),
       description: tx(locale, "本轮已停止，不会自动重试。请检查服务商余额与额度，恢复后主动重试，或切换模型。", "This run has stopped without automatic retries. Check provider credits and limits, then retry or switch models."),
-      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok",
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/byok", actionKind: "byok",
       tone: "warning", showUsageLinks: true, technicalDetails };
+  }
+  if (code === "shared_pool_weekly_limit_reached" || code === "shared_pool_budget_pending" || code === "shared_pool_usage_unavailable" || code === "shared_pool_billing_unavailable" || code === "shared_pool_request_too_large") {
+    const exhausted = code === "shared_pool_weekly_limit_reached";
+    const pending = code === "shared_pool_budget_pending";
+    return { title: exhausted ? tx(locale, "本周共享额度不足", "Insufficient weekly allowance") : tx(locale, "共享调用暂不可用", "Shared call unavailable"),
+      description: exhausted ? tx(locale, "每周一新加坡时间 00:00 重置。可使用自己的 BYOK 模型继续。", "Resets Monday at 00:00 Singapore time. You can continue with your own BYOK model.") : pending ? tx(locale, "其他调用正在结算，请稍后重试。", "Other calls are settling. Retry shortly.") : tx(locale, "请查看 API 设置中的用量状态，联系管理员或使用自己的 BYOK 模型。", "Check usage in API settings, contact an administrator or use your own BYOK model."),
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/byok", actionKind: "byok",
+      tone: "warning", technicalDetails };
+  }
+  if (code === "shared_pool_sol_daily_limit_reached") {
+    return { title: tx(locale, "Sol 今日半额已用完", "Sol's daily half-allowance is exhausted"),
+      description: tx(locale, "可以选择 Luna、Terra 或自己的模型继续，系统不会自动切换模型。", "Choose Luna, Terra or your own model to continue. Models will not switch automatically."),
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/byok", actionKind: "byok",
+      tone: "warning", dailyQuotaExhausted: true, technicalDetails };
   }
   if (code === "provider_daily_quota_exceeded" || code === "shared_pool_daily_limit_reached") {
     return {
       title: tx(locale, "模型日额度已用完", "The model's daily quota is exhausted"),
       description: tx(locale, "本轮收到日额度限制，自动重试已停止。你可以主动重试以重新请求模型，或更换模型。", "This run received a daily quota limit and automatic retries stopped. Retry to make a new model request, or choose another model."),
-      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/models", actionKind: "byok", tone: "warning",
+      actionLabel: tx(locale, "查看模型配置", "Model settings"), actionHref: "/settings/byok", actionKind: "byok", tone: "warning",
       dailyQuotaExhausted: true, showUsageLinks: true, technicalDetails,
     };
   }
@@ -1487,7 +1501,13 @@ function providerConfigurationErrorCopy(
       "请使用供应商支持的接入环境，或在 BYOK 中选择其他已获授权的模型。剩余页面不会自动重复请求。",
       "Use a provider-supported access environment or select another authorized BYOK model. Remaining pages are not retried automatically.",
     ],
+    shared_pool_weekly_limit_reached: ["本周共享额度不足。", "Insufficient weekly allowance.", "请等待每周一新加坡时间 00:00 重置，或使用自己的 BYOK 模型。", "Wait until Monday 00:00 Singapore time or use your own BYOK model."],
+    shared_pool_budget_pending: ["共享调用结算中。", "Shared calls are settling.", "请稍后重试。", "Retry shortly."],
+    shared_pool_usage_unavailable: ["调用用量待确认。", "Usage is unconfirmed.", "预留金额保留，请联系管理员或使用自己的 BYOK 模型。", "The reservation remains held. Contact an administrator or use your own BYOK model."],
+    shared_pool_billing_unavailable: ["共享计费暂不可用。", "Shared billing is unavailable.", "请联系管理员或使用自己的 BYOK 模型。", "Contact an administrator or use your own BYOK model."],
+    shared_pool_request_too_large: ["输入超出共享模型单次限制。", "Input exceeds the shared request limit.", "请减少内容或使用自己的 BYOK 模型。", "Reduce input or use your own BYOK model."],
     shared_pool_daily_limit_reached: ["共享模型日额度已用完。", "Shared model daily allowance exhausted.", "请等待 UTC 00:00 重置、联系管理员调整，或在模型与 BYOK 页面配置自己的模型。", "Wait for UTC midnight, contact an administrator, or use your own BYOK model."],
+    shared_pool_sol_daily_limit_reached: ["Sol 今日半额已用完。", "Sol's daily half-allowance is exhausted.", "请选择 Luna、Terra 或自己的模型继续，或等待 UTC 00:00 重置。", "Choose Luna, Terra or your own model, or wait for UTC midnight."],
     shared_pool_disabled: ["平台共享模型当前关闭。", "The shared model pool is disabled.", "请在模型与 BYOK 页面配置自己的模型。", "Configure your own BYOK model."],
     provider_message_payload_not_supported: [
       "当前协议无法发送这类输入",
