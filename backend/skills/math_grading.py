@@ -1168,6 +1168,18 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     if not (disputed or other_dispute or requested_review or relevance_review) or not take_review_budget():
         return experts
 
+    from backend.services.grading_memory import prepared_grading
+    async with prepared_grading(provider):
+        return await _review_math_experts(problem, answer, experts, provider, language=language,
+            grading_setup=grading_setup, plan=plan, traces=traces, assessments=assessments,
+            disputed=disputed, other_dispute=other_dispute, relevance_review=relevance_review,
+            evidence_review=evidence_review, requested_review=requested_review,
+            route_ids=route_ids, signatures=signatures)
+
+
+async def _review_math_experts(problem, answer, experts, provider, *, language, grading_setup,
+                               plan, traces, assessments, disputed, other_dispute,
+                               relevance_review, evidence_review, requested_review, route_ids, signatures):
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     # Keep alternative route selection, explicit binary policies and
     # conditional/dependent credit on the complete-ledger review path.
@@ -1553,6 +1565,11 @@ class MathGradingSkill(GradingSkill):
         return evidence
 
     async def grade(self, problem, answer, *, student_id="") -> ExpertResult:
+        from backend.services.grading_memory import prepared_grading
+        async with prepared_grading(self.provider):
+            return await self._grade_prepared(problem, answer, student_id=student_id)
+
+    async def _grade_prepared(self, problem, answer, *, student_id="") -> ExpertResult:
         started = perf_counter()
         from backend.services.math_grading_context import scoring_plan
         plan = scoring_plan(problem, self.grading_setup)

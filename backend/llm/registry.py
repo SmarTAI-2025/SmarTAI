@@ -175,6 +175,11 @@ class _GuardedSharedProvider:
         self.model = provider.model
         self.config = provider.config
 
+    @property
+    def preparation_identity(self):
+        # get()/list_available() create fresh guards for the same runtime model.
+        return getattr(self._provider, "preparation_identity", self._provider)
+
     def _admit(self, messages: List[Any], *, image_count: int = 0) -> None:
         if self._frontier_demo:
             from backend.services.frontier_demo import admit_model_call

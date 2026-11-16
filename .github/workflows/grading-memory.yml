@@ -1,0 +1,75 @@
+name: Grading memory replay
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - backend/llm/concurrency.py
+      - backend/llm/memory_reclaim.py
+      - backend/llm/registry.py
+      - backend/services/grading_memory.py
+      - backend/skills/math_grading.py
+      - backend/recognition/local_cache.py
+      - backend/services/question_sources.py
+      - backend/services/grading_checkpoints.py
+      - backend/db/grading_repository.py
+      - backend/services/task_facade.py
+      - tools/testing/grading_memory_benchmark.py
+      - tools/testing/compare_grading_memory.py
+      - .github/workflows/grading-memory.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grading-memory-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  replay:
+    name: Linux memory and throughput (31 x 7 x 2)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: baseline
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version-file: candidate/.python-version
+          cache: pip
+          cache-dependency-path: |
+            candidate/render-requirements.txt
+            candidate/requirements-dev.txt
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r candidate/requirements-dev.txt
+      - name: Replay identical synthetic workload in separate processes
+        run: |
+          mkdir results
+          for mode in normal pressure; do
+            for trial in 1 2 3; do
+              for revision in baseline candidate; do
+                python candidate/tools/testing/grading_memory_benchmark.py \
+                  --source "$PWD/$revision" --mode "$mode" --output "$PWD/results/$revision-$mode-$trial.json"
+              done
+            done
+          done
+          for revision in baseline candidate; do
+            python candidate/tools/testing/grading_memory_benchmark.py \
+              --source "$PWD/$revision" --mode progress --output "$PWD/results/$revision-progress.json"
+          done
+          python candidate/tools/testing/grading_memory_benchmark.py \
+            --source "$PWD/candidate" --mode allocator --output "$PWD/results/allocator.json"
+          python candidate/tools/testing/compare_grading_memory.py results | tee results/comparison.txt
+      - name: Preserve measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: grading-memory-replay
+          path: results
+          retention-days: 14

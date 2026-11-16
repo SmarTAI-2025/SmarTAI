@@ -21,7 +21,7 @@ import time
 import uuid
 import math
 
-from sqlalchemy import exists, func, select, update
+from sqlalchemy import JSON, case, exists, func, literal, select, update
 
 from backend.db.models import (
     AssignmentRecord,
@@ -1087,14 +1087,20 @@ PROGRAMMING_EXECUTION_COMPLETED = "programming_execution_completed"
 
 def list_events(run_id: str, *, actor_id: str | None = None,
                 after_sequence: int = 0, limit: int | None = None,
-                messages: tuple[str, ...] | None = None) -> list[dict]:
+                messages: tuple[str, ...] | None = None,
+                omit_payloads: tuple[str, ...] = ()) -> list[dict]:
     with session_scope() as session:
         if _active_assignment_for_run(
             session, run_id, actor_id=actor_id
         ) is None:
             raise NotFound("grading_run")
+        payload = GradingRunEventRecord.payload
+        if omit_payloads:
+            payload = case((GradingRunEventRecord.message.in_(omit_payloads), literal({}, type_=JSON)),
+                           else_=payload)
         query = (
-            select(GradingRunEventRecord)
+            select(GradingRunEventRecord.sequence, GradingRunEventRecord.level,
+                   GradingRunEventRecord.message, payload.label("payload"), GradingRunEventRecord.created_at)
             .where(GradingRunEventRecord.grading_run_id == run_id,
                    GradingRunEventRecord.sequence > after_sequence)
             .order_by(GradingRunEventRecord.sequence)
@@ -1110,7 +1116,7 @@ def list_events(run_id: str, *, actor_id: str | None = None,
             )))
         if limit is not None:
             query = query.limit(limit)
-        rows = session.scalars(query).all()
+        rows = session.execute(query).all()
         return [
             {"sequence": r.sequence, "level": r.level, "message": r.message,
              "payload": dict(r.payload or {}), "created_at": r.created_at}

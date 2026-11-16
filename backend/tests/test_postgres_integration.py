@@ -70,6 +70,18 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+def test_postgres_progress_omits_trace_json_and_preserves_checkpoints(pg_database, monkeypatch):
+    from backend.services import grading_runs
+    from backend.tests.test_task_grading_retry import Registry
+    from backend.tests.test_grading_source_readiness import _seed_legacy_structured_case
+    from backend.tests.test_grading_checkpoints import test_progress_reads_one_snapshot_without_materializing_final_traces
+    seeded = _seed_legacy_structured_case(question_count=2)
+    monkeypatch.setattr(grading_runs, "_registry_for", lambda _owner: Registry())
+    monkeypatch.setattr(grading_runs.settings, "e2e_fake_provider", False)
+    test_progress_reads_one_snapshot_without_materializing_final_traces(
+        (seeded["assignment_id"], seeded["owner_id"]), monkeypatch)
+
+
 @pytest.mark.asyncio
 async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
     from backend.tests.test_adaptive_admission_lifecycle import (

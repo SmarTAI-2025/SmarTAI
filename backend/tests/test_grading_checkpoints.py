@@ -36,6 +36,43 @@ def retry(case, key):
         retry_scope="failed_only")["job_id"]
 
 
+def test_progress_reads_one_snapshot_without_materializing_final_traces(case, monkeypatch):
+    from backend.domain.errors import NotFound
+    run_id = start(case, "progress-memory")["job_id"]
+    checkpoints, _, revisions, setup = prepare(case, run_id)
+    checkpoints.save_expert(revisions[0][1], "q1", setup.setup["selected_provider_ids"][0], 0,
+        ExpertResult(provider="model", score=8, max_score=10, confidence=.9, comment="Saved"))
+    trace = {"private_evidence": "synthetic" * 10000}
+    grades.record_event(run_id, level="info", message="grading_math_final_trace", payload=trace)
+    original = grades.list_events
+    full = original(run_id, actor_id=case[1])
+    projected = original(run_id, actor_id=case[1], omit_payloads=("grading_math_final_trace",))
+    assert full[-1]["payload"] == trace and projected[-1]["payload"] == {}
+    assert projected[:-1] == full[:-1]
+    assert projected[-1]["sequence"] == full[-1]["sequence"]
+    assert original(run_id, after_sequence=full[-2]["sequence"], limit=1,
+        omit_payloads=("grading_math_final_trace",)) == [projected[-1]]
+    with pytest.raises(NotFound):
+        original(run_id, actor_id="other-owner", omit_payloads=("grading_math_final_trace",))
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(grades, "list_events", counted)
+    progress = task_facade._grading_progress(run_id, case[1])
+    assert progress["saved_units"] == progress["fully_saved_units"] == 1
+    assert progress["activity_cursor"] == full[-1]["sequence"]
+    assert len(calls) == 1 and calls[0]["actor_id"] == case[1]
+    # The expanded activity feed must use the same SQL payload omission, without
+    # skipping the trace's sequence or changing the next-page cursor.
+    calls.clear()
+    history = task_facade.grading_activity_history(task_id=case[0], owner_id=case[1],
+        run_id=run_id, after=full[-2]["sequence"], limit=1)
+    assert history == {"run_id": run_id, "events": [], "cursor": full[-1]["sequence"], "has_more": False}
+    assert calls[0].get("omit_payloads") == (
+        "grading_math_final_trace", "grading_expert_checkpoint", "grading_math_rubric_plan")
+
+
 @pytest.mark.parametrize("multi_sample", [False, True])
 def test_progress_counts_complete_initial_sets_not_independent_model_totals(case, multi_sample):
     from backend.db.provider_repository import upsert_provider_config
