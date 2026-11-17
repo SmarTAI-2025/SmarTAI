@@ -80,15 +80,38 @@ def programming_review_reason(reasons, experts) -> str | None:
     return next((reason for reason in PROGRAMMING_REVIEW_REASONS if reason in restored), None)
 
 
-def teacher_resolved_programming_score(ai_score, teacher_score, maximum, confirmed) -> bool:
+def teacher_resolved_score(ai_score, teacher_score, maximum, confirmed, steps=()) -> bool:
+    """Compare with the same AI precision used to persist and display this vote."""
     value = number(teacher_score)
     if value is None or not 0 <= value <= maximum:
         return False
-    return confirmed is True or value != round_ai_score(number(ai_score), maximum)
+    return confirmed is True or value != round_ai_score(number(ai_score), maximum, steps)
+
+
+def teacher_resolved_review(reason, ai_score, teacher_score, maximum, confirmed, steps=(), *, saved=False) -> bool:
+    """A saved math review handles the item without pretending its score changed."""
+    if reason == "math_method_review_incomplete":
+        value = number(teacher_score)
+        return value is not None and 0 <= value <= maximum and (confirmed is True or saved)
+    return teacher_resolved_score(ai_score, teacher_score, maximum, confirmed, steps)
 
 
 def result_programming_review_reason(result) -> str | None:
     return programming_review_reason(
+        [*(getattr(result, "initial_review_reasons", None) or ()), *(getattr(result, "review_reasons", None) or ())],
+        getattr(result, "ai_expert_results", None),
+    )
+
+
+def score_review_reason(reasons, experts) -> str | None:
+    """Reuse teacher confirmation for a changed method with unfinished review."""
+    if "math_method_review_incomplete" in (reasons or ()):
+        return "math_method_review_incomplete"
+    return programming_review_reason(reasons, experts)
+
+
+def result_score_review_reason(result) -> str | None:
+    return score_review_reason(
         [*(getattr(result, "initial_review_reasons", None) or ()), *(getattr(result, "review_reasons", None) or ())],
         getattr(result, "ai_expert_results", None),
     )
@@ -133,6 +156,7 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     confirmed = correction.get("review_status") == "confirmed"
     blocked = not valid(score(correction))
     reviewed = number(correction.get("teacher_score")) is not None and confirmed and not blocked
+    saved = valid(correction.get("teacher_score")) and correction.get("review_status") in {"edited", "confirmed"}
     conf = number(correction.get("confidence"))
     expert_scores = [
         number(expert.get("score"))
@@ -150,11 +174,12 @@ def review_state(correction: dict) -> tuple[bool, bool]:
     reasons = {part.strip() for reason in [*(correction.get("review_reasons") or []),
                                           *(correction.get("initial_review_reasons") or [])]
                for part in reason.split(",")}
-    programming = programming_review_reason(reasons, experts)
-    program_pending = programming and not teacher_resolved_programming_score(
-        correction.get("provisional_score"), correction.get("teacher_score"), maximum or 0, confirmed,
+    score_reason = score_review_reason(reasons, experts)
+    score_pending = score_reason and not teacher_resolved_review(
+        score_reason, correction.get("provisional_score"), correction.get("teacher_score"), maximum or 0, confirmed,
+        correction.get("steps"), saved=saved,
     )
-    pending = blocked or bool(program_pending) or (not reviewed and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
+    pending = blocked or bool(score_pending) or (not saved and (low_confidence or unknown_confidence or (not expert_scores and confidence_needs_attention(conf))
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",

@@ -54,7 +54,7 @@ for (const mode of ["new", "legacy"] as const) for (const mobile of [false, true
     await expect(mainSteps.locator("li").nth(2)).toHaveText("3未完成生成整个群的证明，本项不得分。0 分");
     await expect(mainSteps).not.toContainText("证明所给两个元素生成整个群。");
     await expect(mainSteps.locator(".katex-error")).toHaveCount(0);
-    await result.getByText("查看各专家原始结果", { exact: true }).click();
+    await result.getByText("查看各专家批改结果", { exact: true }).click();
     await result.getByRole("tab", { name: "Synthetic Model B", exact: true }).click();
     const panel = result.getByRole("tabpanel");
     await expect(panel).toContainText("6/10, [5,1,0]");

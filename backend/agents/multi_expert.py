@@ -219,6 +219,8 @@ def _apply_math_review_advisory(correction: Correction, *, problem=None) -> Corr
     for expert in correction.expert_results:
         trace = read_math_trace(expert) if _is_successful_expert(expert) else None
         assessment = trace.get("assessment") if trace else None
+        if trace and trace.get("method_review_pending"):
+            reasons.append("math_method_review_incomplete")
         if isinstance(assessment, dict):
             decisions = assessment.get("part_decisions") or []
             if problem is not None and correction.score == 0:
@@ -226,7 +228,7 @@ def _apply_math_review_advisory(correction: Correction, *, problem=None) -> Corr
                     if d.get("part_id") and d.get("method") in {"reference", "minor_variant"} and d.get("relevance") == "partial"
                     and len(d.get("steps") or []) > 1
                     and all(s.get("outcome") == "missed" for s in d["steps"])})
-            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete"} for d in decisions):
+            if any(d.get("method") == "alternative" and d.get("relevance") in {"partial", "complete", "incorrect"} for d in decisions):
                 reasons.append("math_alternative_method")
             if any(d.get("relevance") == "uncertain" for d in decisions):
                 reasons.append("math_verification_conflict")
@@ -453,6 +455,8 @@ async def _run_multi_expert(
             successes = await review_math_experts(
                 problem, answer, successes, review_provider,
                 language=language, grading_setup=grading_setup,
+                expert_providers={provider_ids.get(id(p), p.provider_id): p for p in providers},
+                reporter=reporter, student_id=student_id,
             )
         finally:
             if reporter:

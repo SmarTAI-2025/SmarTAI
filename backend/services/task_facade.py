@@ -63,7 +63,7 @@ from backend.db.models import (
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
-from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
+from backend.domain.grading_review import result_score_review_reason, teacher_resolved_review
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
@@ -975,6 +975,9 @@ def _math_rubric_advisory(question, plan, language: str) -> list[dict]:
         draft = saved_draft(problem_from_question(question))
         plan = draft.plan if draft else None
     if plan is None or not any(text.strip() for text in plan.advisories):
+        return []
+    presentation = (question.source or {}).get("presentation") or {}
+    if presentation.get("reviewed_rubric_advisory_fingerprint") == plan.input_fingerprint:
         return []
     from backend.services.math_rubric_plan import _FALLBACK_ADVISORY
 
@@ -5115,7 +5118,7 @@ def grading_readiness(
                 issues.append("submission_identities_unresolved")
 
     reviewed = workflow_repository.answer_review_statuses(recognition_review_ids) if recognition_review_ids else {}
-    if any(reviewed.get(answer_id) != "confirmed" for answer_id in recognition_review_ids):
+    if any(reviewed.get(answer_id) not in {"edited", "confirmed"} for answer_id in recognition_review_ids):
         warnings.append("submission_recognition_needs_review")
     if any(row.get("unknown_question_ids") for row in source_rows):
         warnings.append("submission_question_ids_unmatched")
@@ -5544,7 +5547,7 @@ def _grading_request_response(task_id, run):
 
 
 def task_results(*, task_id: str, owner_id: str) -> dict:
-    from backend.services.grading_feedback import concise_result_feedback
+    from backend.services.math_final_feedback import final_result_feedback
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
@@ -5559,8 +5562,9 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
             "task_id": task_id,
             "error": _grading_failure_code(run),
         }
-    results = concise_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True))
     frozen_setup = workflow_repository.get_run_setup(run.id)
+    results = final_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True),
+        language=frozen_setup.setup.get("feedback_language", "en") if frozen_setup else "en")
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)
     for result in results:
@@ -5816,6 +5820,10 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         fixed_fields = {field for key, field in {"stem": "stem", "reference_answer": "answer", "criterion": "rubric", "test_cases": "programming_tests", "solution_code": "programming_tests"}.items()
                         if patch.get(key) and (patch[key].strip() if isinstance(patch[key], str) else patch[key])
                         != (original_problem[key].strip() if isinstance(original_problem.get(key), str) else original_problem.get(key))}
+        if fixed_fields and patch.get("review_status") is None:
+            # A previous whole-question confirmation cannot hide another field's
+            # still-open advice after this field is edited.
+            presentation["review_status"] = "edited"
         if fixed_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
@@ -5965,6 +5973,12 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 rubric_draft=presentation["rubric_draft"],
             ).model_dump()
             question.source = {**source, "presentation": presentation}
+        if patch.get("review_status") == "confirmed" or "rubric" in fixed_fields or patch.get("alternative_rule_edits"):
+            # Acknowledge only this saved rubric; new inputs get a new fingerprint.
+            fingerprint = ((presentation.get("rubric_draft") or {}).get("plan") or {}).get("input_fingerprint")
+            if fingerprint:
+                presentation["reviewed_rubric_advisory_fingerprint"] = fingerprint
+                question.source = {**source, "presentation": presentation}
         question.version += 1
         question.updated_at = now
         if substantive:
@@ -6150,6 +6164,8 @@ def update_student_answer(
             if flags != list(target.flag or []) or patch.get("flag") is not None:
                 patch = {**patch, "flag": flags}
         flags_changed = patch.get("flag") is not None and list(patch["flag"]) != list(target.flag or [])
+        if (content_changed or assignment_changed or flags_changed) and patch.get("review_status") is None:
+            patch = {**patch, "review_status": "edited"}
         if patch.get("review_status") == "confirmed" and not matching_confirmation and any(
             flag in failed_flags
             for flag in (patch.get("flag", target.flag) or [])
@@ -6457,7 +6473,7 @@ def update_correction_review(
 
 
 def _correction_review_blocks_finalization(result) -> bool:
-    """A provisional programming score also needs a recorded teacher decision."""
+    """Provisional scores with incomplete evidence need a recorded teacher decision."""
     def valid_score(value):
         return (value is not None and math.isfinite(value)
                 and 0 <= value <= result.ai_max_score)
@@ -6465,8 +6481,9 @@ def _correction_review_blocks_finalization(result) -> bool:
     if result.result_status in education.NON_SCOREABLE_RESULT_STATUSES or not valid_score(result.effective_score):
         return True
     review = result.teacher_review or {}
-    return bool(result_programming_review_reason(result)) and not teacher_resolved_programming_score(
-        result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"),
+    reason = result_score_review_reason(result)
+    return bool(reason) and not teacher_resolved_review(
+        reason, result.ai_score, review.get("new_score"), result.ai_max_score, review.get("confirmed"), result.ai_steps, saved=bool(review),
     )
 
 
@@ -6490,8 +6507,8 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
     if run is not None:
         for result in grading_repository.list_results_for_run(run.id, include_missing=True):
             blocked = _correction_review_blocks_finalization(result)
-            programming_reason = result_programming_review_reason(result)
-            if blocked or result.ai_score is None or programming_reason:
+            score_reason = result_score_review_reason(result)
+            if blocked or result.ai_score is None or score_reason:
                 required_review_count += 1
                 review = result.teacher_review or {}
                 if (
@@ -6505,7 +6522,7 @@ def finalization(*, task_id: str, owner_id: str) -> dict:
                 remaining.append({
                     "student_id": presentation.display_student_id if presentation else result.student_id,
                     "q_id": result.q_id,
-                    "reasons": list(result.review_reasons or ([programming_reason] if programming_reason else [])),
+                    "reasons": list(result.review_reasons or ([score_reason] if score_reason else [])),
                     "confirmed": False,
                 })
     released = bool(run and run.released_at is not None)

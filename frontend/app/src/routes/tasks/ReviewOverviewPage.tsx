@@ -18,7 +18,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { correctionReviewReasonIds, pendingProgrammingReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { correctionReviewReasonIds, pendingScoreReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectOverviewReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -115,7 +115,7 @@ export function ReviewOverviewPage() {
   const confirmableReviews = model.students.flatMap((student) => student.corrections.flatMap((correction) => {
     const score = effectiveCorrectionScore(correction);
     const teacherConfirmed = Number.isFinite(correction.teacher_score) && correction.review_status === "confirmed";
-    return !teacherConfirmed && visibleReviewItems.some(item => item.student.id === student.id && item.question.id === correction.q_id && item.severity === "advisory") && score !== null && score >= 0 && score <= correction.max_score
+    return !teacherConfirmed && visibleReviewItems.some(item => item.student.id === student.id && item.question.id === correction.q_id) && score !== null && score >= 0 && score <= correction.max_score
       ? [{ studentId: student.id, qId: correction.q_id, score, comment: correction.teacher_comment ?? "" }]
       : [];
   }));
@@ -467,8 +467,8 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 }
 
 function queueReason(locale: Locale, item: ReviewItem): string {
-  const programming = pendingProgrammingReview(item.correction);
-  if (programming) return reviewReasonLabel(programming, locale);
+  const pendingScore = pendingScoreReview(item.correction);
+  if (pendingScore) return reviewReasonLabel(pendingScore, locale);
   if (item.severity === "advisory" && correctionReviewReasonIds(item.correction).includes("programming_extra_boundary")) return reviewReasonLabel("programming_extra_boundary", locale);
   if (correctionReviewReasonIds(item.correction).includes("grading_paused") && effectiveCorrectionScore(item.correction) === null)
     return locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually";

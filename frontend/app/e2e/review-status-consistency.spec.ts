@@ -23,7 +23,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
     const sharedRule = zh ? "本轮统一按首次错误扣分，后续正确推导保留过程分。\n方法正确得 3 分；完成关键推导时至少得 2 分。" : "Deduct for the first error; credit correct subsequent reasoning.\nAward 3 points for the correct method; at least 2 points when the key derivation is complete.";
     const problem_data = Object.fromEntries([1, 2, 3, 4].map(n => [`q${n}`, {
       q_id: `q${n}`, number: String(n), type: "calculation", stem: `Synthetic question ${n}.`, criterion: "Reasoning rubric.", max_score: 10,
-      review_status: "confirmed", max_score_review_status: "confirmed",
+      review_status: mode === "math-advisory" && n === 1 ? "needs_review" : "confirmed", max_score_review_status: "confirmed",
       preparation_issues: mode === "math-advisory" && n === 1 ? [{
         issue_id: "shared-plan", field: "rubric", code: "math_rubric_advisory", severity: "warning", status: "open",
         details: { message: sharedRule },
@@ -54,6 +54,14 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (request.method() !== "GET") {
         writes.push(path);
+        if (path.endsWith("/problems/q1")) {
+          const input = request.postDataJSON();
+          expect(input.review_status).toBe("confirmed");
+          expect(input.expected_workflow_revision).toBe(task.workflow_revision);
+          Object.assign(problem_data.q1, { review_status: "confirmed", preparation_issues: [] });
+          task.workflow_revision += 1;
+          return json({ status: "ok", q_id: "q1", problem: problem_data.q1, workflow_revision: task.workflow_revision });
+        }
         if (path.endsWith("/artifacts/generate")) {
           expect(reportGenerationRequested).toBe(true);
           expect(request.postDataJSON().expected_workflow_revision).toBe(task.workflow_revision);
@@ -106,6 +114,11 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath("question-scoring-guidance.png"), fullPage: true });
       expect(writes).toEqual([]);
+      await question.getByRole("button", { name: zh ? /第 1 题.*待确认/ : /Question 1.*Confirm review/ }).click();
+      await expect(guidance).toHaveCount(0);
+      await page.goto(`${root}/questions`);
+      await expect(questionQueue.getByRole("link")).toHaveCount(0);
+      expect(writes).toEqual([`/tasks/${taskId}/problems/q1`]);
     }
     // Partial experts and disagreement are suggestions; valid results remain accessible.
     await page.goto(`${root}/review`);
@@ -117,7 +130,7 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       await expect(queue).toContainText(zh ? "评分依据仍有疑点，建议核对" : "Scoring evidence needs checking");
       await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
       await expect(page).toHaveURL(`${root}/results`);
-      expect(writes).toEqual([]);
+      expect(writes).toEqual([`/tasks/${taskId}/problems/q1`]);
     }
     if (mode === "advisory") {
       await expect(queue).toContainText(zh ? "建议处理" : "Suggested review");
@@ -152,7 +165,8 @@ for (const mode of ["individual", "overview-all", "detail-all", "advisory", "mat
       await page.getByRole("button", { name: zh ? "全部确认" : "Confirm all", exact: true }).click();
       await expect.poll(() => writes.length).toBe(mode === "overview-all" ? 3 : 4);
     }
-    const reviewWrites = mode === "individual" || mode.endsWith("advisory") ? 3 : mode === "overview-all" ? 3 : 4;
+    const reviewWrites = (mode === "individual" || mode.endsWith("advisory") ? 3 : mode === "overview-all" ? 3 : 4)
+      + (mode === "math-advisory" ? 1 : 0);
     await page.getByRole("button", { name: zh ? "查看结果分析" : "View Results & Analysis", exact: true }).click();
     await expect(page).toHaveURL(`${root}/results`);
     expect(writes).toHaveLength(reviewWrites);

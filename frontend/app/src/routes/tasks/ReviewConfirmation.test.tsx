@@ -76,6 +76,29 @@ beforeEach(async () => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });
 describe("one-click grading review", () => {
+  it.each(["zh-CN", "en-US"])("keeps review instructions outside final expert feedback (%s)", async locale => {
+    state.locale = locale;
+    const zh = locale === "zh-CN";
+    const note = zh ? "请核对各专家的评分和依据。" : "Check each expert’s score and reasoning.";
+    const alternative = zh ? "解题思路与标答不同，按另解标准评分。" : "Different approach from the reference; scored using the alternative rubric.";
+    const experts = ["a", "b"].map((provider, index) => ({ provider, provider_id: provider, score: 10, max_score: 10,
+      confidence: .95, comment: index ? alternative : "Final reference scoring.",
+      steps: [{ step_no: 1, desc: `Final scored step ${provider}`, score: 10, is_correct: true }] }));
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: 10, provisional_score: 10,
+      confidence: .95, review_status: "pending", review_reasons: ["math_method_review_incomplete"], expert_results: experts })] }];
+    show(true);
+    const card = document.querySelector('[data-question-id="Q1"]')!;
+    const result = within(card as HTMLElement).getByRole("region", { name: zh ? "SmarTAI 批改结果" : "SmarTAI Grading Result" });
+    expect(within(card as HTMLElement).getByText(note)).toBeVisible();
+    expect(result).not.toHaveTextContent(note);
+    expect(result).not.toHaveTextContent(/重判|改判|联合复核|reassess|joint review/i);
+    expect(result).not.toHaveTextContent(zh ? "待复核" : "pending review");
+    await userEvent.click(within(result).getByText(zh ? "查看各专家批改结果" : "View Expert Grading Details"));
+    await userEvent.click(within(result).getByRole("tab", { name: /^b$/ }));
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent(alternative);
+    expect(within(result).getByRole("tabpanel")).toHaveTextContent("Final scored step b");
+    expect(within(result).getByRole("tabpanel")).not.toHaveTextContent("Final scored step a");
+  });
   it.each(["zh-CN", "en-US"])("keeps partial completion, low confidence and every math concern visible (%s)", locale => {
     state.locale = locale;
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
@@ -167,7 +190,7 @@ describe("one-click grading review", () => {
       expect(card.getByRole("textbox", { name: `${id} ${locale === "zh-CN" ? "最终得分" : "final score"}` })).toHaveValue("8.5");
       expect(result).toHaveTextContent("Expert rationale 0");
       expect(result).not.toHaveTextContent(id === "Q1" ? "Spread-only rationale" : "Flagged rationale");
-      await userEvent.click(card.getByText(locale === "zh-CN" ? "查看各专家原始结果" : "View Original Model Results"));
+      await userEvent.click(card.getByText(locale === "zh-CN" ? "查看各专家批改结果" : "View Expert Grading Details"));
       expect(within(card.getByRole("tabpanel")).getByText("Expert rationale 0")).toBeVisible();
       expect(card.queryByText("Expert reasoning 1")).not.toBeInTheDocument();
       await userEvent.click(card.getByRole("tab", { name: "expert-1" }));
@@ -228,7 +251,7 @@ describe("one-click grading review", () => {
     expect(scores.children[1]).toHaveTextContent("model-13/10[0,0,1,2]");
     expect(within(result).queryByText("Original first comment")).not.toBeVisible();
     expect(result).toHaveTextContent("7 / 10");
-    await userEvent.click(within(result).getByText("View Original Model Results"));
+    await userEvent.click(within(result).getByText("View Expert Grading Details"));
     const tabs = within(result).getAllByRole("tab");
     expect(tabs).toHaveLength(4);
     await userEvent.click(tabs[0]);
@@ -258,7 +281,7 @@ describe("one-click grading review", () => {
     expect(within(result).getByText("Valid zero grade")).toBeVisible();
     expect(result.querySelectorAll("dl")[1].children[0]).toHaveTextContent("failed--/10");
     expect(result.querySelectorAll("dl")[1].children[1]).toHaveTextContent("good0/10");
-    await userEvent.click(within(result).getByText("View Original Model Results"));
+    await userEvent.click(within(result).getByText("View Expert Grading Details"));
     expect(within(result).getByRole("tabpanel")).toHaveTextContent("Network error or timeout · No valid score; excluded from synthesis");
     expect(within(within(result).getByRole("tabpanel")).getByText("Original failure")).toBeVisible();
   });
@@ -278,7 +301,7 @@ describe("one-click grading review", () => {
       provider, score: 7, max_score: 10, confidence: .9, comment: provider, steps: [], knowledge_citations: [{ citation_id: `${provider}-reference` }],
     })) })] }];
     show(true);
-    await userEvent.click(screen.getByText("View Original Model Results"));
+    await userEvent.click(screen.getByText("View Expert Grading Details"));
     expect(within(screen.getByRole("tabpanel")).getByText("first-reference")).toBeVisible();
     await userEvent.click(screen.getByRole("tab", { name: "second" }));
     expect(screen.queryByText("first-reference")).not.toBeInTheDocument();
@@ -298,14 +321,14 @@ describe("one-click grading review", () => {
     const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
     expect(result).toHaveTextContent("No valid score");
     expect(within(result).getByText("AI note")).toBeVisible();
-    await userEvent.click(within(result).getByText("View Original Model Results"));
+    await userEvent.click(within(result).getByText("View Expert Grading Details"));
     expect(within(result).getByRole("tabpanel")).toHaveTextContent(feedback);
     expect(within(result).getByRole("tabpanel")).not.toHaveTextContent("0/10");
   });
 
   it.each([
-    ["zh-CN", "未评分。测试服务未能完成运行，请稍后重试失败项。", "SmarTAI 批改结果", "查看各专家原始结果", "无有效分数"],
-    ["en-US", "Ungraded. The test service could not finish running the tests. Retry the failed items.", "SmarTAI Grading Result", "View Original Model Results", "No valid score"],
+    ["zh-CN", "未评分。测试服务未能完成运行，请稍后重试失败项。", "SmarTAI 批改结果", "查看各专家批改结果", "无有效分数"],
+    ["en-US", "Ungraded. The test service could not finish running the tests. Retry the failed items.", "SmarTAI Grading Result", "View Expert Grading Details", "No valid score"],
   ])("shows the programming failure without blaming the model or showing a zero (%s)", async (locale, message, heading, expand, noScore) => {
     state.locale = locale;
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null,
@@ -494,11 +517,25 @@ describe("one-click grading review", () => {
     ] });
     expect(state.generate).not.toHaveBeenCalled();
   });
-  it("keeps teacher overrides and excludes an already confirmed teacher review", async () => {
+  it("keeps saved teacher overrides without requiring confirmation to clear yellow advice", () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { teacher_score: 9, review_status: "edited", teacher_comment: "Override" }), correction("Q2", { teacher_score: 7 })] }];
     show();
+    expect(screen.getByRole("region", { name: "Review queue" })).toHaveTextContent("No pending items.");
+    expect(state.bulk).not.toHaveBeenCalled();
+  });
+  it("bulk confirmation handles valid score decisions and yellow advice while excluding missing scores", async () => {
+    state.result.results = [{ student_id: "S1", corrections: [
+      correction("Q1", { score: 9, provisional_score: 9, review_status: "pending", teacher_comment: "Keep this", initial_review_reasons: ["math_method_review_incomplete"] }),
+      correction("Q2", { review_status: "pending" }),
+      correction("Q3", { score: null, provisional_score: null, review_status: "pending" }),
+    ] }];
+    show();
+    await userEvent.click(screen.getByRole("tab", { name: /Suggested review/ }));
     await userEvent.click(screen.getByRole("button", { name: "Confirm all" }));
-    expect(state.bulk.mock.calls[0][0].entries).toEqual([{ studentId: "S1", qId: "Q1", score: 9, comment: "Override" }]);
+    expect(state.bulk.mock.calls[0][0].entries).toEqual([
+      { studentId: "S1", qId: "Q1", score: 9, comment: "Keep this" },
+      { studentId: "S1", qId: "Q2", score: 7, comment: "" },
+    ]);
   });
   it("takes a blocked result directly to its missing score even with a no-match filter", async () => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { score: null, provisional_score: null, result_status: "failed", synthesis_method: "all_failed", requires_human_review: true, review_reasons: ["llm_failed"] })] }];

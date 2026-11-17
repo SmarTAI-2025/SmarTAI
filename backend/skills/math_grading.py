@@ -754,9 +754,11 @@ def _evidence_pending(assessment, evidence):
 
 def _with_pending_advice(expert, language):
     """Project a real unresolved contradiction through existing evidence text."""
+    from backend.skills.math_method_review import with_method_feedback
     trace = read_math_trace(expert)
     if not trace:
         return expert
+    expert = with_method_feedback(expert, language, trace=trace)
     proof_concerns = trace.get("proof_audit", {}).get("review_concerns", [])
     if not trace.get("review_pending") and not proof_concerns:
         return expert
@@ -1001,7 +1003,7 @@ def _review_error_code(exc):
         "duplicate_expert_revision", "review_source_or_expert_not_found", "review_changed_claim_identity",
         "review_requires_complete_assessment", "review_expected_unique_disputed_awards",
         "review_changed_award_requires_evidence",
-        "review_changed_undisputed_award",
+        "review_changed_undisputed_award", "review_changed_adjudicated_method",
         "invalid_claim_source_id", "claim_excerpt_conflicts_with_source_id", "claim_not_in_student_answer_or_rubric",
         "award_claim_not_mapped_to_item", "invalid_award", "omission_is_not_evidence_of_credit",
         "omission_requires_original_obligation", "review_must_address_each_scoped_evidence_result",
@@ -1140,7 +1142,8 @@ def _point_review_evidence(assessment, trace, disputed):
     return result
 
 
-async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None):
+async def review_math_experts(problem, answer, experts, provider, *, language="en", grading_setup=None,
+                              expert_providers=None, reporter=None, student_id=""):
     """Resolve concrete disagreements once, retaining weights and provenance."""
     from backend.services.math_grading_context import scoring_plan
     traces = [read_math_trace(expert) for expert in experts]
@@ -1168,18 +1171,40 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
     if not (disputed or other_dispute or requested_review or relevance_review) or not take_review_budget():
         return experts
 
+    from backend.skills.math_method_review import align_methods, with_method_feedback
+    original_experts = experts
+    experts, selected_methods = await align_methods(
+        problem, answer, experts, assessments, traces, plan, provider, expert_providers,
+        language=language, grading_setup=grading_setup, reporter=reporter, student_id=student_id)
+    reassessed = any(new is not old for new, old in zip(experts, original_experts))
+    if reassessed:
+        traces = [read_math_trace(expert) for expert in experts]
+        assessments = [MathAssessment.model_validate(trace["assessment"]) for trace in traces]
+        # Only part decisions changed: claims, whole-question routes/awards and
+        # pending evidence are intact. Always finish the admitted joint review.
+
     from backend.services.grading_memory import prepared_grading
     async with prepared_grading(provider):
-        return await _review_math_experts(problem, answer, experts, provider, language=language,
+        reviewed = await _review_math_experts(problem, answer, experts, provider, language=language,
             grading_setup=grading_setup, plan=plan, traces=traces, assessments=assessments,
             disputed=disputed, other_dispute=other_dispute, relevance_review=relevance_review,
             evidence_review=evidence_review, requested_review=requested_review,
-            route_ids=route_ids, signatures=signatures)
+            route_ids=route_ids, signatures=signatures, selected_methods=selected_methods)
+    if reassessed:
+        for index, (original, expert) in enumerate(zip(original_experts, reviewed)):
+            trace = read_math_trace(expert)
+            if (expert.score != original.score and trace.get("method_review") and
+                    trace.get("review_diagnostic", {}).get("status") in {"failed", "invalid_revision"}):
+                trace["method_review_pending"] = True
+                reviewed[index] = expert.model_copy(update={"raw_output": _json(trace)})
+        return [with_method_feedback(expert, language) for expert in reviewed]
+    return reviewed
 
 
 async def _review_math_experts(problem, answer, experts, provider, *, language, grading_setup,
                                plan, traces, assessments, disputed, other_dispute,
-                               relevance_review, evidence_review, requested_review, route_ids, signatures):
+                               relevance_review, evidence_review, requested_review, route_ids, signatures,
+                               selected_methods):
     catalog = source_catalog(answer.content or "", problem.stem, plan.original_criterion)
     # Keep alternative route selection, explicit binary policies and
     # conditional/dependent credit on the complete-ledger review path.
@@ -1196,6 +1221,7 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
     part_outcomes = [dict(_part_signature(a)) if a is not None else {} for a in assessments]
     disputed_parts = {part.id for part in plan.part_rubric.parts
                       if len({outcomes.get(part.id) for outcomes in part_outcomes}) > 1} if plan.part_rubric else set()
+    disputed_parts.update(selected_methods)
     # A proof expert's own doubt concerns the judgment, not the identity of its
     # immutable source claims. Only actual pending evidence needs the full format.
     proof_judgment_review = (problem.type == "推理题" and requested_review and not evidence_review
@@ -1248,6 +1274,9 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                         new_awards = _award_signatures(candidate)
                         if any(new_awards.get(key) != value for key, value in signatures[index].items() if key not in disputed):
                             raise ValueError("review_changed_undisputed_award")
+                if selected_methods:
+                    from backend.skills.math_method_review import validate_selected_methods
+                    validate_selected_methods(candidate, selected_methods)
                 _assessment_validator(plan, answer, problem, original=old,
                     evidence=trace.get("evidence", []))(candidate)
                 score, steps = score_assessment(candidate, plan, answer.content or "", problem_text=problem.stem)
@@ -1348,9 +1377,14 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 +
                 "For full-ledger entries return no revision if there is no source-grounded error. "
                 "Submit at most one revision per expert. Unknown tools are not evidence of error. "
+                "Write comments and scoring reasons as final feedback about the student work and applicable "
+                "rubric; do not narrate prior grades, reassessment, adjudication or internal model calls. "
                 "Keep teacher review suggestions optional. "
                 + proof_guidance + (_part_proof_evidence(problem, plan.part_rubric) if plan.part_rubric else "")
                 + instructions + (PROOF_INSTRUCTION if review_format is ProofPartReview else "")
+                + (" The selected_methods were adjudicated and reassessed by the original experts. "
+                   "Keep these scoring routes fixed and review only the credit within their frozen rules."
+                   if selected_methods else "")
                 + ("\n" + REVIEW_INSTRUCTION + " After the complete review JSON, append PROOF_AUDIT "
                    "followed by a separate JSON object mapping each revised proof expert's index "
                    "(string) to an audit object with the same steps/context_source_ids shape as its trace. "
@@ -1366,6 +1400,9 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                                "plan": (_part_rule_projection(plan.part_rubric, review_parts if compact_parts else None)
                                         if plan.part_rubric else plan.model_dump(mode="json")),
                                "source_catalog": _expert_sources(catalog, plan),
+                               **({"selected_methods": [choice.model_dump(mode="json")
+                                                        for choice in selected_methods.values()]}
+                                  if selected_methods else {}),
                                "disputed_item_ids": sorted(review_parts if compact_parts else disputed), "experts": review_evidence}),
             validate_output=validate_review,
         )
@@ -1391,11 +1428,8 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 trace["targeted_review"]["part_ids"] = [d.part_id for d in revision.decisions]
             if isinstance(revision, PointRevision):
                 trace["targeted_review"]["item_ids"] = [award.item_id for award in revision.awards]
-            if steps:
-                label = "定向复核依据：" if language == "zh" else "Targeted review: "
-                steps[0] = steps[0].model_copy(update={"desc": steps[0].desc + "\n" + label + revision.reason})
-            # The original vote remains in the private trace. Make the review
-            # reason visible; confidence/configured weights remain unchanged.
+            # Keep the original vote and review reason in the private trace;
+            # expose final grading feedback without changing confidence/weights.
             revised[index] = experts[index].model_copy(update={
                 "score": score, "steps": steps, "comment": candidate.comment,
                 "raw_output": _json(trace),

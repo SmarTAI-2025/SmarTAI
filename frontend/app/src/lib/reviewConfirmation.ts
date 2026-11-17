@@ -185,7 +185,7 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
     // The aggregate handoff marker repeats field-specific checks below.
     if (issue.code === "manual_completion_required" && Array.isArray(issue.details?.required_fields)) return [];
     const severity = questionIssueSeverity(issue, problem);
-    if (severity === "none" || (confirmed && severity === "advisory" && issue.code !== "math_rubric_advisory")) return [];
+    if (severity === "none" || (confirmed && severity === "advisory")) return [];
     const confidence = questionConfidence(issue, problem);
     return [{ ...issue, severity: severity === "blocking" ? "blocking" as const : "warning" as const,
       details: { ...issue.details, ...(confidence !== null ? { confidence } : {}) } }];
@@ -332,7 +332,8 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
 }
 
 export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false): Array<{ label: string; severity: "blocking" | "advisory" }> {
-  if (!answer || (answer.review_status === "confirmed" && !answerReviewNextBlocked(answer))) return [];
+  const saved = answer?.review_status === "confirmed" || answer?.review_status === "edited";
+  if (!answer || (saved && !answerReviewNextBlocked(answer))) return [];
   const confidence = confidenceValue(answer.recognition_confidence);
   const metadataOnly = answerMetadataConfirmationAllowed(answer);
   const matchingOnly = answer.flag?.includes("recognition_matching_review");
@@ -350,7 +351,7 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
     && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
     && !(flag === "parse_failed" && flags.some(item => item.startsWith("recognition_invalid_fields:"))));
   return [
-    ...(confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
+    ...(!saved && confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
     ...[...new Set(visibleFlags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
-  ];
+  ].filter(note => !saved || note.severity === "blocking");
 }

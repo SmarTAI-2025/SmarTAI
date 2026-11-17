@@ -190,11 +190,11 @@ describe("review score presentation", () => {
     ]);
 
     expect(summary).toEqual({
-      aiUntouched: 2,
+      aiUntouched: 1,
       teacherConfirmedSame: 1,
       teacherChanged: 0,
       hardFailure: 1,
-      total: 4,
+      total: 3,
     });
   });
 });

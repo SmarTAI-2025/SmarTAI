@@ -28,7 +28,7 @@ import {
   buildResultsModel,
   aiCorrectionScore,
   correctionScoreSource,
-  pendingProgrammingReview,
+  pendingScoreReview,
   correctionReviewDraftScore,
   effectiveCorrectionScore,
   formatConfidence,
@@ -676,10 +676,10 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
   const validExperts = correction ? validExpertResults(correction) : [];
   const pausedMessage = correction ? pausedGradingMessage(correction, locale) : null;
   const primaryExpert = validExperts.find(expert => expert.provider_id === primaryProviderId) ?? validExperts[0];
-  const programmingReview = correction && pendingProgrammingReview(correction);
+  const pendingScore = correction && pendingScoreReview(correction);
   // A later expert may disagree with the shared execution. The synthesized
   // note starts with this evidence even if the selected expert does not.
-  const disputedScore = programmingReview === "programming_teacher_tests_passed_deduction" || programmingReview === "programming_teacher_tests_failed_full_credit" || programmingReview === "programming_partial_evidence_conflict";
+  const disputedScore = pendingScore === "programming_teacher_tests_passed_deduction" || pendingScore === "programming_teacher_tests_failed_full_credit" || pendingScore === "programming_partial_evidence_conflict";
   const scoreSource = correction ? correctionScoreSource(correction) : null;
   const answer = student.answerByQuestion.get(question.id);
   const alreadyConfirmed = (scoreSource === "teacher_confirmed_same" || scoreSource === "teacher_changed")
@@ -752,7 +752,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                 ) : null}
                 {correction.expert_results?.length ? (
                   <details open={Boolean(pausedMessage)} className="mt-3 text-xs text-muted-foreground">
-                    <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家原始结果", "View Original Model Results")}</summary>
+                    <summary className="cursor-pointer font-semibold text-foreground">{tx(locale, "查看各专家批改结果", "View Expert Grading Details")}</summary>
                     <ExpertResults key={correction.expert_results.map(expert => `${expert.provider_id}:${expert.provider}`).join("|")} locale={locale} experts={correction.expert_results} />
                   </details>
                 ) : null}
@@ -846,7 +846,7 @@ function ExpertResults({ locale, experts }: { locale: Locale; experts: ExpertRes
   const [active, setActive] = useState(0);
   const expert = experts[active];
   return <div className="mt-2">
-    <div role="tablist" aria-label={tx(locale, "查看各专家原始结果", "View Original Model Results")} className="flex flex-wrap gap-2 border-b pb-2">
+    <div role="tablist" aria-label={tx(locale, "查看各专家批改结果", "View Expert Grading Details")} className="flex flex-wrap gap-2 border-b pb-2">
       {experts.map((item, index) => <button key={`${item.provider}-${index}`} id={`${id}-${index}`} type="button" role="tab" aria-selected={active === index} aria-controls={`${id}-panel`} tabIndex={active === index ? 0 : -1}
         onClick={() => setActive(index)} onKeyDown={event => {
           const next = event.key === "ArrowRight" ? (index + 1) % experts.length : event.key === "ArrowLeft" ? (index + experts.length - 1) % experts.length : event.key === "Home" ? 0 : event.key === "End" ? experts.length - 1 : null;

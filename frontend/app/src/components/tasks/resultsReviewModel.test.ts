@@ -9,6 +9,29 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
+  it.each([0, 10])("keeps alternative grading advisory at score %s", score => {
+    const value = correction({ score, provisional_score: score, confidence: .95, review_status: "pending",
+      review_reasons: ["math_alternative_method"] });
+    expect(correctionReviewAttention(value)).toBe("advisory");
+    expect(correctionReviewNextBlocked(value)).toBe(false);
+    expect(correctionReviewNotes(value, "zh-CN")).toEqual([{ severity: "advisory", label: "解题思路与标答不同，按另解标准评分，请核对。" }]);
+  });
+  it.each(["review_reasons", "initial_review_reasons"] as const)("requires confirmation of a changed method after unfinished review (%s)", field => {
+    const pending = correction({ score: 10, provisional_score: 10, confidence: .95,
+      [field]: ["math_method_review_incomplete"],
+      expert_results: ["a", "b"].map(provider => ({ provider, score: 10, max_score: 10, confidence: .95, comment: "", steps: [] })),
+    });
+    expect(correctionReviewAttention(pending)).toBe("blocking");
+    expect(correctionReviewNextBlocked(pending)).toBe(true);
+    expect(correctionReviewBlocked(pending)).toBe(false);
+    expect(correctionReviewNotes(pending, "zh-CN")).toContainEqual({ severity: "blocking",
+      label: "请核对各专家的评分和依据。" });
+    expect(correctionReviewNotes(pending, "en-US")[0].label).toContain("Check each expert");
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "edited" })).toBe(false);
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 10, review_status: "confirmed" })).toBe(false);
+    expect(correctionReviewNextBlocked({ ...pending, teacher_score: 9, review_status: "edited" })).toBe(false);
+    expect(pending.score).toBe(10);
+  });
   it("explains saved initial grades without making pending AI verification a yellow review issue", () => {
     const expert = { provider: "a", score: 8, max_score: 10, confidence: .9, comment: "Saved", steps: [] };
     const paused = correction({ initial_review_reasons: ["grading_paused"],
@@ -133,13 +156,13 @@ describe("grading review attention", () => {
     ];
     const result = { task_id: "T1", status: "graded", timestamp: 0, results: [{ student_id: "S1", corrections }] };
     const model = buildResultsModel(undefined, result as Parameters<typeof buildResultsModel>[1]);
-    expect(collectResultReviewItems(model, model.students).map(item => item.correction.q_id).sort()).toEqual(["disputed", "edited"]);
-    expect(corrections.filter(hasReviewSignal).map(item => item.q_id).sort()).toEqual(["disputed", "edited"]);
-    expect(model.reviewCount).toBe(2);
-    expect(model.students[0].reviewCount).toBe(2);
-    expect(model.questions.reduce((sum, question) => sum + question.reviewCount, 0)).toBe(2);
-    expect(model.lowConfidenceCount).toBe(2);
-    expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(2);
+    expect(collectResultReviewItems(model, model.students).map(item => item.correction.q_id).sort()).toEqual(["disputed"]);
+    expect(corrections.filter(hasReviewSignal).map(item => item.q_id).sort()).toEqual(["disputed"]);
+    expect(model.reviewCount).toBe(1);
+    expect(model.students[0].reviewCount).toBe(1);
+    expect(model.questions.reduce((sum, question) => sum + question.reviewCount, 0)).toBe(1);
+    expect(model.lowConfidenceCount).toBe(1);
+    expect(summarizeReviewScoreSources(corrections).aiUntouched).toBe(1);
   });
 });
 
@@ -150,6 +173,20 @@ it.each([0, 7, 10])("releases a saved replacement score without a confirm click 
 });
 
 describe("overview disagreement policy", () => {
+  it("clears saved yellow advice while keeping an unresolved score requirement", () => {
+    const value = correction({ provisional_score: 8, teacher_score: 8, review_status: "edited", confidence: .2,
+      teacher_comment: "Check the intermediate work.", initial_review_reasons: ["math_alternative_method"] });
+    expect(correctionReviewAttention(value)).toBe("none");
+    expect(correctionReviewNotes(value, "zh-CN")).toEqual([]);
+    const required = { ...value, score: null, provisional_score: null, teacher_score: null,
+      initial_review_reasons: ["math_alternative_method"] };
+    expect(correctionReviewAttention(required)).toBe("blocking");
+    expect(correctionReviewNotes(required, "zh-CN")).toEqual([
+      { label: "缺少有效分数，请填写", severity: "blocking" },
+      { label: "解题思路与标答不同，按另解标准评分，请核对。", severity: "advisory" },
+    ]);
+  });
+
   it.each([
     [[10, 8], false], [[10, 9.34], false], [[8, 8], false],
     [[10, 7.6], false], [[10, 7.59], true], [[10, 7.4], true],
