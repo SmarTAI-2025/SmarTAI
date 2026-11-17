@@ -935,9 +935,10 @@ def has_explicit_scoring_policy(stem, maximum):
                          r"[^。;；\n]*$", prefix, re.I)
 
     explicit_total = re.compile(
-        r"(?:(?:本题|该题|此题|整题|全题|本小问)\s*)?(?:满分|总分)\s*[:：为是]?\s*"
+        r"(?:(?:本题|该题|此题|整题|全题|本小问)\s*)?(?:满分|总分|共计|共)\s*[:：为是]?\s*"
         r"(?P<cn>\d+(?:\.\d+)?)\s*分(?=$|[。;；，,\s)\]])|"
-        r"\b(?:total|maximum)(?:\s+score)?\s*(?:is\s*|of\s*|:\s*)?"
+        r"\b(?:(?:total|maximum)(?:\s+score)?\s*(?:is\s*|of\s*|:\s*)?|"
+        r"(?:this|the|whole|entire)\s+(?:question|problem|subquestion|part)\s+(?:is\s+worth|carries)\s+)"
         r"(?P<en>\d+(?:\.\d+)?)\s*(?:points?|marks?|credits?)\b", re.I)
 
     def remove_total(match):
@@ -966,10 +967,73 @@ def has_explicit_scoring_policy(stem, maximum):
                 and (numbered_prefix or not stem[total.end():].strip(" .。\n\t"))):
             stem = prefix + stem[total.end():]
     return bool(re.search(
-        r"评分|配分|[给得扣]分|(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
+        r"评分|配分|[给得扣]分|(?:给(?:予)?|计|保留)(?:任何)?(?:过程|部分)分|"
+        r"(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
         r"\b(?:rubric|scoring|no partial credit|\d+\s*(?:points?|marks?|credits?))\b",
         stem, re.I,
     ))
+
+
+def _no_partial_credit_clause(text):
+    """Read only an unconditional, standalone prohibition, not arbitrary prose."""
+    for sentence in re.split(r"[。；;\n]|\.(?=\s|$)", text or ""):
+        # A conditional or step-specific loss is not a whole-question prohibition.
+        if re.search(r"如果|若|仅当|否则|第[\d一二三四五六七八九十]+步|每步|"
+                     r"\b(?:if|unless|otherwise|step)\b", sentence, re.I):
+            continue
+        for clause in re.split(r"[，,]", sentence):
+            clause = clause.strip()
+            if re.fullmatch(
+                r"(?:(?:本题|该题|此题|整题|全题|本小问)\s*[:：]?\s*)?"
+                r"(?:不(?:给|计|给予)|不得给)(?:任何)?(?:过程|部分)分|"
+                r"no partial credit(?:\s+(?:is\s+)?(?:awarded|allowed))?", clause, re.I
+            ):
+                return clause
+    return None
+
+
+def bind_generated_credit_policy(rules):
+    """Check new ledgers against an explicit no-partial-credit source rule.
+
+    Existing snapshots bypass generation. Do not reinterpret vague/conditional
+    policy wording or invent cross-part settlement rules here.
+    """
+    # Supplied teacher rubrics retain their existing source-binding/audit path.
+    # This guard constrains new AI allocations from question instructions only.
+    if rules.teacher_rubric:
+        return rules
+    shared = _no_partial_credit_clause(rules.stem)
+    if shared and len(rules.parts) > 1:
+        raise ValueError("A whole-question no-partial-credit rule cannot be represented as independent "
+                         "subpart awards. Review its scope; do not silently award partial credit or remove subparts.")
+    fixed = []
+    for part in rules.parts:
+        clause = shared or _no_partial_credit_clause(part.stem)
+        if not clause:
+            fixed.append(part)
+            continue
+        if len(part.steps) != 1 or part.deductions:
+            raise ValueError(f"{part.label or part.id}: the source explicitly forbids partial credit. "
+                             "Use one full-budget step covering the complete requested work, not independently "
+                             "funded steps or partial deductions. Preserve the source's complete-proof requirement.")
+        policy = part.alternative
+        maximum = policy.maximum.resolve(part.total_pts)
+        if (rules.nonblank_floor.resolve(rules.total_pts) != 0
+                or maximum not in (0, Fraction(str(part.total_pts))) or policy.minimum.resolve(part.total_pts) != 0
+                or (maximum == 0 and not policy.source_quote)
+                or (maximum and (policy.deduct_per_error is None or Fraction(str(policy.deduct_per_error)) < maximum
+                    or (policy.max_deduction is not None and Fraction(str(policy.max_deduction)) < maximum)))):
+            raise ValueError(f"{part.label or part.id}: the source explicitly forbids partial credit. "
+                             "The nonblank floor and alternative-method policy must not award partial credit: "
+                             "use zero minimum, full credit for a complete valid proof, and a full-budget loss "
+                             "for an incomplete/incorrect proof unless that method is explicitly disallowed.")
+        step = part.steps[0]
+        # Teacher prohibition overrides the AI default/strictness without a new
+        # scoring state. Retain the exact source wording in the frozen criterion.
+        criterion = step.criterion if clause in step.criterion else step.criterion + "\n" + clause
+        step = step.model_copy(update={"criterion": criterion, "follow_through_pts": 0, "follow_through_keep": None})
+        fixed.append(part.model_copy(update={"steps": (step,)}))
+    return rules.model_copy(update={"parts": tuple(fixed)})
 
 
 GENERATED_STEP_GRANULARITY_INSTRUCTION = """
@@ -980,6 +1044,13 @@ below 1 point, merge related work into fewer steps without losing substantive ob
 changing its budget or any sibling subquestion. Explicit teacher scoring allocations or wording
 are exempt and must be preserved. Do not inflate points merely to meet this default.
 The audit must respect this bound rather than demand finer subdivisions that violate it.
+An explicit unconditional no-partial-credit rule (including 不给过程分) is authoritative, even
+when it appears in the question stem beside the total. For that scope use one full-budget step
+requiring the complete requested work, zero follow-through credit, no nonblank floor, and no
+partial awards via the alternative-method policy. A complete valid alternative still earns full
+credit unless the teacher restricts it. Do not turn a conditional or step-specific loss into a
+global prohibition. A question total alone (such as 本题共10分 or This question is worth 10 points)
+does not prescribe a scoring policy or exempt generated steps from audit or the granularity bound.
 """
 
 

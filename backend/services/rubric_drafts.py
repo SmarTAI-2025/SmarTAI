@@ -288,8 +288,9 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
             rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]},
                                previous=previous_rules, language=language, verified_policy_ids=verified_policy_ids,
                                verified_policy_checks=verified_policy_checks)
-            from backend.services.part_rubric import validate_generated_step_granularity
+            from backend.services.part_rubric import bind_generated_credit_policy, validate_generated_step_granularity
             if check_step_granularity:
+                rules = bind_generated_credit_policy(rules)
                 validate_generated_step_granularity(rules)
         except TeacherPolicyUnresolved:
             raise
