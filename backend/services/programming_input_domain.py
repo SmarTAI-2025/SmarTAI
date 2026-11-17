@@ -15,7 +15,7 @@ import re
 import tokenize
 import unicodedata
 
-from backend.services.programming_test_contract import _teacher_signature, bind_stdin_cases, required_function_name
+from backend.services.programming_test_contract import _teacher_signature, bind_stdin_cases, bound_case_arguments, required_function_name
 
 IDENT = r"[A-Za-z_][A-Za-z_0-9]*"
 NUM = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"
@@ -82,7 +82,8 @@ def _clauses(text, *, commas=True):
             depth = max(0, depth - 1)
         elif depth == 0 and (
             (ch in ";；。\n" or (commas and ch in ",，"))
-            or (ch == "." and (i + 1 == len(text) or text[i + 1].isspace()))
+            or (ch == "." and (i == 0 or text[i - 1] != ".")
+                and (i + 1 == len(text) or text[i + 1].isspace()))
         ):
             clauses.append(text[start:i].strip())
             start = i + 1
@@ -211,7 +212,7 @@ def _declarations(stem, criterion):
     text = re.sub(
         rf"((?:read|given|输入|给定)\s*(?:two|两个)\s*{TYPE}\s+{IDENT})\s*[,，]\s*({IDENT})(?=\s|[;。.]|$)",
         r"\1 and \2",
-        _normal(stem),
+        _normal(re.sub(r"(?m)^[ \t]*```(?:python|py)?[ \t]*$", "", stem)),
         flags=re.I,
     )
     text = re.sub(
@@ -248,6 +249,18 @@ def _declarations(stem, criterion):
 def _value_constraint(part, values, names, stdin):
     # Entire mathematical constraints only. Never eval teacher/model text.
     expr = re.sub(r"^(?:where\b|such that\b|满足|其中|保证)\s*", "", part, flags=re.I)
+    typed_range = re.fullmatch(
+        rf"({names}|输入|参数)\s*{DECL}\s*({NUM})\s*(?:到|至)\s*({NUM})\s*的\s*({TYPE})", expr,
+    )
+    if typed_range:
+        target = typed_range[1]
+        if target not in values:
+            if len(values) != 1:
+                return "unknown", ()
+            target = next(iter(values))
+        if not _typed(values[target], typed_range[4], stdin):
+            return "outside", ()
+        expr = f"{typed_range[2]} <= {target} <= {typed_range[3]}"
     verbal_zh = re.fullmatch(
         rf"({names}|输入|参数)\s*(?:保证|必须)?\s*"
         rf"(大于等于|小于等于|不小于|不大于|不等于|大于|小于|等于)\s*({NUM}|零)", expr,
@@ -321,12 +334,14 @@ def _value_constraint(part, values, names, stdin):
 
 def input_domain(problem, case):
     """Return 'allowed', 'outside', or 'unknown' for a supplemental case only."""
+    from backend.services.programming_rubric import domain_criterion
     stem = problem.stem or ""
-    if len(stem) + len(problem.criterion or "") > 16384:
+    criterion = domain_criterion(problem)
+    if len(stem) + len(criterion or "") > 16384:
         return "unknown"
     try:
         name = required_function_name(stem)
-        sig = _teacher_signature(stem, name) if name else None
+        sig = _teacher_signature(stem, name, literal_defaults=True) if name else None
     except ValueError:
         return "unknown"
     stdin = case.io_mode != "function" and not case.function_name
@@ -336,8 +351,8 @@ def input_domain(problem, case):
         values = {"_input": case.input}
     elif sig:
         try:
-            values = dict(sig.bind(*(case.function_args or []), **(case.function_kwargs or {})).arguments)
-        except TypeError:
+            values = dict(bound_case_arguments(sig, case))
+        except (TypeError, ValueError):
             return "outside"
     else:
         args, kwargs = case.function_args or [], case.function_kwargs or {}
@@ -346,7 +361,7 @@ def input_domain(problem, case):
         return "allowed" if sig is not None and not sig.parameters else "unknown"
     names = "|".join(re.escape(n) for n in sorted(values, key=len, reverse=True))
     tested, unknown = set(), False
-    for raw, rubric in _declarations(stem, problem.criterion):
+    for raw, rubric in _declarations(stem, criterion):
         # A comparison inside an instruction, example or conditional branch is
         # not a restriction on callers. Separate independently declared inputs.
         parts = re.split(r"\s+and\s+(?=(?:print|return|output)\b)", raw, maxsplit=1, flags=re.I)

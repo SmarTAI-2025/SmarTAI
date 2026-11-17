@@ -5736,7 +5736,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             _raise_stale_revision()
         from backend.services.math_grading_context import problem_from_question, uses_math_grading
         from backend.services.rubric_drafts import (
-            draft_fingerprint, rebind_review_edit, saved_draft,
+            draft_fingerprint, rebind_review_edit, retarget_draft, saved_draft,
         )
         stored_draft = ((question.source or {}).get("presentation") or {}).get("rubric_draft") or {}
         prior_rules = (stored_draft.get("plan") or {}).get("part_rubric")
@@ -5765,7 +5765,16 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation, patch.get("type", question.type))
         candidate_type = normalize_question_type(patch.get("type", question.type))
-        if candidate_type and not uses_math_grading(candidate_type):
+        programming_draft = None
+        if (is_programming_question_type(candidate_type)
+                and candidate_type == normalize_question_type(question.type)
+                and all(patch.get(key, getattr(question, key)) == getattr(question, key)
+                        for key in ("stem", "criterion", "max_score"))
+                and not patch.get("alternative_rule_edits")):
+            # Confirmation and reference-answer edits do not change the frozen
+            # test/code budgets. Verify the old binding before retaining it.
+            programming_draft = saved_draft(problem_from_question(question))
+        if candidate_type and not uses_math_grading(candidate_type) and programming_draft is None:
             for key in ("rubric_draft", "alternative_rules", "rubric_schema_version"):
                 presentation.pop(key, None)
         test_cases_edited = "test_cases" in patch
@@ -5936,6 +5945,11 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                                   previous=previous_problem, allow_pending=changed_rule)
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+        if programming_draft is not None:
+            presentation["rubric_draft"] = retarget_draft(
+                programming_draft, problem_from_question(question),
+            ).model_dump(mode="json")
+            question.source = {**source, "presentation": presentation}
         if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
             candidate = problem_from_question(question)
             prior = saved_draft(prior_problem, allow_incomplete_alternative=True)

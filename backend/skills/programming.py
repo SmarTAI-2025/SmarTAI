@@ -394,6 +394,13 @@ class ProgrammingSkill(GradingSkill):
                 )
                 data = {**_teacher_material(problem), "submitted_source": run.code,
                         "execution": evidence.model_dump(exclude={"evidence_id"}), "case_examples": examples}
+                from backend.services.programming_rubric import frozen_programming_steps, grading_steps, settle_test_award
+                frozen_steps = frozen_programming_steps(problem)
+                if frozen_steps:
+                    data["frozen_scoring_items"] = grading_steps(frozen_steps, run)
+                def validate_awards(output):
+                    settle_test_award(output, frozen_steps, run, self.language)
+                    _validate_awards(output, problem.max_score)
                 if chunks:
                     data["textbook_reference"] = kb_tool.context_text(chunks)
                 if self.reporter and unit:
@@ -406,7 +413,7 @@ class ProgrammingSkill(GradingSkill):
                     ),
                     user_prompt=json.dumps(data, ensure_ascii=False),
                     output_model=ProgrammingGradingOutput,
-                    validate_output=lambda output: _validate_awards(output, problem.max_score),
+                    validate_output=validate_awards,
                 )
                 confidence = result.confidence
                 if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3

@@ -3533,6 +3533,7 @@ def apply_material_import(
 
 
 def _missing_targets(task: dict) -> list[dict]:
+    from backend.services.programming_materials import has_teacher_reference_code
     output = []
     labels = {
         "criterion": "Rubric", "reference_answer": "Reference answer",
@@ -3541,7 +3542,9 @@ def _missing_targets(task: dict) -> list[dict]:
     for q_id, problem in task["problem_data"].items():
         targets = ["criterion", "reference_answer"]
         if is_programming_question_type(problem.get("type")):
-            targets.extend(["solution_code", "test_cases"])
+            if not has_teacher_reference_code(problem):
+                targets.append("solution_code")
+            targets.append("test_cases")
         for target in targets:
             if problem.get(target):
                 continue

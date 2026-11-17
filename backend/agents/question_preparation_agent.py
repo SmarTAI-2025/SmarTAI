@@ -549,12 +549,14 @@ def requested_major_question_materials(
 
     requested: list[dict[str, str]] = []
     for q_id, problem in problem_data.items():
+        from backend.services.programming_materials import has_teacher_reference_code
+        supplied_code = is_programming_question_type(problem.get("type")) and has_teacher_reference_code(problem)
         material_provenance = problem.get("material_provenance") or {}
         # A teacher answer may contain only the final result. Ask the bounded
         # generator to preserve it and expand it into reviewable steps.
         if (
             not str(problem.get("reference_answer") or "").strip()
-            or "reference_answer" in material_provenance
+            or ("reference_answer" in material_provenance and not supplied_code)
         ):
             requested.append(_target(q_id, "reference_answer"))
         structure = MajorQuestionStructureV1.model_validate(
@@ -569,7 +571,7 @@ def requested_major_question_materials(
         ):
             requested.append(_target(q_id, "criterion"))
         if is_programming_question_type(problem.get("type")):
-            if not str(problem.get("solution_code") or "").strip():
+            if not str(problem.get("solution_code") or "").strip() and not supplied_code:
                 requested.append(_target(q_id, "solution_code"))
             if not list(problem.get("test_cases") or []):
                 requested.append(_target(q_id, "test_cases"))

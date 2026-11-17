@@ -107,24 +107,33 @@ def required_function_name(stem: str) -> str | None:
     return names.pop() if len(names) == 1 else None
 
 
-def _signature(args: ast.arguments) -> inspect.Signature:
+def _signature(args: ast.arguments, *, literal_defaults=False) -> inspect.Signature:
     parameter = inspect.Parameter
     params = []
+    def default_value(node):
+        if not literal_defaults:
+            return None
+        try:
+            return _json(_literal(node))
+        except ValueError:
+            return ("expression", ast.dump(node))  # Never evaluate a default expression.
     positional = [*args.posonlyargs, *args.args]
     defaults_at = len(positional) - len(args.defaults)
     for i, arg in enumerate(positional):
         kind = parameter.POSITIONAL_ONLY if i < len(args.posonlyargs) else parameter.POSITIONAL_OR_KEYWORD
-        params.append(parameter(arg.arg, kind, default=None if i >= defaults_at else parameter.empty))
+        params.append(parameter(arg.arg, kind, default=default_value(args.defaults[i - defaults_at])
+                                if i >= defaults_at else parameter.empty))
     if args.vararg:
         params.append(parameter(args.vararg.arg, parameter.VAR_POSITIONAL))
     for arg, default in zip(args.kwonlyargs, args.kw_defaults):
-        params.append(parameter(arg.arg, parameter.KEYWORD_ONLY, default=None if default is not None else parameter.empty))
+        params.append(parameter(arg.arg, parameter.KEYWORD_ONLY,
+                                default=default_value(default) if default is not None else parameter.empty))
     if args.kwarg:
         params.append(parameter(args.kwarg.arg, parameter.VAR_KEYWORD))
     return inspect.Signature(params)
 
 
-def _teacher_signature(stem, name):
+def _teacher_signature(stem, name, *, literal_defaults=False):
     signatures = set()
     for match in _declarations(stem):
         if match["name"] != name:
@@ -134,7 +143,7 @@ def _teacher_signature(stem, name):
         for close in re.finditer(r"\)", stem[start:start + 4096]):
             try:
                 node = ast.parse("def " + stem[start:start + close.end()] + ":\n pass").body[0]
-                signatures.add(_signature(node.args))
+                signatures.add(_signature(node.args, literal_defaults=literal_defaults))
             except (SyntaxError, ValueError):
                 continue
             break
@@ -160,6 +169,42 @@ def _json(value):
         return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True)
     except (TypeError, ValueError, RecursionError) as exc:
         raise ProgrammingCaseError("Arguments must be finite JSON values.", issue="arguments") from exc
+
+
+def bound_case_arguments(signature, case):
+    """Bind a literal-default signature without executing teacher or student code."""
+    bound = signature.bind(*(case.function_args or []), **(case.function_kwargs or {}))
+    supplied = set(bound.arguments)
+    bound.apply_defaults()
+    for name, param in signature.parameters.items():
+        if name not in supplied and param.default is not inspect.Parameter.empty:
+            if not isinstance(param.default, str):
+                raise ProgrammingCaseError("Supply explicit arguments for non-literal defaults.", issue="arguments")
+            bound.arguments[name] = json.loads(param.default)
+    return bound.arguments
+
+
+def case_input_key(stem, case, *, reference=None):
+    """Identify effective inputs; preserve types and ordering inside input values."""
+    def value_key(value):
+        if isinstance(value, dict):
+            return ["dict", [[key, value_key(value)] for key, value in value.items()]]
+        if isinstance(value, (list, tuple)):
+            return ["list", [value_key(item) for item in value]]
+        return [type(value).__name__, value]
+    if case.io_mode != "function":
+        return _json(["stdin", case.input])
+    signature = _teacher_signature(stem, required_function_name(stem), literal_defaults=True)
+    if signature is None and reference:
+        bound_case, = bind_programming_cases(stem, [case], reference)
+        functions = [node for node in ast.parse(reference).body
+                     if isinstance(node, ast.FunctionDef) and node.name == bound_case.function_name]
+        if len(functions) != 1:
+            raise ProgrammingCaseError("Cannot identify the reference input signature.", issue="arguments")
+        signature = _signature(functions[0].args, literal_defaults=True)
+    arguments = (bound_case_arguments(signature, case) if signature is not None else
+                 [case.function_args or [], case.function_kwargs or {}])
+    return _json(["function", value_key(arguments)])
 
 
 def _literal(node):

@@ -158,16 +158,18 @@ async def test_third_attempt_invalid_output_does_not_get_a_fresh_repair_budget(m
 async def test_function_question_adapts_plain_cases_without_a_second_call():
     def response(case):
         return json.dumps({"candidates": [{"target_id": "q1:test_cases", "q_id": "q1",
-            "target": "test_cases", "test_cases": [case]}]})
+            "target": "test_cases", "test_cases": [{**case, "input": f"[{i},{i}]"} for i in range(10)]}]})
     provider = Provider([
         response({"input": "[0,0]", "expected_output": "[0.5,0.5]"}),
     ])
     result = await generate_missing_question_materials(
-        {"q1": {"stem": "Implement the function.\n```python\ndef stable_softmax(xs):\n    ...\n```", "max_score": 10}},
+        {"q1": {"stem": "Implement the function.\n```python\ndef stable_softmax(xs):\n    ...\n```\nxs is a list of numbers.", "max_score": 10,
+                 "solution_code": "import math\ndef stable_softmax(xs):\n    exps = [math.exp(x-max(xs)) for x in xs]\n    return [x/sum(exps) for x in exps]"}},
         [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}], 6, provider)
     assert len(provider.calls) == 1
     case = result[0].test_cases[0]
-    assert case.input == "[0,0]" and case.expected_return == "[0.5,0.5]"
+    assert len(result[0].test_cases) == 10
+    assert case.input == "[0,0]" and case.expected_return == "[0.5, 0.5]"
     assert case.function_args == [[0, 0]]
     assert case.io_mode == "function"
     assert case.source == "llm_generated"
@@ -176,12 +178,14 @@ async def test_function_question_adapts_plain_cases_without_a_second_call():
 @pytest.mark.asyncio
 async def test_stdin_program_keeps_stdin_cases_without_extra_generation():
     provider = Provider([json.dumps({"candidates": [{"target_id": "q1:test_cases", "q_id": "q1",
-        "target": "test_cases", "test_cases": [{"input": "2\n3", "expected_output": "5"}]}]})])
+        "target": "test_cases", "test_cases": [{"input": f"{i+2}\n3", "expected_output": "wrong"} for i in range(10)]}]})])
     result = await generate_missing_question_materials(
-        {"q1": {"stem": "Read two integers from stdin and print their sum.", "max_score": 10}},
+        {"q1": {"stem": "Read two integers from stdin and print their sum.", "max_score": 10,
+                 "solution_code": "a=int(input()); b=int(input()); print(a+b)"}},
         [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}], 6, provider)
     assert len(provider.calls) == 1
     assert result[0].test_cases[0].input == "2\n3"
+    assert result[0].test_cases[0].expected_output == "5\n"
     assert result[0].test_cases[0].function_name is None
 
 
