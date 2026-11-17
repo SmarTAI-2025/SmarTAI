@@ -220,6 +220,28 @@ async def test_teacher_rules_are_not_replanned():
     assert not provider.calls
 
 
+@pytest.mark.parametrize("stem", [
+    "（10分）" + STEM, STEM + "（10分）", "(10 points) " + STEM,
+    STEM + " (10 points)", STEM + " [10 marks]", "（满分：10分）" + STEM,
+])
+def test_question_total_alone_does_not_disable_proof_audit(stem):
+    assert proof.use_proof_steps(dict(type="推理题", stem=stem, max_score=10))
+
+
+@pytest.mark.parametrize("policy", [
+    " [3 marks for the witness]", " 第一步3分，第二步7分。", " No partial credit.",
+    " (5 points)", " Award 10 points for the witness.", " (10 points for the witness)",
+    " 第一步（10分）", " Step 1 (10 points)",
+])
+def test_step_allocations_and_credit_policies_still_bypass_replanning(policy):
+    assert not proof.use_proof_steps(dict(type="推理题", stem=STEM + policy, max_score=10))
+
+
+@pytest.mark.parametrize("maximum", [None, "unknown", 5])
+def test_ambiguous_total_is_not_silently_stripped(maximum):
+    assert not proof.use_proof_steps(dict(type="推理题", stem=STEM + " (10 points)", max_score=maximum))
+
+
 @pytest.mark.asyncio
 async def test_audit_uses_independent_budget_without_adding_a_planning_call():
     from backend.tools.structured_llm import llm_attempt_budget, ainvoke_with_retry, StructuredOutputInvalidError

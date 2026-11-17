@@ -6,6 +6,8 @@ reject a proposal, never replace it with generic tiers or change its points.
 
 import json
 import re
+import unicodedata
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -45,6 +47,24 @@ class ProofRubricUnverified(ValueError):
 
 
 def use_proof_steps(row):
+    stem = unicodedata.normalize("NFKC", row.get("stem", ""))
+    # A whole-question maximum is a budget, not a teacher's step allocation.
+    # Remove only one standalone edge annotation equal to the known maximum;
+    # embedded awards, different amounts and explicit scoring language remain.
+    totals = list(re.finditer(
+        r"[\[(]\s*(?:(?:满分|总分|total|maximum)\s*[:：]?\s*)?"
+        r"(\d+(?:\.\d+)?)\s*(?:分|points?|marks?|credits?)\s*[\])]", stem, re.I))
+    if len(totals) == 1:
+        total = totals[0]
+        step_label = re.search(r"(?:第[\d一二三四五六七八九十]+步|步骤\s*\d*|\bstep(?:\s+\w+)?)\s*[:：]?\s*$",
+                               stem[:total.start()], re.I)
+        try:
+            if (Decimal(total[1]) == Decimal(str(row.get("max_score")))
+                    and not step_label
+                    and (not stem[:total.start()].strip() or not stem[total.end():].strip(" .。\n\t"))):
+                stem = stem[:total.start()] + stem[total.end():]
+        except InvalidOperation:
+            pass
     return (
         normalize_question_type(row.get("type") or "") == "推理题"
         and not row.get("criterion")
@@ -53,7 +73,7 @@ def use_proof_steps(row):
         and not re.search(
             r"评分|配分|[给得扣]分|(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
             r"\b(?:rubric|scoring|no partial credit|\d+\s*(?:points?|marks?|credits?))\b",
-            row.get("stem", ""), re.I,
+            stem, re.I,
         )
     )
 
