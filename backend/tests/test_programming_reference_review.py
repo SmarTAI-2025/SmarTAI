@@ -263,3 +263,72 @@ async def test_failed_teacher_code_is_never_reopened_as_ai_owned():
         allow_partial=True, repair_feedback=feedback)
     assert result == [] and "q1:test_cases" in feedback and "q1:solution_code" not in feedback
     assert row["solution_code"] == "def square(x): raise ValueError('teacher code')"
+
+
+@pytest.mark.asyncio
+async def test_teacher_code_is_reused_without_requesting_an_ai_implementation():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    row = source(reference_answer="```python\ndef square(x): return x*x\n```")
+    row["solution_code"] = ""
+    provider = Provider([json.dumps({"candidates": [
+        dict(target_id="q1:test_cases", test_cases=[case.model_dump() for case in inputs()])
+    ]})])
+    result = await generate_missing_question_materials({"q1": row}, [
+        dict(q_id="q1", target_id=f"q1:{target}", target=target) for target in ["solution_code", "test_cases"]
+    ], 10, provider)
+    request = json.loads(provider.calls[0][1].content.split("\n", 1)[1])
+    assert [target["target"] for target in request["requested_targets"]] == ["test_cases"]
+    assert len(result) == 1 and result[0].test_cases[3].expected_return == "9"
+    assert len(provider.calls) == 1 and row["solution_code"] == ""
+    assert row["reference_answer"] == "```python\ndef square(x): return x*x\n```"
+
+
+@pytest.mark.asyncio
+async def test_redundant_code_only_request_uses_zero_model_calls():
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    row = source(reference_answer="```python\ndef square(x): return x*x\n```")
+    row["solution_code"] = ""
+    provider = SimpleNamespace(ainvoke=AsyncMock(side_effect=AssertionError("No model call is needed")))
+    assert await generate_missing_question_materials({"q1": row}, [
+        dict(q_id="q1", target_id="q1:solution_code", target="solution_code")], 10, provider) == []
+    provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.parametrize("teacher", [False, True])
+def test_automatic_and_manual_target_selection_share_supplied_code_authority(teacher):
+    from backend.agents.incremental_question_preparation import _rows
+    from backend.agents.question_preparation_agent import requested_major_question_materials
+    from backend.api.task_preparation import _missing_targets
+    row = source(reference_answer="```python\ndef square(x): return x*x\n```")
+    row["solution_code"] = ""
+    if teacher:
+        row["material_provenance"] = {"reference_answer": {"source_kind": "upload"}}
+    else:
+        row["ai_completion_provenance"] = {"reference_answer": {"source_kind": "ai_generated"}}
+    data = _rows([row])
+    for targets in [requested_major_question_materials(data), _missing_targets({"problem_data": data})]:
+        names = {target["target"] for target in targets}
+        assert ("solution_code" not in names) is teacher
+        assert "reference_answer" not in names
+
+
+@pytest.mark.asyncio
+async def test_real_preparation_uses_teacher_code_without_a_duplicate_solution(monkeypatch):
+    from backend.agents import incremental_question_preparation as inc
+    from backend.tests.test_incremental_question_preparation import setup, persisted
+    owner, _, operation, pipeline = await setup(monkeypatch)
+    row = source(reference_answer="```python\ndef square(x): return x*x\n```")
+    row["solution_code"] = ""
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([row])))
+    provider = Provider([json.dumps({"candidates": [
+        dict(target_id="q1:criterion", rubric_definition=definition()),
+        dict(target_id="q1:test_cases", test_cases=[case.model_dump() for case in inputs()])
+    ]})])
+    pipeline.provider = provider
+    await pipeline.run()
+    _, rows = persisted(owner, operation)
+    request = json.loads(provider.calls[0][1].content.split("\n", 1)[1])
+    assert {target["target"] for target in request["requested_targets"]} == {"criterion", "test_cases"}
+    assert len(provider.calls) == 1 and len(rows["q1"]["test_cases"]) == 10
+    assert not rows["q1"].get("solution_code")
+    assert "solution_code" not in rows["q1"].get("ai_completion_provenance", {})

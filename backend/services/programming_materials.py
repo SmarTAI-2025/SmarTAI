@@ -16,6 +16,18 @@ class ReferenceExecutionError(ValueError):
     """Generated reference code is repairable; teacher code remains unchanged."""
 
 
+def has_teacher_reference_code(source):
+    """Use the same supplied-code authority rules as execution, without an LLM."""
+    from backend.services.programming_runs import _reference
+    problem = ProblemInfo(q_id="q1", number="", stem="", criterion="",
+                          solution_code=source.get("solution_code"), reference_answer=source.get("reference_answer"))
+    problem._math_rubric_source = {"presentation": source}
+    try:
+        return bool(_reference(problem))
+    except ValueError:
+        return False
+
+
 def input_probes(cases):
     """Discard model-predicted answers before either execution or persistence."""
     probes = []

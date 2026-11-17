@@ -2325,6 +2325,11 @@ async def generate_missing_question_materials(
     ]
     if not target_rows:
         raise ValueError("No valid missing targets selected.")
+    from backend.services.programming_materials import has_teacher_reference_code
+    target_rows = [row for row in target_rows if row["target"] != "solution_code"
+                   or not has_teacher_reference_code(problems_data[row["q_id"]])]
+    if not target_rows:
+        return []  # A supplied implementation requires no duplicate generation.
 
     if reporter and manage_progress_lifecycle:
         await reporter.set_phase("parsing")
