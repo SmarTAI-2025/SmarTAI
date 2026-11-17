@@ -60,6 +60,21 @@ describe("saved draft list", () => {
     expect(screen.queryByText(/389876bff62b|opaque-question-id/)).not.toBeInTheDocument();
     expect(screen.getByText(/暂存于/)).toBeInTheDocument();
   });
+  it("keeps retired AI completion drafts deletable without an open link", async () => {
+    mocks.remove.mockResolvedValue(undefined);
+    mocks.list.mockResolvedValue([
+      { ...draft("old", DAY), scope: "ai-completion:old" },
+      { ...draft("current", 2 * DAY), scope: "question:current:q1:scoring" },
+    ]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    render(view());
+    const rows = await screen.findAllByRole("listitem");
+    expect(within(rows[0]).getByText(/AI 补全选项/)).toBeInTheDocument();
+    expect(within(rows[0]).queryByRole("link")).not.toBeInTheDocument();
+    expect(within(rows[1]).getByRole("link")).toHaveAttribute("href", "/tasks/current/questions/q1/content");
+    fireEvent.click(within(rows[0]).getByRole("button", { name: "删除" }));
+    expect(mocks.remove).toHaveBeenCalledExactlyOnceWith("teacher-a", "ai-completion:old");
+  });
   it("shows the current task name, page and saved time without internal identifiers", async () => {
     mocks.list.mockResolvedValue([{ ...draft("389876bff62b", DAY), scope: "grading:389876bff62b:389876bff62b", title: undefined }]);
     mocks.tasks.mockResolvedValue({ task: { task_id: "389876bff62b", name: "微积分周测" } });
