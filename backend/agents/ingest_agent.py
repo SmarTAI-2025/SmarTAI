@@ -2913,6 +2913,16 @@ async def generate_missing_question_materials(
                         if repair_feedback is not None:
                             repair_feedback[sibling.target_id] = "The generated reference failed execution or teacher examples. Repair its implementation without changing the teacher's expectations."
 
+    # A reference requested with tests is not independently complete until
+    # those tests have exercised it, even when the model omits tests this round.
+    completed_test_questions = {c.q_id for c in parsed.candidates if c.target == "test_cases"}
+    for candidate in list(parsed.candidates):
+        if (candidate.target == "solution_code" and candidate.q_id in test_questions
+                and candidate.q_id not in completed_test_questions):
+            parsed.candidates.remove(candidate)
+            if repair_feedback is not None:
+                repair_feedback[candidate.target_id] = "Return the runnable reference together with valid test inputs so execution can validate both before saving."
+
     # Seal against all accepted sibling fields, including a reference answer
     # returned in the same response. Model-supplied draft metadata is never used.
     for candidate in list(parsed.candidates):

@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import ast
-import json
 
 from backend.models import ProblemInfo
 from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
 from backend.services.programming_test_contract import (
-    adapt_programming_cases, bind_programming_cases, bind_stdin_cases, native_standard_supported,
+    adapt_programming_cases, bind_programming_cases, bind_stdin_cases, case_input_key, native_standard_supported,
 )
 
 GENERATED_TEST_COUNT = 10
@@ -36,18 +35,19 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
     from backend.tools.code_interpreter import run_sandbox
 
     problem = ProblemInfo.model_validate({"number": "", "criterion": "", **source})
-    problem._math_rubric_source = {"presentation": {
-        "ai_completion_provenance": source.get("ai_completion_provenance") or {},
-    }}
+    problem._math_rubric_source = {"presentation": source}
     reference = _reference(problem)
     if not reference and problem.solution_code:
         # A generated reference may derive NEW expectations, never replace a
         # teacher's existing expectations or become independent evidence.
         reference = _source(problem.solution_code)
-        problem._math_rubric_source = {}
+        language_problem = problem.model_copy()
+        language_problem._math_rubric_source = {}
+    else:
+        language_problem = problem
     if not reference:
         raise ValueError("Generate a runnable reference implementation before generating test outputs.")
-    language = _reference_language(problem, reference)
+    language = _reference_language(language_problem, reference)
     if language != "python" and not native_standard_supported(problem.stem + "\n" + problem.criterion, language, reference=True):
         raise ValueError("The reference language or function interface is not supported by the runner.")
     executable = python_execution_source(reference) if language == "python" else reference
@@ -73,12 +73,11 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
     probes = adapt_programming_cases(problem.stem, input_probes(cases))
     if len(probes) < GENERATED_TEST_COUNT:
         raise ValueError("Supply at least ten distinct legal test inputs.")
-    if any(not c.sandbox_feasible or input_domain(problem, c) == "outside" for c in probes):
-        raise ValueError("Use only runnable test inputs inside the question's stated domain.")
-    identities = {json.dumps([c.io_mode, c.function_args, c.function_kwargs or {}] if c.io_mode == "function"
-                             else [c.io_mode, c.input], sort_keys=True, allow_nan=False) for c in probes}
+    identities = {case_input_key(problem.stem, c, reference=executable) for c in probes}
     if len(identities) != len(probes):
         raise ValueError("Supply distinct test inputs; repeated inputs must not change their scoring weight.")
+    if any(not c.sandbox_feasible or input_domain(problem, c) != "allowed" for c in probes):
+        raise ValueError("Use only runnable test inputs verifiably inside the question's stated domain.")
     reference_cases = bind(probes)
     if all(case.io_mode == "stdin" for case in reference_cases):
         if language == "python":
@@ -97,4 +96,6 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
         resolved = expectations_from_reference(probes, reference_cases, report)
     except ValueError as exc:
         raise ReferenceExecutionError("The reference failed to produce complete, usable outputs for the proposed inputs.") from exc
+    if all(case.io_mode == "stdin" for case in reference_cases) and not any(row.stdout for row in report.results):
+        raise ReferenceExecutionError("The reference produced no stdout for the entire suite. Check its entry/input/output wiring and include an observable-output input; do not invent outputs.")
     return adapt_programming_cases(problem.stem, resolved)

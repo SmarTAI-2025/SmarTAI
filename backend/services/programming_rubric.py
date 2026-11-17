@@ -43,6 +43,35 @@ def grading_steps(rows, run):
             for index, (part, step) in enumerate(rows, 1)]
 
 
+def distinct_scoring_cases(problem, originals, cases):
+    if not frozen_programming_steps(problem):
+        return originals, cases
+    from backend.services.programming_test_contract import ProgrammingCaseError, case_input_key
+    from backend.services.programming_runs import _reference, _source
+    from backend.services.python_source_encoding import python_execution_source
+    reference = _reference(problem) or (_source(problem.solution_code) if problem.solution_code else None)
+    if reference and any(case.io_mode == "function" for case in cases):
+        reference = python_execution_source(reference)
+    def expectation(case):
+        return (case.expected_return if case.io_mode == "function" else case.expected_output,
+                case.comparison, case.abs_tol, case.rel_tol)
+    positions, kept_originals, kept = {}, [], []
+    for original, case in zip(originals, cases, strict=True):
+        key = case_input_key(problem.stem, case, reference=reference)
+        if key in positions:
+            index = positions[key]
+            previous = kept[index]
+            if expectation(case) != expectation(previous):
+                raise ProgrammingCaseError("The same input has conflicting expected results.", issue="conflicting_expectations")
+            if case.source == "teacher" and previous.source != "teacher":
+                kept_originals[index], kept[index] = original, case
+        else:
+            positions[key] = len(kept)
+            kept_originals.append(original)
+            kept.append(case)
+    return kept_originals, kept
+
+
 def suite_award(maximum, report):
     budget = Decimal(str(maximum))
     return float(min(budget, (budget * report.passed_count / report.total_count).quantize(
@@ -62,7 +91,7 @@ def settle_test_award(output, rows, run, language):
         award.part_id, award.item_id = part.id, step.id
         if step.test_suite:
             award.score = suite_award(step.total_pts, run.report)
-            award.is_correct = run.report.passed_count == run.report.total_count
+            award.is_correct = award.score == step.total_pts
             award.deduction_basis = None
             award.desc = (f"测试通过 {run.report.passed_count}/{run.report.total_count}，本项得 {award.score:g}/{step.total_pts:g} 分。"
                           if language == "zh" else

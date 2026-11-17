@@ -163,7 +163,7 @@ async def test_function_question_adapts_plain_cases_without_a_second_call():
         response({"input": "[0,0]", "expected_output": "[0.5,0.5]"}),
     ])
     result = await generate_missing_question_materials(
-        {"q1": {"stem": "Implement the function.\n```python\ndef stable_softmax(xs):\n    ...\n```", "max_score": 10,
+        {"q1": {"stem": "Implement the function.\n```python\ndef stable_softmax(xs):\n    ...\n```\nxs is a list of numbers.", "max_score": 10,
                  "solution_code": "import math\ndef stable_softmax(xs):\n    exps = [math.exp(x-max(xs)) for x in xs]\n    return [x/sum(exps) for x in exps]"}},
         [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}], 6, provider)
     assert len(provider.calls) == 1

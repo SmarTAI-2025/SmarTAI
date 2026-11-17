@@ -272,9 +272,11 @@ def _reference_execution_identity(problem):
 
 
 def _question_key(state, problem, *, runtime=None):
+    from backend.services.programming_rubric import frozen_programming_steps
     cp = state.checkpoints
     question = cp.questions.get(problem.q_id) if cp else None
     return digest({**({"generated_input_domain_version": 1} if not problem.test_cases or any(c.source == "llm_generated" for c in problem.test_cases) else {}),
+        **({"test_suite_input_identity_version": 1} if frozen_programming_steps(problem) else {}),
         "engine": VERSION, "owner": state.owner, "assignment": state.assignment,
         "question": question.id if question else problem.q_id, "q_id": problem.q_id,
         "version": question.version if question else None, "stem": problem.stem,
@@ -379,6 +381,8 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             cases = adapt_programming_cases(problem.stem, cases)
             if not cases or len(cases) > 50 or any(not c.sandbox_feasible for c in cases):
                 raise ValueError("programming_cases_unavailable")
+            from backend.services.programming_rubric import distinct_scoring_cases
+            originals, cases = distinct_scoring_cases(problem, originals, cases)
             cases = _checked_case_inputs(state, key, problem, originals, cases)
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
