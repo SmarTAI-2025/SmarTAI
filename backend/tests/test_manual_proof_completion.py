@@ -77,6 +77,25 @@ async def test_manual_completion_normal_path_has_no_extra_calls(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_indivisible_proof_keeps_one_award_without_repair(monkeypatch):
+    from backend.tests.test_proof_rubric import rubric
+
+    stem = "Let n be an even integer. Prove that 3n is even."
+    answer = "Write n=2k for an integer k; then 3n=2(3k), so 3n is even."
+    rules = rubric()
+    part = rules.parts[0]
+    step = part.steps[0].model_copy(update={"criterion": answer, "total_pts": 10})
+    rules = rules.model_copy(update={"parts": (part.model_copy(update={"steps": (step,)}),)})
+    response = json.loads(initial(rules))
+    response["candidates"][1]["text_value"] = answer
+    provider = Provider([json.dumps(response), audit(reason="One indivisible inference; no independent goals bundled.")])
+    job, data = await complete(monkeypatch, provider, stem=stem)
+    assert not job.payload["skipped_target_ids"] and len(provider.calls) == 2
+    assert data.reference_answer == answer
+    assert [(s.criterion, s.total_pts) for s in saved_draft(data).plan.part_rubric.parts[0].steps] == [(answer, 10)]
+
+
+@pytest.mark.asyncio
 async def test_reported_bundle_retries_only_rubric_with_unchanged_total(monkeypatch):
     provider = Provider([initial(), audit(reason="square: two independently earnable goals",
         bundled_steps=["square"]), initial(reference=False), audit()])
