@@ -5,14 +5,15 @@ reject a proposal, never replace it with generic tiers or change its points.
 """
 
 import json
-import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.domain.question_types import normalize_question_type
 from backend.llm.providers import ProviderRequestError
-from backend.services.part_rubric import Key, Text
+from backend.services.part_rubric import (
+    Key, Text, has_explicit_scoring_policy, GENERATED_STEP_GRANULARITY_INSTRUCTION,
+)
 from backend.tools.structured_llm import (
     PermanentLLMError, StructuredOutputInvalidError, TransientLLMError,
     llm_attempt_budget, structured_llm_call,
@@ -41,11 +42,7 @@ def use_proof_steps(row):
         and not row.get("criterion")
         and not row.get("rubric_draft")
         and not row.get("teacher_subpart_points")
-        and not re.search(
-            r"评分|配分|[给得扣]分|(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
-            r"\b(?:rubric|scoring|no partial credit|\d+\s*(?:points?|marks?|credits?))\b",
-            row.get("stem", ""), re.I,
-        )
+        and not has_explicit_scoring_policy(row.get("stem", ""), row.get("max_score"))
     )
 
 
@@ -69,6 +66,9 @@ hypotheses can satisfy the relevant items without separately writing every refer
 The existing independent alternative-method policy handles substantively different strategies;
 do not encode its error rates, caps or reference-step requirements in these primary steps.
 """
+
+
+_QUALITY += GENERATED_STEP_GRANULARITY_INSTRUCTION
 
 
 async def audit_proof_steps(provider, task, rules):

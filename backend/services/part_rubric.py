@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from fractions import Fraction
 from typing import Annotated, Literal
 
@@ -920,6 +920,61 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
     )
 
 
+def has_explicit_scoring_policy(stem, maximum):
+    """Keep the existing source-policy boundary, excluding a standalone total."""
+    stem = unicodedata.normalize("NFKC", stem)
+    # A whole-question maximum is a budget, not a teacher's step allocation.
+    # Remove only one standalone edge annotation equal to the known maximum;
+    # embedded awards, different amounts and explicit scoring language remain.
+    totals = list(re.finditer(
+        r"[\[(]\s*(?:(?:满分|总分|total|maximum)\s*[:：]?\s*)?"
+        r"(\d+(?:\.\d+)?)\s*(?:分|points?|marks?|credits?)\s*[\])]", stem, re.I))
+    if len(totals) == 1:
+        total = totals[0]
+        step_label = re.search(r"(?:第[\d一二三四五六七八九十]+步|步骤\s*\d*|\bstep(?:\s+\w+)?)\s*[:：]?\s*$",
+                               stem[:total.start()], re.I)
+        try:
+            if (Decimal(total[1]) == Decimal(str(maximum))
+                    and not step_label
+                    and (not stem[:total.start()].strip() or not stem[total.end():].strip(" .。\n\t"))):
+                stem = stem[:total.start()] + stem[total.end():]
+        except InvalidOperation:
+            pass
+    return bool(re.search(
+        r"评分|配分|[给得扣]分|(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
+        r"\b(?:rubric|scoring|no partial credit|\d+\s*(?:points?|marks?|credits?))\b",
+        stem, re.I,
+    ))
+
+
+GENERATED_STEP_GRANULARITY_INSTRUCTION = """
+For EACH subquestion separately, AI-generated steps must satisfy at least ONE condition:
+at most 8 steps OR every step has total_pts >= 1. This is an OR, not two simultaneous requirements;
+never pool steps across the whole question. If a subquestion has more than 8 steps and any is
+below 1 point, merge related work into fewer steps without losing substantive obligations or
+changing its budget or any sibling subquestion. Explicit teacher scoring allocations or wording
+are exempt and must be preserved. Do not inflate points merely to meet this default.
+The audit must respect this bound rather than demand finer subdivisions that violate it.
+"""
+
+
+def validate_generated_step_granularity(rules):
+    """Bound newly generated points per subquestion; never revalidate old grades."""
+    if rules.teacher_rubric or has_explicit_scoring_policy(rules.stem, rules.total_pts):
+        return
+    for part in rules.parts:
+        if (len(part.steps) <= 8 or all(step.total_pts >= 1 for step in part.steps)
+                or has_explicit_scoring_policy(part.stem or "", part.total_pts)):
+            continue
+        raise ValueError(
+            f"{part.label or part.id}: {len(part.steps)} generated steps include a step below 1 point. "
+            "Each subquestion must have at most 8 steps OR every step must be worth at least 1 point. "
+            "Merge related steps within this subquestion to reduce their count, preserving its total "
+            "budget, substantive obligations and all other subquestions. Never inflate budgets or "
+            "move credit across subquestions. Explicit teacher scoring rules take precedence."
+        )
+
+
 def render_parts(rubric, language="zh", *, full_policy=False):
     zh = language == "zh"
     unit = "分" if zh else " points"
@@ -1064,6 +1119,13 @@ Write concise teacher-facing criteria in the requested language. Put point amoun
 numeric fields, not repeatedly in criterion. Do not copy the entire question into every item.
 Split meaningful partial progress within a long proof step into separately funded, assessable items;
 each item is earned or missed under the existing ledger, not an invitation to invent a partial score.
+For AI-authored proof steps, check whether a student could establish one substantive result but
+lose its entire award because a different substantive result is missing. Separate those results
+before freezing the rubric. Locate each missing obligation in its own scoring item; do not make
+the same omission independently forfeit several bundled awards. Shared hypotheses and previously
+established results can remain context, and an independent later gap still needs its own judgment.
+Do not split routine algebra or restatements into additional funded achievements. Preserve explicit
+teacher allocations and conditions; this check does not authorize rewriting a teacher's policy.
 Complete an incomplete teacher rubric in its existing
 mode; do not turn missing details into permission to mix points and deductions.
 For explicit conditions that withhold a step's award, include the exact source clauses in that
@@ -1110,6 +1172,9 @@ use fraction strings, e.g. {"fraction":"1/3"}; absolute amounts (0.5分, 半分)
 use {"points":0.5}. For nonblank_floor instead use {"pts":0.5} for points or
 {"fraction":0.5} for a proportion of the question maximum. Never turn a proportion into a point.
 """
+
+
+PART_INSTRUCTION += GENERATED_STEP_GRANULARITY_INSTRUCTION
 
 
 TEACHER_RULE_INSTRUCTION = """
