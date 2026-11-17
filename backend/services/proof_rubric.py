@@ -19,11 +19,20 @@ from backend.tools.structured_llm import (
 )
 
 
+class ProofStepCheck(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    step_id: Key
+    separable_goals: bool = Field(strict=True)
+    duplicates: list[Key] = Field(max_length=100)
+    reason: Text
+
+
 class ProofPartCheck(BaseModel):
     model_config = ConfigDict(extra="forbid")
     part_id: Key
     verdict: Literal["consistent", "inconsistent", "uncertain"]
     reason: Text
+    steps: list[ProofStepCheck] = Field(min_length=1, max_length=100)
 
 
 class ProofRubricAudit(BaseModel):
@@ -61,6 +70,14 @@ Cover each part's own requirements; a sibling part's result cannot replace them.
 repeat the full question or use generic 'some progress', 'half complete' or 'local error' tiers.
 When meaningful partial progress is possible within an item, split it into separately assessable
 funded points. Use the mathematical content, not a fixed number of steps or a universal allocation.
+For each step, ask whether a student could establish one substantive achievement while leaving
+another substantive achievement unproved and consequently lose the entire bundled award.
+If so, set separable_goals=true and identify those achievements in reason. Routine algebra,
+restating a conclusion and consequences that immediately follow are not separate achievements.
+In duplicates list other step IDs that fund the same obligation or withhold their whole award
+for the same missing obligation; name that obligation in reason. A shared hypothesis or a prior
+result used only as context is not a duplicate. An independently unsupported later inference is
+not the same gap merely because it depends on an earlier result. Use [] when there is no overlap.
 Do not allocate points for copying givens, renaming symbols, unnecessary intermediate lines,
 restating a proved result, or repeated/equivalent versions of the same inference. Do not add a new
 theorem to prove. A short, genuinely indivisible proof may have one point item.
@@ -72,11 +89,18 @@ do not encode its error rates, caps or reference-step requirements in these prim
 
 
 async def audit_proof_steps(provider, task, rules):
-    expected = {part.id for part in rules.parts}
+    expected = {part.id: {step.id for step in part.steps} for part in rules.parts}
 
     def validate(audit):
-        if len(audit.parts) != len(expected) or {p.part_id for p in audit.parts} != expected:
+        if len(audit.parts) != len(expected) or {p.part_id for p in audit.parts} != set(expected):
             raise StructuredOutputInvalidError("Audit each supplied part ID exactly once.")
+        for part in audit.parts:
+            ids = expected[part.part_id]
+            if len(part.steps) != len(ids) or {step.step_id for step in part.steps} != ids:
+                raise StructuredOutputInvalidError("Audit each supplied step ID exactly once in its own part.")
+            if any(len(step.duplicates) != len(set(step.duplicates))
+                   or set(step.duplicates) - (ids - {step.step_id}) for step in part.steps):
+                raise StructuredOutputInvalidError("Duplicate obligations must cite other step IDs in the same part.")
 
     audit, _ = await structured_llm_call(
         provider,
@@ -96,6 +120,8 @@ async def audit_proof_steps(provider, task, rules):
         output_model=ProofRubricAudit, validate_output=validate,
     )
     failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict != "consistent"]
+    failures.extend(f"{part.part_id}/{step.step_id}: {step.reason}" for part in audit.parts
+                    for step in part.steps if step.separable_goals or step.duplicates)
     if failures:
         # Feed the actual defect to the existing bounded material-repair loop.
         raise ProofRubricUnverified("Proof scoring steps need correction: " + "; ".join(failures))

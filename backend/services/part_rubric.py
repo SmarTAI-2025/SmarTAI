@@ -1064,6 +1064,13 @@ Write concise teacher-facing criteria in the requested language. Put point amoun
 numeric fields, not repeatedly in criterion. Do not copy the entire question into every item.
 Split meaningful partial progress within a long proof step into separately funded, assessable items;
 each item is earned or missed under the existing ledger, not an invitation to invent a partial score.
+For AI-authored proof steps, check whether a student could establish one substantive result but
+lose its entire award because a different substantive result is missing. Separate those results
+before freezing the rubric. Locate each missing obligation in its own scoring item; do not make
+the same omission independently forfeit several bundled awards. Shared hypotheses and previously
+established results can remain context, and an independent later gap still needs its own judgment.
+Do not split routine algebra or restatements into additional funded achievements. Preserve explicit
+teacher allocations and conditions; this check does not authorize rewriting a teacher's policy.
 Complete an incomplete teacher rubric in its existing
 mode; do not turn missing details into permission to mix points and deductions.
 For explicit conditions that withhold a step's award, include the exact source clauses in that

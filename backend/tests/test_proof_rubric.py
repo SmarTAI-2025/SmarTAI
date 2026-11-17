@@ -31,8 +31,11 @@ def rubric():
                     alternative=dict(deduct_per_error=1.5))]))
 
 
-def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1"):
-    return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason)]})
+def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1", steps=None):
+    if steps is None:
+        steps = [dict(step_id=key, separable_goals=False, duplicates=[], reason=text)
+                 for key, _, text in POINTS]
+    return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason, steps=steps)]})
 
 
 def initial(rules=None, *, reference=True):
@@ -121,6 +124,76 @@ async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
     with pytest.raises(proof.ProofRubricUnverified):
         await proof.prepare_proof_steps(wrong, STEM, rules, reference_answer=REFERENCE, language="zh")
     assert len(wrong.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("defect", ["bundled", "duplicate"])
+async def test_step_defect_cannot_hide_behind_a_consistent_part_verdict(defect):
+    rules = rubric()
+    before = rules.model_dump_json()
+    steps = json.loads(audit())["parts"][0]["steps"]
+    issue = "square: the computation is independently scorable from the nonidentity argument"
+    steps[1].update(reason=issue, separable_goals=defect == "bundled",
+                    duplicates=["order"] if defect == "duplicate" else [])
+    provider = Provider([audit(steps=steps)])
+    with pytest.raises(proof.ProofRubricUnverified, match="p1/square") as error:
+        await proof.prepare_proof_steps(provider, STEM, rules, reference_answer=REFERENCE, language="en")
+    assert issue in str(error.value)
+    assert len(provider.calls) == 1 and rules.model_dump_json() == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["missing", "repeated", "foreign", "self", "duplicate_id"])
+async def test_step_audit_requires_exact_local_coverage_and_scoped_overlap(invalid):
+    steps = json.loads(audit())["parts"][0]["steps"]
+    if invalid == "missing":
+        steps.pop()
+    elif invalid == "repeated":
+        steps[-1] = steps[0]
+    else:
+        steps[0]["duplicates"] = {"foreign": ["other-part-step"], "self": ["normal"],
+                                   "duplicate_id": ["square", "square"]}[invalid]
+    provider = Provider([audit(steps=steps), audit(steps=steps)])
+    with pytest.raises(proof.ProofRubricUnverified):
+        await proof.prepare_proof_steps(provider, STEM, rubric(), language="en")
+    assert len(provider.calls) == 2  # Existing bounded format repair, never a new loop.
+
+
+@pytest.mark.asyncio
+async def test_indivisible_short_proof_needs_no_extra_funded_steps():
+    rules = rubric().model_copy(deep=True)
+    step = rules.parts[0].steps[0].model_copy(update={
+        "criterion": "Use the defining relation to establish the requested equality.", "total_pts": 10})
+    rules = rules.model_copy(update={"parts": (rules.parts[0].model_copy(update={"steps": (step,)}),)})
+    before = rules.model_dump_json()
+    provider = Provider([audit(steps=[dict(step_id=step.id, separable_goals=False,
+                                         duplicates=[], reason="A single immediate implication.")])])
+    assert await proof.prepare_proof_steps(provider, "Prove the equality.", rules, language="en") is rules
+    assert rules.model_dump_json() == before and len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_bundled_award_is_repaired_only_by_existing_material_retry():
+    bundled = rubric().model_copy(deep=True)
+    combined = bundled.parts[0].steps[1].model_copy(update={
+        "total_pts": 5, "criterion": "Prove the square is one and that the element is not the identity."})
+    part = bundled.parts[0]
+    bundled = bundled.model_copy(update={"parts": (part.model_copy(update={
+        "steps": (part.steps[0], combined, part.steps[-1])}),)})
+    checks = [dict(step_id=s.id, separable_goals=s.id == "square", duplicates=[],
+                   reason="Separate the square computation from the nonidentity argument."
+                          if s.id == "square" else "One independent achievement.") for s in bundled.parts[0].steps]
+    provider = Provider([initial(bundled), audit(steps=checks), initial(reference=False), audit()])
+    feedback = {}
+    first = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    assert [c.target for c in first] == ["reference_answer"]
+    assert "p1/square" in feedback["q1:criterion"]
+    second = await generate(provider, reference=False, existing_reference=first[0].text_value,
+                            allow_partial=True, repair_feedback=feedback)
+    frozen = RubricDraft.model_validate(second[0].rubric_draft).plan.part_rubric
+    assert [(s.id, s.total_pts, s.criterion) for s in frozen.parts[0].steps] == POINTS
+    assert frozen.parts[0].alternative.deduct_per_error == 1.5
+    assert len(provider.calls) == 4
 
 
 @pytest.mark.asyncio

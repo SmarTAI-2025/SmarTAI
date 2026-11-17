@@ -290,7 +290,9 @@ async def test_shared_evidence_guidance_scoped_to_requested_written_rubric(kind,
     replies = [json.dumps(payload)]
     if expected:
         replies += [json.dumps({"parts":[{"part_id":"p1", "goals":[{"target":question["stem"], "source_id":"question:1", "points":4}]}]}),
-                    json.dumps({"parts":[{"part_id":"p1", "verdict":"consistent", "reason":"One requested result."}]})]
+                    json.dumps({"parts":[{"part_id":"p1", "verdict":"consistent", "reason":"One requested result.",
+                        "steps":[{"step_id":"option", "separable_goals":False, "duplicates":[],
+                                  "reason":"The requested choice is indivisible."}]}]})]
     provider = Provider(replies)
     await generate_missing_question_materials({"q1": question}, [
         {"q_id": "q1", "target_id": "q1:criterion", "target": "criterion"}
