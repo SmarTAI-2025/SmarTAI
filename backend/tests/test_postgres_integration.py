@@ -1648,3 +1648,21 @@ def test_shared_sol_subcap_and_total_are_atomic_on_postgres(pg_database, monkeyp
     assert usage["shared"]["estimated_input_tokens"] == 100
     assert usage["shared_sol"]["requests"] == 5
     assert usage["shared_sol"]["estimated_input_tokens"] == 50
+
+
+def test_shared_text_probe_start_order_is_atomic_on_postgres(pg_database):
+    from backend.db.shared_image_repository import shared_image_evidence, set_shared_image_evidence
+    from backend.models import ProviderConfig
+    owner = _seed_user("teacher")
+    config = ProviderConfig(provider_type="openai", model="gpt-6-luna", api_key="synthetic")
+    def start(_):
+        return shared_image_evidence(owner, config, create=True, text_probe=True, start_probe=True)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        snapshots = list(pool.map(start, range(8)))
+    assert len({snapshot.updated_at for snapshot in snapshots}) == 8
+    latest = max(snapshots, key=lambda s:s.updated_at)
+    for snapshot in snapshots:
+        assert set_shared_image_evidence(owner, snapshot, status="verified", checked_at=123,
+            reason=None, text_probe=True) is (snapshot is latest)
+    assert shared_image_evidence(owner, config, text_probe=True).status == "verified"
+    assert shared_image_evidence(owner, config).status == "unverified"

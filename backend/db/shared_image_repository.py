@@ -7,7 +7,7 @@ import json
 import time
 from dataclasses import dataclass
 
-from sqlalchemy import update
+from sqlalchemy import case, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import settings
@@ -34,12 +34,27 @@ def shared_image_fingerprint(config: ProviderConfig) -> str:
     return hmac.new(settings.jwt_secret.encode(), content, hashlib.sha256).hexdigest()
 
 
-def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = False) -> SharedImageEvidence:
+def _next_text_probe_version():
+    now = time.time()
+    version = SharedProviderImageRecord.updated_at
+    # Atomic and strictly increasing, including simultaneous starts/processes
+    # and a wall clock that stalls or moves backwards. Not a displayed time.
+    return case((version >= now, version + 1), else_=now)
+
+
+def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = False,
+                          text_probe: bool = False, start_probe: bool = False) -> SharedImageEvidence:
+    if start_probe and not (text_probe and create):
+        raise ValueError("text_probe_start_requires_created_evidence")
     fingerprint = shared_image_fingerprint(config)
     # Fixed OpenAI presets each need independent evidence. Other configured
     # providers retain their legacy slot and edit/revert invalidation behavior.
     from backend.llm.registry import SHARED_OPENAI_MODELS
     slot = f"openai:{config.model}" if config.provider_type == "openai" and config.model in SHARED_OPENAI_MODELS else config.provider_type
+    # Reuse the bounded evidence record in a separate namespace, so text
+    # checks never replace image evidence and no credential is duplicated.
+    if text_probe:
+        slot = "text:" + slot
     with session_scope() as session:
         row = session.get(SharedProviderImageRecord, (owner, slot))
         if row is None and create:
@@ -57,14 +72,24 @@ def shared_image_evidence(owner: str, config: ProviderConfig, *, create: bool = 
             session.execute(update(SharedProviderImageRecord).where(
                 SharedProviderImageRecord.owner_id == owner, SharedProviderImageRecord.provider_type == slot,
                 SharedProviderImageRecord.updated_at == row.updated_at,
-            ).values(fingerprint=fingerprint, status="unverified", checked_at=None, reason=None, updated_at=time.time()))
+            ).values(fingerprint=fingerprint, status="unverified", checked_at=None, reason=None,
+                     updated_at=_next_text_probe_version() if text_probe else time.time()))
             session.refresh(row)
+        if start_probe:
+            # Claim the result slot when starting, not when finishing: only
+            # the latest-started request may publish its eventual result.
+            version = session.execute(update(SharedProviderImageRecord).where(
+                SharedProviderImageRecord.owner_id == owner, SharedProviderImageRecord.provider_type == slot,
+                SharedProviderImageRecord.fingerprint == fingerprint,
+            ).values(updated_at=_next_text_probe_version()).returning(SharedProviderImageRecord.updated_at)).scalar_one_or_none()
+            return SharedImageEvidence(slot, fingerprint, version, row.status, row.checked_at, row.reason)
         return SharedImageEvidence(slot, row.fingerprint, row.updated_at, row.status, row.checked_at, row.reason)
 
 
 def set_shared_image_evidence(owner: str, snapshot: SharedImageEvidence, *, status: str,
-                              checked_at: float, reason: str | None) -> bool:
-    if status not in {"passed", "unsupported", "inconclusive"}:
+                              checked_at: float, reason: str | None, text_probe: bool = False) -> bool:
+    allowed = {"verified", "failed"} if text_probe else {"passed", "unsupported", "inconclusive"}
+    if status not in allowed or snapshot.provider_type.startswith("text:") != text_probe:
         raise ValueError("invalid_image_capability_status")
     with session_scope() as session:
         if snapshot.updated_at is None:

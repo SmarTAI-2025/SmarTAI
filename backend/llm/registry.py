@@ -295,6 +295,13 @@ class ExpertRegistry:
             provider.config.image_checked_at = snapshot.checked_at
             provider.config.image_reason = snapshot.reason
             provider._image_rejection_recorder = partial(record_shared_image_rejection, self._shared_owner_id, snapshot)
+            text = shared_image_evidence(self._shared_owner_id, config, text_probe=True)
+            self._verification[provider_id] = {
+                "verification_status": text.status,
+                "last_checked_at": text.checked_at,
+                "verified_at": text.checked_at if text.status == "verified" else None,
+                "verification_error_code": text.reason,
+            }
 
     def register(
         self,
@@ -524,8 +531,10 @@ class ExpertRegistry:
                 # the original config for frozen workflow serialization.
                 provider = self._providers.get(pid)
                 image_config = provider.config if provider is not None else c
-                resolved_display_name = candidate_labels[pid]
-                if candidate_counts[resolved_display_name.casefold()] > 1:
+                # Fixed platform names stay short even beside a same-model
+                # BYOK; only owner configurations need route/ID disambiguation.
+                resolved_display_name = base_labels[pid] if shared else candidate_labels[pid]
+                if not shared and candidate_counts[resolved_display_name.casefold()] > 1:
                     resolved_display_name = (
                         f"{resolved_display_name} · {pid[-8:]}"
                     )
@@ -553,10 +562,7 @@ class ExpertRegistry:
                     "image_capability_status": image_config.image_capability_status,
                     "image_checked_at": _iso_utc_timestamp(image_config.image_checked_at),
                     "image_reason": image_config.image_reason,
-                    "verification_status": (
-                        "platform_managed" if shared
-                        else verification.get("verification_status", "unverified")
-                    ),
+                    "verification_status": verification.get("verification_status", "unverified"),
                     "last_checked_at": _iso_utc_timestamp(
                         verification.get("last_checked_at")
                     ),

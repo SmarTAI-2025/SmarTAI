@@ -6,6 +6,7 @@ export interface ModelPresentationSource {
   configured_display_name?: string | null;
   resolved_display_name?: string | null;
   endpoint_descriptor?: string | null;
+  is_shared?: boolean;
 }
 
 const OPAQUE_PROVIDER_LABEL = /^(?:[a-f0-9]{24,}|[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}|(?:cfg|config|provider)[_-][a-z0-9_-]{12,})$/i;
@@ -40,6 +41,11 @@ export function hasFriendlyModelName(expert: ModelPresentationSource): boolean {
 }
 
 export function modelDisplayName(expert: ModelPresentationSource): string {
+  // Normalize older cached labels too; personal BYOK keeps its own name.
+  if (expert.is_shared && expert.provider_type === "openai"
+      && ["gpt-6-luna", "gpt-6.1-terra", "gpt-6.1-sol"].includes(expert.model)) {
+    return `OpenAI · ${expert.model}`;
+  }
   const resolved = expert.resolved_display_name?.trim();
   if (resolved) return resolved;
   if (hasFriendlyModelName(expert)) return expert.display_name!.trim();
