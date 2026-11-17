@@ -2898,7 +2898,8 @@ async def generate_missing_question_materials(
         if reporter:
             await reporter._emit_message("Running the reference implementation to prepare test outputs.")
         try:
-            candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases)
+            candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases,
+                provider=provider, reporter=reporter)
         except (ValueError, HostCodeExecutionDisabled, IsolatedRunnerUnavailable, TimeoutError) as exc:
             if not allow_partial:
                 raise

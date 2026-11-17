@@ -40,7 +40,7 @@ def input_probes(cases):
     return probes
 
 
-async def resolve_generated_outputs(source, cases, *, execute=None):
+async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None):
     from backend.services.programming_runs import _reference, _reference_language, _source, _validate_report
     from backend.services.programming_input_domain import input_domain
     from backend.services.python_source_encoding import python_execution_source
@@ -88,8 +88,17 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
     identities = {case_input_key(problem.stem, c, reference=executable) for c in probes}
     if len(identities) != len(probes):
         raise ValueError("Supply distinct test inputs; repeated inputs must not change their scoring weight.")
-    if any(not c.sandbox_feasible or input_domain(problem, c) != "allowed" for c in probes):
+    if any(not c.sandbox_feasible for c in probes):
         raise ValueError("Use only runnable test inputs verifiably inside the question's stated domain.")
+    domains = [input_domain(problem, c) for c in probes]
+    feedback = {}
+    if "outside" not in domains:
+        from backend.services.programming_input_review import review_input_domains
+        domains = await review_input_domains(problem, probes, domains, provider, reporter=reporter, feedback=feedback)
+    if any(domain != "allowed" for domain in domains):
+        rejected = "; ".join(f"{i}: {domain}" + (f" — {feedback[i]}" if i in feedback else "")
+                             for i, domain in enumerate(domains, 1) if domain != "allowed")
+        raise ValueError("Test inputs outside or not supported by the question's domain (" + rejected + "). Repair only these inputs; preserve the question's constraints.")
     reference_cases = bind(probes)
     if all(case.io_mode == "stdin" for case in reference_cases):
         if language == "python":
