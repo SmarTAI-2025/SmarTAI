@@ -120,6 +120,43 @@ async def test_failed_field_keeps_valid_answer_and_retries_only_rubric(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_missing_programming_supplements_publish_review_without_manual_handoff(monkeypatch):
+    mock_supplied_rule_interpretation(monkeypatch)
+    owner, task, operation, _ = await setup(monkeypatch)
+    original = {**row(1, criterion="Correct implementation earns full credit.", reference_answer="Supplied answer."),
+                "type": "编程题", "stem": "Implement stable_softmax(xs). Return [] for an empty list."}
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([original])))
+    generate = AsyncMock(return_value=[])
+    monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
+    await api.run_durable_question_preparation(operation)
+    saved, rows = persisted(owner, operation)
+    assert generate.await_count == 3
+    assert saved.status == "done", saved.error_code
+    task_view = task_facade.get_task(task_id=task, owner_id=owner)
+    assert task_view["status"] == "problems_ready"
+    assert not task_view.get("error")
+    current = task_view["problem_data"]["q1"]
+    assert current["reference_answer"] == original["reference_answer"]
+    assert current["criterion"] == original["criterion"]
+    assert not current.get("test_cases")
+    warnings = [issue for issue in current["preparation_issues"] if issue["field"] == "programming_tests"]
+    assert len(warnings) == 1 and warnings[0]["severity"] == "warning"
+    assert any(issue["field"] == "programming_tests" for issue in rows["q1"]["preparation_issues"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [RuntimeError("provider_submit_uncertain"),
+    ValidationError("Transport failed", code="provider_upstream_unavailable")])
+async def test_optional_material_transport_failure_is_not_reported_as_ready(monkeypatch, failure):
+    _, _, _, pipeline = await setup(monkeypatch)
+    original = {**row(1, criterion="Supplied rubric", reference_answer="Supplied answer"), "type": "编程题"}
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([original])))
+    monkeypatch.setattr(inc, "generate_missing_question_materials", AsyncMock(side_effect=failure))
+    with pytest.raises(type(failure)):
+        await pipeline.run()
+
+
+@pytest.mark.asyncio
 async def test_manual_handoff_does_not_publish_malformed_generated_unicode(monkeypatch):
     from backend.tests.test_question_material_format_repair import Provider
     from backend.tools.structured_llm import StructuredOutputInvalidError

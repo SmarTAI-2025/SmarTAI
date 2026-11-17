@@ -7,6 +7,21 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("uses the same missing-test advisory for the matrix, queue and detail without blocking", () => {
+    const row = question({ type: "编程题", test_cases: [] });
+    const issues = questionReviewIssues(row);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ field: "programming_tests", severity: "warning" });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toEqual([
+      { severity: "advisory", label: "测试样例尚未提供，请核对或补充。" },
+    ]);
+    expect(questionReviewNextBlocked(row)).toBe(false);
+    expect(questionReviewBlocked(row)).toBe(false);
+    expect(questionReviewIssues({ ...row, review_status: "confirmed" })).toEqual([]);
+    expect(questionReviewIssues(question())).toEqual([]);
+    const persisted = issue({ field: "programming_tests", code: "generation_failed" });
+    expect(questionReviewIssues({ ...row, preparation_issues: [persisted] })).toHaveLength(1);
+  });
   it("shows an unexplained alternative cap as a numerical advisory", () => {
     const warning = issue({ field: "rubric", code: "math_rubric_advisory", details: {
       reason: "alternative_cap_review", alternative_caps: [{ label: "(1)", maximum: .15625, total: 1.25 }] } });

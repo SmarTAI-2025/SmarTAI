@@ -1,6 +1,7 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
 import { formatSubmissionFlag, hasQuestionType, questionIssueCodeLabel } from "./reviewLabels";
+import { isProgrammingProblem } from "./questionPreparation";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -81,6 +82,8 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
   if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"
     ? "缺少标答（可选），可按需补充。" : "The reference answer is optional; add one if helpful.";
+  if (issue.details?.review_display_reason === "missing_tests") return locale === "zh-CN"
+    ? "测试样例尚未提供，请核对或补充。" : "Test cases have not been provided. Review or add them.";
   if (issue.code === "generation_failed") {
     const labels: Record<string, [string, string]> = {
       stem: ["题干缺失，请对照原件补齐。", "Question text is missing. Complete it against the source."],
@@ -202,6 +205,9 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   if (!problem.criterion?.trim()) add("rubric", "manual_completion_required", "missing_rubric");
   if (problem.rubric_point_summary?.is_valid === false) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
   if (!confirmed && !problem.reference_answer?.trim()) add("answer", "generation_failed", "missing_answer", "warning");
+  if (!confirmed && isProgrammingProblem(problem) && !problem.test_cases?.length) {
+    add("programming_tests", "generation_failed", "missing_tests", "warning");
+  }
   return issues.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }
 
