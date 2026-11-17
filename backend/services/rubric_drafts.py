@@ -11,7 +11,7 @@ from decimal import Decimal
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, TypeAdapter
 
 from backend.services.part_rubric import Key, PartRubric, Points, bind_alternative, bind_parts, render_parts
 from backend.services.teacher_point_allocations import TeacherPolicyCheck, TeacherPolicyUnresolved
@@ -83,6 +83,38 @@ class RubricDefinition(WrittenRubricDefinition):
     advisories: tuple[str, ...] = Field(default=(), max_length=20)
 
 
+def _point_budget(value):
+    if isinstance(value, bool):
+        return None
+    try:
+        points = TypeAdapter(Points).validate_python(value)
+    except ValueError:
+        return None
+    return Decimal(str(points)) if points > 0 else None
+
+
+def _complete_step_budget(part):
+    if not isinstance(part, dict) or not isinstance(steps := part.get("steps"), list):
+        return part
+    if not all(isinstance(step, dict) for step in steps):
+        return part
+    missing = [i for i, step in enumerate(steps) if "total_pts" not in step]
+    if len(missing) != 1 or (total := _point_budget(part.get("total_pts"))) is None:
+        return part
+    known = [_point_budget(step["total_pts"]) for step in steps if "total_pts" in step]
+    if any(points is None for points in known):
+        return part
+    remainder = total - sum(known, Decimal(0))
+    if remainder <= 0:
+        return part
+    # Complete a rubric budget, never a student award. Keep every supplied
+    # value and let the existing schema/source checks validate the whole rule.
+    return {**part, "steps": [
+        {**step, "total_pts": float(remainder)} if i == missing[0] else step
+        for i, step in enumerate(steps)
+    ]}
+
+
 def source_bound_definition(definition, source, *, check_labels=True, singleton_id="p1"):
     """Decode an untrusted proposal using the destination question at either input entry."""
     from backend.tools.structured_llm import StructuredOutputInvalidError
@@ -136,7 +168,13 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
                 )
                 raise error
             if isinstance(children[0], dict):
-                proposal["parts"] = [{**children[0], "label": None, "stem": None}]
+                child = {**children[0], "label": None, "stem": None}
+                if ("total_pts" not in child
+                        and (source.get("question_structure") or {}).get("subparts") == []
+                        and (maximum := _point_budget(source.get("max_score"))) is not None
+                        and _point_budget(proposal.get("total_pts")) == maximum):
+                    child["total_pts"] = float(maximum)
+                proposal["parts"] = [child]
         if check_labels and expected_labels and isinstance(children, list):
             seen = {canonical_label(p.get("label"), source.get("number")) for p in children if isinstance(p, dict) and isinstance(p.get("label"), str)}
             missing = [label for label in expected_labels if canonical_label(label) not in seen]
@@ -146,6 +184,8 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
                 error = StructuredOutputInvalidError("Missing required rubric parts.")
                 error.repair_context = message
                 raise error
+        if isinstance(proposal.get("parts"), list):
+            proposal["parts"] = [_complete_step_budget(part) for part in proposal["parts"]]
         # The envelope is identity checked separately. Question text, display
         # number and ID come from storage and cannot be changed by a model.
         return {**definition, "part_rubric": {

@@ -60,7 +60,7 @@ def test_missing_values_are_checked_only_in_applicable_scoring_items(route):
 async def test_generated_invalid_step_retains_values_for_review_without_executable_rules():
     from backend.agents.ingest_agent import generate_missing_question_materials
     raw = proposed()
-    raw["parts"][0]["steps"][1].pop("total_pts")
+    raw["parts"][0]["steps"][1]["total_pts"] = -1
     response = {"candidates": [{"target_id": "q1:criterion", "rubric_definition": {"part_rubric": raw}}]}
     review, feedback = {}, {}
     result = await generate_missing_question_materials({"q1": make_row("")},
