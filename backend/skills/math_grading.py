@@ -1013,6 +1013,18 @@ def _review_error_code(exc):
     return "invalid_mathematical_ledger"
 
 
+def _review_schema_errors(exc):
+    """Persist schema locations/types, never rejected values or error messages."""
+    schema = ExpertReview.model_json_schema()
+    part_schema = ProofPartReview.model_json_schema()
+    definitions = [schema, part_schema, *schema.get("$defs", {}).values(),
+                   *part_schema.get("$defs", {}).values()]
+    fields = {name for definition in definitions for name in definition.get("properties", {})}
+    return [{"loc": [item if isinstance(item, int) or item in fields else "unknown_field"
+                     for item in error["loc"]], "type": error["type"]}
+            for error in exc.errors(include_input=False, include_context=False, include_url=False)[:8]]
+
+
 def _review_index(entry):
     value = entry.get("expert_index") if isinstance(entry, dict) else getattr(entry, "expert_index", None)
     try:
@@ -1184,7 +1196,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         # pending evidence are intact. Always finish the admitted joint review.
 
     from backend.services.grading_memory import prepared_grading
-    async with prepared_grading(provider):
+    async with prepared_grading(provider, review=True):
         reviewed = await _review_math_experts(problem, answer, experts, provider, language=language,
             grading_setup=grading_setup, plan=plan, traces=traces, assessments=assessments,
             disputed=disputed, other_dispute=other_dispute, relevance_review=relevance_review,
@@ -1233,6 +1245,7 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
     part_revision = ProofPartRevision if problem.type == "推理题" else PartRevision
     accepted = {}
     validation_issues = []
+    schema_errors = []
     last_review = None
     rejected_indices = set()
 
@@ -1284,8 +1297,11 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
             except ValueError as exc:
                 issues.append({"expert_index": index if index is not None and 0 <= index < len(experts) else None,
                                "code": _review_error_code(exc)})
+                if isinstance(exc, ValidationError) and len(schema_errors) < 10:
+                    schema_errors.append({"expert_index": index if index is not None and 0 <= index < len(experts) else None,
+                                          "errors": _review_schema_errors(exc)})
                 # Give the model its rejected edit and detailed grounding context
-                # on repair. Only the bounded error codes go to the private trace.
+                # on repair. The private trace keeps only codes and safe schema locations.
                 if revision is not None:
                     repair_details.append({"revision": revision.model_dump(mode="json"),
                                            "detail": getattr(exc, "repair_context", None)})
@@ -1364,6 +1380,11 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 "Identify what the text establishes before comparing the awards. A valid alternative proof "
                 "can meet the same obligation; a missing substantive implication cannot be supplied by you. "
                 "Keep defensible differences in partial credit. Never average or aim for consensus here. "
+                "For each disputed scoring obligation, check every expert's judgment against the same "
+                "student evidence and frozen rule. An explanation supporting one expert alone does not "
+                "resolve a contradictory judgment by another; identify any evidenced error in that "
+                "other judgment and revise its expert_index. Retain both judgments when both remain "
+                "defensible. Rewording feedback alone does not correct a scoring disagreement. "
                 + ("Grouped proof entries contain mathematical_observations, not authoritative verdicts. "
                    "Their old completion and loss tiers are intentionally withheld. Check each claimed gap "
                    "against the whole submitted argument before choosing a frozen tier: carry out any "
@@ -1442,7 +1463,8 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                     status = "revised"
                 elif index in rejected_indices:
                     status = "invalid_revision"
-                trace["review_diagnostic"] = {"status": status, "validation_issues": validation_issues}
+                trace["review_diagnostic"] = {"status": status, "validation_issues": validation_issues,
+                    **({"schema_errors": schema_errors} if schema_errors else {})}
                 revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
         for index, expert in enumerate(revised):
             trace = read_math_trace(expert)
@@ -1454,6 +1476,18 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
             current = MathAssessment.model_validate(trace["assessment"])
             trace["review_pending"] = _evidence_pending(current, trace.get("evidence", []))
             trace.pop("review_advisory", None)
+            revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
+        remaining = math_scoring_disagreement(revised)
+        for index, expert in enumerate(revised):
+            if index not in accepted:
+                continue  # Keep untouched votes byte-for-byte intact.
+            trace = dict(read_math_trace(expert))
+            trace["review_outcome"] = {
+                "provider": provider.provider_id, "accepted_revision": index in accepted,
+                "score_changed": expert.score != experts[index].score,
+                "step_scores_changed": [s.score for s in expert.steps] != [s.score for s in experts[index].steps],
+                "scoring_disagreement_remaining": remaining,
+            }
             revised[index] = expert.model_copy(update={"raw_output": _json(trace)})
         return [_with_pending_advice(expert, language) for expert in revised]
     except Exception as exc:
@@ -1467,7 +1501,9 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
         for expert, trace in zip(experts, traces):
             trace = dict(trace, review_failure=type(exc).__name__, review_diagnostic={
                 "status": "failed", "stage": failure_stage, "error_type": type(exc).__name__,
-                "validation_issues": validation_issues})
+                "provider": provider.provider_id, "error_kind": classify_skill_error(exc)[0],
+                "validation_issues": validation_issues,
+                **({"schema_errors": schema_errors} if schema_errors else {})})
             retained.append(_with_pending_advice(expert.model_copy(update={"raw_output": _json(trace)}), language))
         return retained  # A failed optional review never erases valid grades.
 

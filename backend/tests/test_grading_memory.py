@@ -133,6 +133,96 @@ async def test_prepared_window_is_bounded_and_other_expert_keeps_running():
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+@pytest.mark.asyncio
+async def test_queued_review_does_not_wait_for_the_whole_initial_batch():
+    provider = SimpleNamespace(provider_id="busy")
+    entered, active = [], set()
+    gates = [asyncio.Event() for _ in range(218)]
+
+    async def grade(i, *, review=False):
+        async with prepared_grading(provider, review=review):
+            entered.append(i)
+            active.add(i)
+            assert len(active) <= HARD_LIMIT
+            try:
+                await gates[i].wait()
+            finally:
+                active.remove(i)
+
+    tasks = [asyncio.create_task(grade(i)) for i in range(217)]
+    try:
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert entered == list(range(HARD_LIMIT))
+        tasks.append(asyncio.create_task(grade(217, review=True)))
+        await asyncio.sleep(0)
+        gates[0].set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert entered[HARD_LIMIT:] == [217]
+        # An initial grade gets the next vacancy; reviews cannot monopolize it.
+        gates[1].set()
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert entered[HARD_LIMIT:] == [217, HARD_LIMIT]
+        for gate in gates:
+            gate.set()
+        await asyncio.gather(*tasks)
+        assert len(entered) == 218 and not active
+        assert asyncio.get_running_loop()._smartai_grading_windows == {}
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_preparation_alternates_busy_lanes_without_starving_either(monkeypatch):
+    from backend.services import grading_memory
+    monkeypatch.setattr(grading_memory, "HARD_LIMIT", 1)
+    provider, order = object(), []
+
+    async def work(label, review):
+        async with prepared_grading(provider, review=review):
+            order.append(label)
+            await asyncio.sleep(0)
+
+    async with prepared_grading(provider):
+        tasks = [asyncio.create_task(work(f"initial{i}", False)) for i in range(4)]
+        tasks += [asyncio.create_task(work(f"review{i}", True)) for i in range(4)]
+        await asyncio.sleep(0)
+    await asyncio.gather(*tasks)
+    assert order == [label for i in range(4) for label in (f"review{i}", f"initial{i}")]
+    assert asyncio.get_running_loop()._smartai_grading_windows == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_grant", [False, True])
+async def test_cancelled_review_returns_waiting_or_just_granted_permit(monkeypatch, after_grant):
+    from backend.services import grading_memory
+    monkeypatch.setattr(grading_memory, "HARD_LIMIT", 1)
+    provider = object()
+    occupied = prepared_grading(provider)
+    await occupied.__aenter__()
+
+    async def review():
+        async with prepared_grading(provider, review=True):
+            pytest.fail("Cancelled review must not start work.")
+
+    task = asyncio.create_task(review())
+    await asyncio.sleep(0)
+    if after_grant:
+        await occupied.__aexit__(None, None, None)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    if not after_grant:
+        await occupied.__aexit__(None, None, None)
+    async with asyncio.timeout(1):
+        async with prepared_grading(provider):
+            pass
+    assert asyncio.get_running_loop()._smartai_grading_windows == {}
+
+
 def test_idle_reclaim_rereads_memory_without_lowering_reserve():
     clock, host = FakeClock(), FakeHost()
     available, calls = [450], []
