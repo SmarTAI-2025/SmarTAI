@@ -2471,7 +2471,7 @@ async def generate_missing_question_materials(
                     "The RESPONSE is an object with a candidates array. Example of the two different targets: "
                     '{"candidates":[{"target_id":"q1:reference_answer","text_value":"...worked answer..."},'
                     '{"target_id":"q1:criterion","rubric_definition":{"part_rubric":{"total_pts":10,'
-                    '"parts":[{"id":"p1","label":null,"stem":null,"total_pts":10,"steps":'
+                    '"parts":[{"id":"p1","label":null,"total_pts":10,"steps":'
                     '[{"id":"s1","criterion":"...mathematical goal...","total_pts":10}],'
                     '"alternative":{"deduct_per_error":1}}]}}}]}. '
                     "Return only requested entries. Use the source maximum, actual independent goals and "
@@ -2488,7 +2488,7 @@ async def generate_missing_question_materials(
                         uses_math_grading(problems_data[row["q_id"]].get("type") or "")
                         for row in target_rows if row["target_id"] in part_targets) else "")
                     + "\nUse WrittenRubricDefinition for these targets: "
-                    + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Copy rubric_question identity and source fields; "
+                    + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Preserve rubric_question part IDs and labels; the server binds source text and provenance. "
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
                     "Return one separate candidate per requested target. Never attach a rubric to a reference "
                     "when a criterion candidate was also requested." + "\n" + _GENERATED_MATERIAL_GUIDANCE)
@@ -2500,11 +2500,8 @@ async def generate_missing_question_materials(
         if any(len(entry["rubric_question"]["parts"]) > 1 for entry in problem_context if entry.get("rubric_question")):
             guidance += (" Give unweighted parallel instances of the same task and response form equal budgets. "
                          "Use parallel_part_budgets verbatim when present; distinct deliverables may differ.")
-        schema = WrittenRubricDefinition.model_json_schema()
-        # These three fields are bound to the source in source_bound_candidate.
-        # Asking for them in output made long questions spend tokens copying input.
-        rule_schema = schema["$defs"]["PartRubric"]
-        rule_schema["required"] = [k for k in rule_schema["required"] if k not in {"id", "label", "stem"}]
+        from backend.services.rubric_drafts import written_proposal_schema
+        schema = written_proposal_schema()
         if len(problem_context) == 1:
             count = len(problem_context[0]["rubric_question"]["parts"])
             schema["$defs"]["PartRubric"]["properties"]["parts"].update(minItems=count, maxItems=count)

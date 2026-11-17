@@ -274,6 +274,8 @@ beforeEach(() => {
   testState.locale = "zh-CN";
   HTMLElement.prototype.scrollIntoView = vi.fn();
   taskData.problem_data.Q1.type = "reasoning";
+  taskData.problem_data.Q1.criterion = "Rubric one";
+  taskData.problem_data.Q1.preparation_issues = [];
   mutateAsync.mockReset();
   changeModel.mockReset().mockResolvedValue({ question_recognition_provider_id: "retry-model", workflow_revision: 8 });
   taskData.workflow_revision = 7;
@@ -657,7 +659,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "题目准备模型" })).toHaveFocus());
   });
 
-  it("shows the usable and missing scoring values when confirmation cannot seal a rubric", async () => {
+  it("keeps saved scoring text when confirmation fails without a second readonly scoring panel", async () => {
     mutateAsync.mockRejectedValueOnce(new APIError(422, "invalid rubric", { error: {
       code: "invalid_structured_rubric", details: { rubric_review_draft: {
         fields: [{ path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
@@ -666,10 +668,37 @@ describe("QuestionPreparationDetailPage navigation", () => {
     } }));
     await renderPage();
     await userEvent.click(screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0]);
-    const retained = await screen.findByLabelText("待核对的评分项");
-    expect(retained).toHaveTextContent("步骤 1 · 满分3 分");
-    expect(retained).toHaveTextContent("步骤 2 · 满分待核对");
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("待核对的评分项")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    expect(screen.getByRole("textbox", { name: "第 1 题评分标准" })).toHaveValue("Rubric one");
     expect(mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows recovered scoring content in the existing field and saves through the original editor", async () => {
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    taskData.problem_data.Q1.criterion = "";
+    taskData.problem_data.Q1.preparation_issues = [{ issue_id: "pending", field: "rubric", code: "generation_failed",
+      severity: "blocking", status: "open", details: { reason: "invalid_structured_rubric", rubric_review_draft: {
+        fields: [{ path: "part_rubric.parts[0].steps[0].criterion", value: "建立等式" },
+          { path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
+        invalid_fields: ["part_rubric.parts[0].steps[1].total_pts"],
+      } } }];
+    await renderPage();
+    expect(screen.queryByLabelText("待核对的评分项")).toBeNull();
+    expect(screen.queryByText("尚未提供评分标准。")).toBeNull();
+    expect(screen.getByText(/评分要求：建立等式/)).toBeVisible();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    const input = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+    expect((input as HTMLTextAreaElement).value).toContain("评分要求：建立等式");
+    expect((input as HTMLTextAreaElement).value).toContain("步骤 2 · 满分：待核对");
+    const corrected = "(a) 建立等式4分；(b) 计算结果6分。";
+    await userEvent.clear(input);
+    await userEvent.type(input, corrected);
+    await userEvent.click(within(input.closest("section")!).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", criterion: corrected, max_score: 10 })));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "第 1 题评分标准" })).toBeNull());
   });
 
   it("opens a failed question outside the current filter directly", async () => {

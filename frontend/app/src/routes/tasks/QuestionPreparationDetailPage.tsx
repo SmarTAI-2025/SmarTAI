@@ -1,6 +1,6 @@
 import { questionSaveError } from "@/lib/questionSaveError";
 import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
-import { RubricReviewDetails, RubricReviewErrorDetails } from "@/components/tasks/RubricReviewDetails";
+import { rubricReviewText } from "@/lib/rubricReviewText";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -342,7 +342,6 @@ function QuestionPreparationDetailPageForm() {
       {failure ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-4 text-sm">
         <p>{tx(locale, `已确认 ${failure.completed} 道题；请核对第 ${failure.problem.number || "—"} 题。`, `${failure.completed} questions confirmed. Review question ${failure.problem.number || "—"}.`)}</p>
         <p className="mt-1">{questionSaveError(failure.error, locale)}</p>
-        <RubricReviewErrorDetails error={failure.error} locale={locale} />
         <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
         <button type="button" onClick={() => {
           if (filtered.some((problem) => problem.q_id === failure.problem.q_id)) scrollToQuestion(failure.problem.q_id);
@@ -518,7 +517,8 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
 }) {
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = problem.criterion ?? "";
-  const scoringRules = problem.effective_criterion?.trim() || originalCriterion;
+  const editableCriterion = originalCriterion.trim() ? originalCriterion : rubricReviewText(problem.preparation_issues, locale);
+  const scoringRules = problem.effective_criterion?.trim() || editableCriterion;
   const alternativeGroups = new Map<string, string[]>();
   for (const part of problem.alternative_rules ?? []) {
     if (part.show_in_review === false) continue;
@@ -533,10 +533,9 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const manualEditing = useManualEditor(problem, ["criterion"]);
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [scoreDraft, setScoreDraft] = useState(originalScore);
-  const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
+  const [criterionDraft, setCriterionDraft] = useState(editableCriterion);
   const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [reviewError, setReviewError] = useState<unknown>();
   const dirty = editing && (
     scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
   );
@@ -556,7 +555,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
     [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, needsStructuredReview, scoreDraft],
   );
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, originalCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
+  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: editableCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, editableCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
   const leave = useDraftLeave();
   const savedSummary = problem.rubric_point_summary
     ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
@@ -566,9 +565,9 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     if (!editing && !localDraft.savedAt) {
       setScoreDraft(originalScore);
       setAlternateDrafts({});
-      setCriterionDraft(originalCriterion);
+      setCriterionDraft(editableCriterion);
     }
-  }, [editing, originalCriterion, originalScore]);
+  }, [editing, editableCriterion, originalScore]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
@@ -578,13 +577,11 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
       return;
     }
     setError(null);
-    setReviewError(undefined);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
-      setReviewError(error);
       setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
@@ -605,7 +602,6 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         </button> : null}
       </div>
 
-      {editing && reviewError ? <RubricReviewErrorDetails error={reviewError} locale={locale} /> : null}
       {editing ? (
         <div className="mt-3 space-y-3">
           <label className="block">
@@ -647,7 +643,6 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
-      <RubricReviewDetails issues={problem.preparation_issues} locale={locale} />
       {legacyRubricNotes.length > 0 && <aside role="note" className="mt-4 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
         <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
         {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}

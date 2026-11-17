@@ -38,39 +38,42 @@ class _WrittenProposal(RootModel[dict]):
 
     @classmethod
     def model_json_schema(cls, *args, **kwargs):
-        schema = WrittenRubricDefinition.model_json_schema(*args, **kwargs)
-        from backend.services.rubric_display import DisplayProposal
-        display_schema = DisplayProposal.model_json_schema()
-        schema["$defs"].update(display_schema.pop("$defs", {}))
-        schema["properties"]["display_plan"] = display_schema
-        types = schema["$defs"]
-        program_fields = {
-            "PartRubric": ("id", "label", "stem", "teacher_rubric", "rubric_origin", "rubric_version", "base_unit_pts", "follow_through_strictness"),
-            "RubricPart": ("origin_overrides", "stem", "subpart_id"),
-            "PointStep": ("follow_through_keep",),
-            "Alternative": ("inferred_method_cap",),
-        }
-        for name, fields in program_fields.items():
-            shape = types[name]
-            for key in fields:
-                shape["properties"].pop(key, None)
-            if "required" in shape:
-                shape["required"] = [k for k in shape["required"] if k not in fields]
-        types["PointStep"]["properties"]["follow_through_pts"]["description"] = (
-            "Optional award for correct downstream work on a previously wrong value. "
-            "It must not exceed this step's total_pts. Omit when unspecified.")
-        # The persisted model accepts old/incomplete drafts. The generation
-        # contract must describe the stricter acceptance rule, otherwise a
-        # response can follow its schema yet fail the numerical binding step.
-        types["RubricPart"]["required"] = list(dict.fromkeys([
-            *types["RubricPart"].get("required", []), "alternative"]))
-        types["Alternative"]["required"] = list(dict.fromkeys([
-            *types["Alternative"].get("required", []), "deduct_per_error"]))
-        types["Alternative"]["properties"]["deduct_per_error"]["description"] = (
-            "Supply a positive deduction in absolute points for this part's variable "
-            "alternative policy. Null is allowed only for a fixed award whose minimum "
-            "equals its maximum. Preserve explicit teacher rules; do not copy example values.")
-        return schema
+        return written_proposal_schema(*args, **kwargs)
+
+
+def written_proposal_schema(*args, **kwargs):
+    """The same provider contract for generation, interpretation and repair."""
+    schema = WrittenRubricDefinition.model_json_schema(*args, **kwargs)
+    from backend.services.rubric_display import DisplayProposal
+    display_schema = DisplayProposal.model_json_schema()
+    schema["$defs"].update(display_schema.pop("$defs", {}))
+    schema["properties"]["display_plan"] = display_schema
+    types = schema["$defs"]
+    program_fields = {
+        "PartRubric": ("id", "label", "stem", "teacher_rubric", "rubric_origin", "rubric_version", "base_unit_pts", "follow_through_strictness"),
+        "RubricPart": ("origin_overrides", "stem", "subpart_id"),
+        "PointStep": ("follow_through_keep",),
+        "Alternative": ("inferred_method_cap",),
+    }
+    for name, fields in program_fields.items():
+        shape = types[name]
+        for key in fields:
+            shape["properties"].pop(key, None)
+        if "required" in shape:
+            shape["required"] = [k for k in shape["required"] if k not in fields]
+    types["PointStep"]["properties"]["follow_through_pts"]["description"] = (
+        "Optional award for correct downstream work on a previously wrong value. "
+        "It must not exceed this step's total_pts. Omit when unspecified.")
+    # The generation contract includes the stricter acceptance requirements.
+    types["RubricPart"]["required"] = list(dict.fromkeys([
+        *types["RubricPart"].get("required", []), "alternative"]))
+    types["Alternative"]["required"] = list(dict.fromkeys([
+        *types["Alternative"].get("required", []), "deduct_per_error"]))
+    types["Alternative"]["properties"]["deduct_per_error"]["description"] = (
+        "Supply a positive deduction in absolute points for this part's variable "
+        "alternative policy. Null is allowed only for a fixed award whose minimum "
+        "equals its maximum. Preserve explicit teacher rules; do not copy example values.")
+    return schema
 
 
 class RubricDefinition(WrittenRubricDefinition):
@@ -185,7 +188,24 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
                 error.repair_context = message
                 raise error
         if isinstance(proposal.get("parts"), list):
-            proposal["parts"] = [_complete_step_budget(part) for part in proposal["parts"]]
+            parts = []
+            for part in proposal["parts"]:
+                if isinstance(part, dict):
+                    part = dict(part)
+                    # These question-level annotations sometimes appear on a
+                    # child. Provenance is rebound from the source below; no
+                    # scoring field is discarded or inferred here.
+                    if "rubric_origin" in part:
+                        TypeAdapter(Literal["teacher", "ai"]).validate_python(part.pop("rubric_origin"))
+                    if "teacher_gaps" in part:
+                        field = PartRubric.model_fields["teacher_gaps"]
+                        from typing import Annotated
+                        adapter = TypeAdapter(Annotated[field.annotation, *field.metadata])
+                        gaps = adapter.validate_python(part.pop("teacher_gaps"))
+                        previous = adapter.validate_python(proposal.get("teacher_gaps", ()))
+                        proposal["teacher_gaps"] = list(dict.fromkeys((*previous, *gaps)))
+                parts.append(_complete_step_budget(part))
+            proposal["parts"] = parts
         # The envelope is identity checked separately. Question text, display
         # number and ID come from storage and cannot be changed by a model.
         return {**definition, "part_rubric": {
@@ -370,7 +390,11 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         explanation = _Explanation(routes=(MathRubricRoute(id="parts", description="Apply the frozen per-part rubric.",
             applies_when="always", mode="holistic"),), effective_criterion=criterion,
             follow_through=definition.follow_through, numerical_policy=definition.numerical_policy,
-            advisories=(*rules.teacher_gaps, *(("教师评分规则的识别置信度低，请核对原文。" if language == "zh" else "Low confidence interpreting the teacher rubric. Check the original wording.",) if rules.low_confidence else ())))
+            advisories=(*rules.teacher_gaps, *((
+                ("教师评分规则的识别置信度低，请核对原文。" if language == "zh" else "Low confidence interpreting the teacher rubric. Check the original wording.")
+                if rules.teacher_rubric else
+                ("评分标准置信度较低，请核对评分依据与配分。" if language == "zh" else "Low confidence in the rubric. Review its scoring criteria and allocations."),
+            ) if rules.low_confidence else ())))
         base = _build_plan(_question_input(completed), explanation, reason="frozen_part_rubric")
         body = base.model_dump(mode="json", exclude={"plan_id"})
         body["part_rubric"] = rules.model_dump(mode="json")

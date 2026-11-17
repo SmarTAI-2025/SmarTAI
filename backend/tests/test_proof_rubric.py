@@ -84,15 +84,34 @@ async def test_one_generation_one_audit_freezes_concrete_steps(reference, existi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verdict", ["inconsistent", "uncertain"])
-async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling(verdict):
+async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling():
     issue = "square: the reference uses an invalid exponent identity"
     feedback = {}
-    provider = Provider([initial(), audit(verdict, issue)])
+    provider = Provider([initial(), audit("inconsistent", issue)])
     candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
     assert [c.target for c in candidates] == ["reference_answer"]
     assert issue in feedback["q1:criterion"]
     assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bundled", [[], ["square"]])
+async def test_uncertainty_keeps_valid_rules_with_review_advice_instead_of_missing_content(bundled):
+    from backend.services import task_facade
+    from types import SimpleNamespace
+    provider = Provider([initial(), audit("uncertain", "Review the identity and its allocation.", bundled_steps=bundled)])
+    feedback, review = {}, {}
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    candidate = next(c for c in candidates if c.target == "criterion")
+    frozen = RubricDraft.model_validate(candidate.rubric_draft)
+    assert len(candidates) == 2 and not feedback and not review
+    assert frozen.plan.part_rubric.low_confidence
+    assert [(s.id, s.total_pts, s.criterion) for s in frozen.plan.part_rubric.parts[0].steps] == POINTS
+    assert len(provider.calls) == 2
+    question = SimpleNamespace(q_id="q1", source={"presentation": {}})
+    issue, = task_facade._math_rubric_advisory(question, frozen.plan, "zh")
+    assert issue["severity"] == "warning" and issue["code"] == "math_rubric_advisory"
+    assert "评分依据" in issue["details"]["message"]
 
 
 @pytest.mark.asyncio
