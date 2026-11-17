@@ -3,6 +3,11 @@ reference answer and teacher cases describe the problem. Alternative correct
 implementations can earn full credit. A reference marked in ai_generated_fields
 is supplementary and cannot certify test expectations. Apply each specified allocation as written.
 When the teacher gives a holistic criterion, score that criterion holistically.
+When frozen_scoring_items are supplied, preserve their order, step_no and budgets.
+The test_suite item is one aggregate award already calculated by the server;
+copy its provided score. Assess the other code items independently without
+deducting the same functional failure again under another name. Do not split
+individual test cases into separate rubric steps.
 Do not invent dimensions or deductions for style, efficiency, edge cases or a
 test-pass percentage unless the rubric calls for them.
 

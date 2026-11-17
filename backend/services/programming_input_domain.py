@@ -321,8 +321,10 @@ def _value_constraint(part, values, names, stdin):
 
 def input_domain(problem, case):
     """Return 'allowed', 'outside', or 'unknown' for a supplemental case only."""
+    from backend.services.programming_rubric import domain_criterion
     stem = problem.stem or ""
-    if len(stem) + len(problem.criterion or "") > 16384:
+    criterion = domain_criterion(problem)
+    if len(stem) + len(criterion or "") > 16384:
         return "unknown"
     try:
         name = required_function_name(stem)
@@ -346,7 +348,7 @@ def input_domain(problem, case):
         return "allowed" if sig is not None and not sig.parameters else "unknown"
     names = "|".join(re.escape(n) for n in sorted(values, key=len, reverse=True))
     tested, unknown = set(), False
-    for raw, rubric in _declarations(stem, problem.criterion):
+    for raw, rubric in _declarations(stem, criterion):
         # A comparison inside an instruction, example or conditional branch is
         # not a restriction on callers. Separate independently declared inputs.
         parts = re.split(r"\s+and\s+(?=(?:print|return|output)\b)", raw, maxsplit=1, flags=re.I)

@@ -2225,14 +2225,15 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
   the checked proof. A correct conclusion does not repair a false intermediate equality. Omit optional
   generalizations beyond the question. Never treat an example of a proof as a prescribed method.
 - solution_code: only for programming questions; return reference implementation text, never run it.
-- test_cases: only for programming questions; return structured cases, at most the requested count.
+- test_cases: only for programming questions; return the requested count of distinct legal INPUTS.
+  Never predict outputs. The server executes the reference solution to obtain every new output.
 - Match the question's required interface. For a function implementation, use io_mode="function",
   function_name (only when the teacher specifies the name), function_args (a JSON array of positional arguments),
   function_kwargs (keyword arguments where needed),
-  and expected_return (Python repr of the return value). Leave input/expected_output empty.
+  Leave expected_return, input and expected_output unset for function inputs.
   Example for stable_softmax(xs): {"io_mode":"function","function_name":"stable_softmax",
-  "function_args":[[0,0]],"expected_return":"[0.5, 0.5]","source":"llm_generated"}.
-  Use stdin input/expected_output only when the question asks for a complete stdin/stdout program.
+  "function_args":[[0,0]],"source":"llm_generated"}.
+  Use stdin input only when the question asks for a complete stdin/stdout program.
 - For tests requiring GUI, network, files, special packages, or large resources, set sandbox_feasible=false.
 - In criterion and reference_answer prose, wrap inline LaTeX in `$...$` and display LaTeX in `$$...$$`; never add math delimiters inside solution_code or test data.
 - Keep each mathematical expression intact on one logical Markdown line. Never split a fraction, radical, exponent, integral, bound, or equality chain across lines.
@@ -2414,6 +2415,8 @@ async def generate_missing_question_materials(
         "follow_through_strictness": follow_through_strictness,
         "follow_through_instruction": "Teacher rules take precedence. follow_through_strictness controls ONLY correct downstream work using an earlier wrong value. The server computes unspecified follow_through_pts as total_pts * (100 - strictness) / 100, rounded to two decimal places. Preserve teacher-specified awards, including zero. Do not change step budgets, proof deductions, alternative policies or other partial credit.",
     }
+    if any(row["target"] == "test_cases" for row in target_rows):
+        request_context["test_case_count"] = max(10, request_context["test_case_count"])
     if repair_feedback:
         request_context["validation_feedback"] = {
             row["target_id"]: repair_feedback[row["target_id"]] for row in target_rows
@@ -2435,7 +2438,8 @@ async def generate_missing_question_materials(
     from backend.services.rubric_drafts import WrittenRubricDefinition
     part_targets = {
         row["target_id"] for row in target_rows
-        if uses_math_grading(problems_data[row["q_id"]].get("type") or "")
+        if (uses_math_grading(problems_data[row["q_id"]].get("type") or "")
+            or is_programming_question_type(problems_data[row["q_id"]].get("type")))
         and row["target"] == "criterion"
     }
     interpret_with_answer = {
@@ -2480,7 +2484,9 @@ async def generate_missing_question_materials(
                     "Choose an appropriate positive deduct_per_error when that policy needs one. Put step "
                     "objects inside the relevant part, including when the question has no printed subparts. "
                     "The rubric definition schema below applies ONLY inside rubric_definition. "
-                    + PART_INSTRUCTION + DISPLAY_INSTRUCTION
+                    + (PART_INSTRUCTION + DISPLAY_INSTRUCTION if interpret_with_answer or any(
+                        uses_math_grading(problems_data[row["q_id"]].get("type") or "")
+                        for row in target_rows if row["target_id"] in part_targets) else "")
                     + "\nUse WrittenRubricDefinition for these targets: "
                     + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Copy rubric_question identity and source fields; "
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
@@ -2506,6 +2512,19 @@ async def generate_missing_question_materials(
                          "one part asks for several conclusions; keep the scoring items inside that part.")
     else:
         schema = RubricDefinition.model_json_schema()
+    if any(is_programming_question_type(problems_data[q_id].get("type")) for q_id in unique_q_ids):
+        guidance += (
+            "\nFor a newly generated programming rubric, use funded steps and include exactly ONE "
+            "test_suite=true step for the entire test suite, plus separate source-code criteria. "
+            "Choose appropriate budgets from the question; preserve all explicit teacher allocations. "
+            "Never turn ten tests into ten rubric steps. The server computes the suite award as "
+            "its budget times passed/valid tests, rounded once; no follow-through on this item. "
+            "Other code criteria must assess independent stated requirements, avoiding duplicate "
+            "deductions for the same functional defect or invented style requirements. "
+            "Use test_suite only on programming questions. A reference may be a Python function "
+            "with literal JSON arguments, or a complete Python/C/C++ stdin program. Do not invent "
+            "an input adapter for an ambiguous/incomplete teacher reference."
+        )
     messages = [
         SystemMessage(content=guidance + language_instruction
             + "\nRubric definition schema:\n" + json.dumps(schema, ensure_ascii=False)),
@@ -2646,6 +2665,12 @@ async def generate_missing_question_materials(
                 error.repair_context = "Return rubric_definition.part_rubric with question total_pts and all required parts, including the singleton part for unnumbered questions."
                 raise error
             if candidate.target_id in part_targets:
+                programming = is_programming_question_type(problems_data[candidate.q_id].get("type"))
+                steps = [step for part in candidate.rubric_definition.part_rubric.parts for step in part.steps]
+                suites = [step for step in steps if step.test_suite]
+                if (suites and (not programming or any(part.deductions for part in candidate.rubric_definition.part_rubric.parts))) or (programming and not problems_data[candidate.q_id].get("criterion")
+                        and (len(suites) != 1 or len(steps) < 2)):
+                    raise StructuredOutputInvalidError("A new programming rubric needs one aggregate test_suite step and separate code criteria; other types cannot use test_suite.")
                 from backend.services.true_false_answers import is_decision_only
                 source = problems_data[candidate.q_id]
                 if (is_decision_only(source.get("stem") or "", source.get("criterion") or "") and
@@ -2726,15 +2751,17 @@ async def generate_missing_question_materials(
                 if len(candidate.test_cases) > request_context["test_case_count"]:
                     raise StructuredOutputInvalidError("Too many generated test cases.")
                 try:
+                    from backend.services.programming_materials import input_probes
                     candidate.test_cases = adapt_programming_cases(
                         problems_data[candidate.q_id].get("stem") or "",
-                        [case.model_copy(update={"source": "llm_generated"}) for case in candidate.test_cases],
+                        input_probes(candidate.test_cases),
                     )
                 except ProgrammingCaseError as exc:
                     raise StructuredOutputInvalidError(str(exc)) from exc
         if not allow_partial and seen != set(expected_targets):
             raise StructuredOutputInvalidError("The generated materials omitted requested targets.")
-        if validate_candidates is not None and not has_pending_policy:
+        if (validate_candidates is not None and not has_pending_policy
+                and not any(row["target"] == "test_cases" for row in target_rows)):
             validate_candidates(parsed.candidates)
 
     async def repair_invoke(provider, messages):
@@ -2856,6 +2883,36 @@ async def generate_missing_question_materials(
             candidate.rubric_definition = proposal
             candidate.rubric_draft = draft.model_dump(mode="json")
 
+    # New test outputs are executed observations, never model predictions.
+    from backend.services.programming_materials import ReferenceExecutionError, resolve_generated_outputs
+    from backend.tools.code_interpreter import HostCodeExecutionDisabled
+    from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
+    for candidate in list(parsed.candidates):
+        if candidate.target != "test_cases":
+            continue
+        source = {**problems_data[candidate.q_id], "q_id": candidate.q_id}
+        for sibling in parsed.candidates:
+            if sibling.q_id == candidate.q_id and sibling.target in {"solution_code", "reference_answer"}:
+                source[sibling.target] = sibling.text_value
+                source["ai_completion_provenance"] = {**(source.get("ai_completion_provenance") or {}), sibling.target: {"source_kind": "ai_generated"}}
+        if reporter:
+            await reporter._emit_message("Running the reference implementation to prepare test outputs.")
+        try:
+            candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases)
+        except (ValueError, HostCodeExecutionDisabled, IsolatedRunnerUnavailable, TimeoutError) as exc:
+            if not allow_partial:
+                raise
+            parsed.candidates.remove(candidate)
+            if repair_feedback is not None:
+                repair_feedback[candidate.target_id] = (str(exc) if isinstance(exc, ValueError)
+                    else "Reference execution is unavailable; do not invent expected outputs.")
+            if isinstance(exc, ReferenceExecutionError):
+                for sibling in list(parsed.candidates):
+                    if sibling.q_id == candidate.q_id and sibling.target == "solution_code" and not problems_data[candidate.q_id].get("solution_code"):
+                        parsed.candidates.remove(sibling)
+                        if repair_feedback is not None:
+                            repair_feedback[sibling.target_id] = "The generated reference failed execution or teacher examples. Repair its implementation without changing the teacher's expectations."
+
     # Seal against all accepted sibling fields, including a reference answer
     # returned in the same response. Model-supplied draft metadata is never used.
     for candidate in list(parsed.candidates):
@@ -2890,6 +2947,9 @@ async def generate_missing_question_materials(
                         repair_feedback[candidate.target_id] = str(exc)
                 else:
                     raise
+
+    if validate_candidates is not None and any(row["target"] == "test_cases" for row in target_rows):
+        validate_candidates(parsed.candidates)
 
     if reporter and manage_progress_lifecycle:
         await reporter.set_stage_progress(

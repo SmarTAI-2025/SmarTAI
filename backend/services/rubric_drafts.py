@@ -281,6 +281,10 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         follow_through_strictness = (previous_rules.follow_through_strictness if previous_rules and previous_rules.follow_through_strictness is not None else
                                 context.get("rubric_generation_preferences", {}).get("follow_through_strictness"))
     if definition.part_rubric is not None:
+        from backend.models import is_programming_question_type
+        if (not is_programming_question_type(problem.get("type")) and any(
+                step.test_suite for part in definition.part_rubric.parts for step in part.steps)):
+            raise RubricAllocationError("Only programming rubrics can allocate an aggregate test_suite award.")
         definition = definition.model_copy(update={"part_rubric": definition.part_rubric.model_copy(
             update={"follow_through_strictness": follow_through_strictness})})
         try:

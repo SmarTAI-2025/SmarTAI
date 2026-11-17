@@ -282,11 +282,17 @@ async def test_shared_evidence_guidance_scoped_to_requested_written_rubric(kind,
     from backend.agents.ingest_agent import generate_missing_question_materials
     from backend.services.part_rubric import PART_INSTRUCTION
     from backend.tests.test_question_material_format_repair import Provider
-    from backend.tests.test_unified_rubric_drafts import choice_definition, choice_question, written_choice_definition
+    from backend.tests.test_unified_rubric_drafts import choice_question, written_choice_definition
 
     question = {**choice_question(), "type": kind}
+    definition = written_choice_definition()
+    if not expected:
+        definition["part_rubric"]["parts"][0]["steps"] = [
+            {"id": "tests", "criterion": "Test results", "total_pts": 2, "test_suite": True},
+            {"id": "code", "criterion": "Source correctness", "total_pts": 2},
+        ]
     payload = {"candidates": [{"q_id": "q1", "target_id": "q1:criterion",
-        "target": "criterion", "rubric_definition": written_choice_definition() if expected else choice_definition()}]}
+        "target": "criterion", "rubric_definition": definition}]}
     replies = [json.dumps(payload)]
     if expected:
         replies += [json.dumps({"parts":[{"part_id":"p1", "goals":[{"target":question["stem"], "source_id":"question:1", "points":4}]}]}),

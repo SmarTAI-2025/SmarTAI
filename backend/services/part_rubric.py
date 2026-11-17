@@ -87,6 +87,8 @@ class Criterion(Frozen):
 
 
 class PointStep(Criterion):
+    test_suite: bool = Field(default=False, strict=True, exclude_if=lambda v: not v,
+                            description="Programming only: one aggregate award computed from the frozen test pass ratio.")
     required_conditions: tuple[Text, ...] = Field(default=(), max_length=20, exclude_if=lambda v: not v, description=(
         "Exact teacher clauses explicitly withholding this step's award under a condition. "
         "Omit if none: ordinary correctness belongs in criterion, not invented or paraphrased conditions."))
@@ -940,9 +942,11 @@ def render_parts(rubric, language="zh", *, full_policy=False):
         prefix = f"{part.label} " if part.label else ""
         for step in part.steps:
             entry = f"- {prefix}[{step.total_pts:g}{unit}] {step.criterion}"
+            if step.test_suite:
+                entry += "（本项得分 = 本项满分 × 通过数 ÷ 有效测试数；整组测试计一项）" if zh else " (award = available points × passed / valid tests; the entire suite is one item)"
             if step.required_conditions:
                 entry += "（" + "；".join(step.required_conditions) + "）" if zh else " (" + "; ".join(step.required_conditions) + ")"
-            if full_policy:
+            if full_policy and not step.test_suite:
                 points = step.follow_through_award(ai_default=rubric.rubric_origin == "ai")
                 entry += f"（沿用错值且本步正确时折算 {float(points):g} 分）" if zh else f" (follow-through: {float(points):g} points)"
             lines.append(entry)

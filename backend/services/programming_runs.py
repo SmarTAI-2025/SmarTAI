@@ -352,6 +352,11 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
             return key, [], "programming_preparation_interrupted"
         cases = problem.test_cases
         if not cases:
+            from backend.services.programming_rubric import frozen_programming_steps
+            if frozen_programming_steps(problem):
+                # New test-weighted rubrics require their prepared, executed
+                # suite; never fall back to legacy model-predicted outputs.
+                return key, [], "programming_cases_unavailable"
             if _scan_complexity_keywords(problem.stem):
                 return key, [], "programming_mode_unsupported"
             state.store(STARTED, key, {"q_id": problem.q_id})
