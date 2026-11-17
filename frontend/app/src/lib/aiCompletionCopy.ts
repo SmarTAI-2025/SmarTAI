@@ -1,4 +1,5 @@
 import type { Locale } from "@/i18n/messages";
+import type { AICompletionTarget } from "@/types";
 
 const COPY = {
   title: ["SmarTAI 补全缺失项", "Generate Missing Materials with SmarTAI"],
@@ -17,6 +18,11 @@ const COPY = {
   targetAnswer: ["标答", "Reference answer"],
   targetCode: ["示例正确代码", "Reference solution code"],
   targetTests: ["测试样例", "Test cases"],
+  partialTitle: ["部分资料已保存，仍有项目未补全", "Some materials were saved; others were not completed"],
+  partialDescription: ["已保存的内容不会丢失。重试时会重新检查当前缺项，只选择本次未补全且仍缺失的项目。", "Saved materials are kept. Retrying checks current missing items and selects only unfinished items from this attempt that are still missing."],
+  savedTargets: ["本次已保存", "Saved in this attempt"],
+  skippedTargets: ["本次未补全", "Not completed in this attempt"],
+  retryMissing: ["重试本次未补全项", "Retry unfinished items"],
   testsPerQuestion: ["每道编程题生成测试样例", "Test cases per programming question"],
   testsCountSuffix: [" 个", ""],
   selectedPrefix: ["已选择 ", ""],
@@ -51,7 +57,7 @@ const COPY = {
   leave: ["放弃并离开", "Leave"],
   progressTitle: ["SmarTAI 补全进度", "SmarTAI Completion Progress"],
   progressHeading: ["正在生成缺失资料", "Generating Missing Materials"],
-  progressBackground: ["可以离开本页，生成会在后台继续；完成后将自动返回题目准备总览。", "You can leave this page while generation continues. When complete, you will return to Question Preparation automatically."],
+  progressBackground: ["可以离开本页，生成会在后台继续；全部补全后自动返回题目准备总览，部分完成时会列出未补全项。", "You can leave this page while generation continues. Full completion returns to Question Preparation; partial completion lists unfinished items."],
   progressLabel: ["SmarTAI 补全进度", "SmarTAI completion progress"],
   processing: ["处理中", "Processing"],
   stepsTitle: ["生成步骤", "Generation steps"],
@@ -70,6 +76,12 @@ const COPY = {
   progressReadFailedDescription: ["任务不会因离开页面而停止。请刷新状态，或从题目准备总览重新进入。", "Leaving the page does not stop the job. Refresh the status or reopen it from Question Preparation."],
   jobMissing: ["缺少生成任务信息。", "Generation job information is missing."],
 } as const;
+
+export function aiCompletionTargetLabel(target: AICompletionTarget, locale: Locale) {
+  const keys = { criterion: "targetCriterion", reference_answer: "targetAnswer",
+    solution_code: "targetCode", test_cases: "targetTests" } as const;
+  return aiCompletionText(locale, keys[target]);
+}
 
 export type AICompletionCopyKey = keyof typeof COPY;
 

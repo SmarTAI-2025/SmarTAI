@@ -923,23 +923,48 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
 def has_explicit_scoring_policy(stem, maximum):
     """Keep the existing source-policy boundary, excluding a standalone total."""
     stem = unicodedata.normalize("NFKC", stem)
-    # A whole-question maximum is a budget, not a teacher's step allocation.
-    # Remove only one standalone edge annotation equal to the known maximum;
-    # embedded awards, different amounts and explicit scoring language remain.
+    def is_maximum(amount):
+        try:
+            return Decimal(amount) == Decimal(str(maximum))
+        except InvalidOperation:
+            return False
+
+    def step_scope(prefix):
+        # The step marker can precede its entire criterion, not just the amount.
+        return re.search(r"(?:第[\d一二三四五六七八九十]+步|每(?:一)?步|步骤\s*\d*|\bstep\s+\w+)"
+                         r"[^。;；\n]*$", prefix, re.I)
+
+    explicit_total = re.compile(
+        r"(?:(?:本题|该题|此题|整题|全题|本小问)\s*)?(?:满分|总分)\s*[:：为是]?\s*"
+        r"(?P<cn>\d+(?:\.\d+)?)\s*分(?=$|[。;；，,\s)\]])|"
+        r"\b(?:total|maximum)(?:\s+score)?\s*(?:is\s*|of\s*|:\s*)?"
+        r"(?P<en>\d+(?:\.\d+)?)\s*(?:points?|marks?|credits?)\b", re.I)
+
+    def remove_total(match):
+        prefix = stem[:match.start()]
+        standalone = (re.match(r"(?:本题|该题|此题|整题|全题|本小问)", match[0])
+                      or re.search(r"(?:^|[。.;；\n[(])\s*$", prefix))
+        if (is_maximum(match["cn"] or match["en"])
+                and standalone and not step_scope(prefix)
+                and not re.match(r"\s+(?:for|per|each|if|when|only|provided|unless)\b", stem[match.end():], re.I)):
+            return ""
+        return match[0]
+
+    stem = explicit_total.sub(remove_total, stem)
+    # A question number before a leading total is still question metadata.
+    # Embedded awards, step-scoped totals and ambiguous amounts remain policy.
     totals = list(re.finditer(
         r"[\[(]\s*(?:(?:满分|总分|total|maximum)\s*[:：]?\s*)?"
         r"(\d+(?:\.\d+)?)\s*(?:分|points?|marks?|credits?)\s*[\])]", stem, re.I))
     if len(totals) == 1:
         total = totals[0]
-        step_label = re.search(r"(?:第[\d一二三四五六七八九十]+步|步骤\s*\d*|\bstep(?:\s+\w+)?)\s*[:：]?\s*$",
-                               stem[:total.start()], re.I)
-        try:
-            if (Decimal(total[1]) == Decimal(str(maximum))
-                    and not step_label
-                    and (not stem[:total.start()].strip() or not stem[total.end():].strip(" .。\n\t"))):
-                stem = stem[:total.start()] + stem[total.end():]
-        except InvalidOperation:
-            pass
+        prefix = stem[:total.start()]
+        numbered_prefix = re.fullmatch(
+            r"\s*(?:第\s*[\d一二三四五六七八九十]+\s*题|"
+            r"(?:Question\s*|Q)\d+(?:\.\d+)*[.:：]?|\d+(?:\.\d+)*[.、):：])?\s*", prefix, re.I)
+        if (is_maximum(total[1]) and not step_scope(prefix)
+                and (numbered_prefix or not stem[total.end():].strip(" .。\n\t"))):
+            stem = prefix + stem[total.end():]
     return bool(re.search(
         r"评分|配分|[给得扣]分|(?:\d|[一二三四五六七八九十])\s*分(?![钟子母])|"
         r"\b(?:rubric|scoring|no partial credit|\d+\s*(?:points?|marks?|credits?))\b",

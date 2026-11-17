@@ -74,6 +74,23 @@ async def test_manual_completion_normal_path_has_no_extra_calls(monkeypatch):
     job, data = await complete(monkeypatch, provider)
     assert job.status == "done" and len(provider.calls) == 2
     assert data.reference_answer == REFERENCE and saved_draft(data) is not None
+    response = await api.get_ai_completion(job.assignment_id, job.id, current=SimpleNamespace(id=job.owner_id))
+    assert {item["target_id"] for item in response["targets"]} == {"q1:reference_answer", "q1:criterion"}
+    assert all(item["question_number"] == "1" for item in response["targets"])
+
+
+@pytest.mark.asyncio
+async def test_reported_bundle_retries_only_rubric_with_unchanged_total(monkeypatch):
+    provider = Provider([initial(), audit(reason="square: two independently earnable goals",
+        bundled_steps=["square"]), initial(reference=False), audit()])
+    job, data = await complete(monkeypatch, provider)
+    assert job.status == "done" and not job.payload["skipped_target_ids"]
+    assert data.reference_answer == REFERENCE
+    assert saved_draft(data).plan.part_rubric.total_pts == 10
+    assert len(provider.calls) == 4
+    request = json.loads(provider.calls[2][-1].content.removeprefix("[Generation request]\n"))
+    assert [item["target_id"] for item in request["requested_targets"]] == ["q1:criterion"]
+    assert "split independently earnable" in request["validation_feedback"]["q1:criterion"]
 
 
 @pytest.mark.asyncio

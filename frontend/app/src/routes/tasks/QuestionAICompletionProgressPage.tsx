@@ -5,15 +5,15 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import { useAICompletionJob } from "@/api/hooks";
-import { taskKeys } from "@/api/hooks/keys";
+import { aiCompletionKeys, taskKeys } from "@/api/hooks/keys";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionStatus } from "@/components/tasks/TaskExecutionStatus";
 import { executionProgressCopy } from "@/lib/executionProgressCopy";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
-import { aiCompletionText } from "@/lib/aiCompletionCopy";
+import { aiCompletionText, aiCompletionTargetLabel } from "@/lib/aiCompletionCopy";
 import { cn } from "@/lib/cn";
-import type { ProgressEvent } from "@/types";
+import type { AICompletionJobResponse, AICompletionTarget, ProgressEvent } from "@/types";
 
 const STEPS = ["stepScope", "stepGenerate", "stepValidate", "stepSave"] as const;
 
@@ -23,16 +23,20 @@ export function QuestionAICompletionProgressPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const completionQuery = useAICompletionJob(taskId, jobId);
-  const redirectingRef = useRef(false);
+  const handledJobRef = useRef<string | null>(null);
   const job = completionQuery.data;
+  const partial = job?.status === "done" && Boolean(job.skipped_target_ids?.length);
 
   useEffect(() => {
-    if (!taskId || job?.status !== "done" || redirectingRef.current) return;
-    redirectingRef.current = true;
-    void queryClient.invalidateQueries({ queryKey: taskKeys.all }).finally(() => {
-      navigate(`/tasks/${taskId}/questions`, { replace: true });
+    if (!taskId || !jobId || job?.status !== "done" || handledJobRef.current === jobId) return;
+    handledJobRef.current = jobId;
+    void Promise.all([
+      queryClient.invalidateQueries({ queryKey: taskKeys.all }),
+      queryClient.invalidateQueries({ queryKey: aiCompletionKeys.preflight(taskId) }),
+    ]).finally(() => {
+      if (!partial) navigate(`/tasks/${taskId}/questions`, { replace: true });
     });
-  }, [job?.status, navigate, queryClient, taskId]);
+  }, [job?.status, jobId, partial, navigate, queryClient, taskId]);
 
   if (!taskId || !jobId) {
     return (
@@ -62,6 +66,32 @@ export function QuestionAICompletionProgressPage() {
           onRefresh={expired ? undefined : () => void completionQuery.refetch()}
           refreshing={completionQuery.isFetching}
         />
+      </ProgressFrame>
+    );
+  }
+
+  if (partial && job) {
+    const retryParams = new URLSearchParams(job.skipped_target_ids.map(id => ["target_id", id]));
+    return (
+      <ProgressFrame locale={locale}>
+        <section className="rounded-[10px] border bg-card px-5 py-7 sm:px-10" aria-live="polite">
+          <h2 className="text-xl font-bold text-foreground">{aiCompletionText(locale, "partialTitle")}</h2>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">{aiCompletionText(locale, "partialDescription")}</p>
+          <div className="mt-6 grid gap-6 sm:grid-cols-2">
+            {[{ ids: job.applied_target_ids, heading: "savedTargets" }, { ids: job.skipped_target_ids, heading: "skippedTargets" }].map(group => (
+              <section key={group.heading}>
+                <h3 className="font-semibold">{aiCompletionText(locale, group.heading as "savedTargets" | "skippedTargets")}</h3>
+                <ul className="mt-2 space-y-2 text-sm text-muted-foreground">
+                  {group.ids.map(id => <li key={id} className="break-words">{completionTargetLabel(job, id, locale)}</li>)}
+                </ul>
+              </section>
+            ))}
+          </div>
+          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            <Link to={`/tasks/${taskId}/questions/ai-complete?${retryParams}`} className="inline-flex min-h-10 items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground">{aiCompletionText(locale, "retryMissing")}</Link>
+            <Link to={`/tasks/${taskId}/questions`} className="inline-flex min-h-10 items-center justify-center rounded-lg border px-4 py-2 text-sm font-semibold">{aiCompletionText(locale, "backOverview")}</Link>
+          </div>
+        </section>
       </ProgressFrame>
     );
   }
@@ -143,6 +173,15 @@ export function QuestionAICompletionProgressPage() {
       </div>
     </ProgressFrame>
   );
+}
+
+function completionTargetLabel(job: AICompletionJobResponse, id: string, locale: Locale) {
+  const target = job.targets?.find(item => item.target_id === id);
+  const kind = target?.target ?? id.slice(id.lastIndexOf(":") + 1);
+  const known = ["criterion", "reference_answer", "solution_code", "test_cases"].includes(kind);
+  const label = known ? aiCompletionTargetLabel(kind as AICompletionTarget, locale) : id;
+  const number = target?.question_number || target?.q_id || id.slice(0, id.lastIndexOf(":"));
+  return locale === "zh-CN" ? `第 ${number} 题 · ${label}` : `Question ${number} · ${label}`;
 }
 
 function ProgressFrame({ locale, children }: { locale: Locale; children: ReactNode }) {

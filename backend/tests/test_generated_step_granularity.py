@@ -71,7 +71,12 @@ def test_provided_teacher_criterion_is_exempt(criterion):
     assert len(draft.plan.part_rubric.parts[0].steps) == 9
 
 
-@pytest.mark.parametrize("stem", ["（4.5分）Compute the results.", "Compute the results. (4.5 points)"])
+@pytest.mark.parametrize("stem", [
+    "（4.5分）Compute the results.", "Compute the results. (4.5 points)",
+    "本题满分 4.5 分。Compute the results.", "Compute the results. 本题满分 4.5 分",
+    "1. (4.5 points) Compute the results.", "第1题（4.5分）Compute the results.",
+    "Total: 4.5 points. Compute the results.",
+])
 def test_question_total_does_not_exempt_ai_steps(stem):
     row, definition = proposal([[.5] * 9], stem=stem)
     with pytest.raises(RubricAllocationError, match="at most 8 steps OR"):

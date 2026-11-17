@@ -25,6 +25,10 @@ class ProofPartCheck(BaseModel):
     part_id: Key
     verdict: Literal["consistent", "inconsistent", "uncertain"]
     reason: Text
+    bundled_steps: list[Key] = Field(max_length=100, description=(
+        "IDs of steps bundling independently earnable substantive proof goals; [] when none. "
+        "Explain the distinct goals in reason. Do not flag routine algebra or an indivisible inference."
+    ))
 
 
 class ProofRubricAudit(BaseModel):
@@ -77,6 +81,11 @@ async def audit_proof_steps(provider, task, rules):
     def validate(audit):
         if len(audit.parts) != len(expected) or {p.part_id for p in audit.parts} != expected:
             raise StructuredOutputInvalidError("Audit each supplied part ID exactly once.")
+        step_ids = {part.id: {step.id for step in part.steps} for part in rules.parts}
+        for part in audit.parts:
+            if (len(set(part.bundled_steps)) != len(part.bundled_steps)
+                    or not set(part.bundled_steps).issubset(step_ids[part.part_id])):
+                raise StructuredOutputInvalidError("Report bundled step IDs from their own part, without duplicates.")
 
     audit, _ = await structured_llm_call(
         provider,
@@ -88,6 +97,11 @@ async def audit_proof_steps(provider, task, rules):
             "about its mathematical quality. Do not require an arbitrary step count. Use inconsistent "
             "for any violation, uncertain if correctness cannot be established, and consistent only "
             "when all checks hold. Name the specific step and mathematical issue in reason. "
+            "Explicitly check whether completing one substantive proof goal can earn credit independently "
+            "of another goal currently bundled into the same step. Report those step IDs in bundled_steps, "
+            "and identify the independently earnable goals in reason; use [] if none. A conjunction or "
+            "multiple algebraic lines alone is not a defect. Respect teacher rules and the per-subquestion "
+            "granularity bound; preserve the total budget when requesting a split. "
             "Return JSON. Schema: " + json.dumps(ProofRubricAudit.model_json_schema())),
         user_prompt=json.dumps({"source": task, "proposal": [
             {"part_id": p.id, "budget": p.total_pts,
@@ -96,6 +110,9 @@ async def audit_proof_steps(provider, task, rules):
         output_model=ProofRubricAudit, validate_output=validate,
     )
     failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict != "consistent"]
+    failures.extend(f"{part.part_id}: split independently earnable goals in steps "
+                    f"{', '.join(part.bundled_steps)} without changing the part budget: {part.reason}"
+                    for part in audit.parts if part.bundled_steps)
     if failures:
         # Feed the actual defect to the existing bounded material-repair loop.
         raise ProofRubricUnverified("Proof scoring steps need correction: " + "; ".join(failures))
