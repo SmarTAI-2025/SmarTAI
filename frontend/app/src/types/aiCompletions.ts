@@ -53,7 +53,6 @@ export interface AICompletionJobResponse {
   status: "running" | "done" | "error";
   overwrite_policy: "missing_only";
   target_ids: string[];
-  targets?: AICompletionMissingTarget[];
   summary: {
     requested_count: number;
     generated_count: number;

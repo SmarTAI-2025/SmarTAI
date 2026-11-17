@@ -3845,7 +3845,6 @@ async def _run_ai_completion(
             operation_progress=snapshot, require_missing=True,
             operation_payload={
                 "target_ids": requested_ids, "test_case_count": test_case_count,
-                "targets": selected,
                 "base_workflow_revision": claimed_workflow_revision,
                 "candidates": serialized,
                 "applied_target_ids": applied,
@@ -4004,7 +4003,6 @@ async def get_ai_completion(task_id: str, job_id: str, current: User = Depends(r
             "job_id": job.id, "task_id": task_id,
             "status": "done" if job.status == "done" else ("error" if job.status == "error" else "running"),
             "overwrite_policy": "missing_only", "target_ids": requested,
-            "targets": list(payload.get("targets") or []),
             "summary": {
                 "requested_count": len(requested), "generated_count": len(payload.get("candidates") or []),
                 "applied_count": len(applied), "skipped_count": len(skipped),

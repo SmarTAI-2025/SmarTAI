@@ -11,7 +11,7 @@ import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
-import { aiCompletionText, aiCompletionTargetLabel as targetLabel } from "@/lib/aiCompletionCopy";
+import { aiCompletionText } from "@/lib/aiCompletionCopy";
 import { cn } from "@/lib/cn";
 import type { AICompletionMissingTarget, AICompletionTarget } from "@/types";
 
@@ -51,12 +51,10 @@ function QuestionAICompletionPageForm() {
     initializedKeyRef.current = key;
     const requestedQuestion = searchParams.get("q_id")?.trim();
     const requestedTarget = normalizeTarget(searchParams.get("target"));
-    const retryTargets = new Set(searchParams.getAll("target_id"));
-    const hasFocusedRequest = Boolean(requestedQuestion || requestedTarget || retryTargets.size);
+    const hasFocusedRequest = Boolean(requestedQuestion || requestedTarget);
     const focused = preflight.missing_targets.filter((target) => (
       (!requestedQuestion || target.q_id === requestedQuestion)
       && (!requestedTarget || target.target === requestedTarget)
-      && (!retryTargets.size || retryTargets.has(target.target_id))
     ));
     const initial = (hasFocusedRequest ? focused : preflight.missing_targets).map((target) => target.target_id);
     setSelectedIds(initial);
@@ -294,6 +292,16 @@ function CompletionLoadError({ locale, onRetry }: { locale: Locale; onRetry: () 
       <button type="button" onClick={onRetry} className="mt-5 h-9 rounded-[7px] border bg-card px-4 text-sm font-semibold text-foreground hover:bg-muted">{aiCompletionText(locale, "refresh")}</button>
     </div>
   );
+}
+
+function targetLabel(target: AICompletionTarget, locale: Locale) {
+  const keys = {
+    criterion: "targetCriterion",
+    reference_answer: "targetAnswer",
+    solution_code: "targetCode",
+    test_cases: "targetTests",
+  } as const;
+  return aiCompletionText(locale, keys[target]);
 }
 
 function compareMissingTargets(left: AICompletionMissingTarget, right: AICompletionMissingTarget) {

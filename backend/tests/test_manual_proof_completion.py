@@ -74,9 +74,6 @@ async def test_manual_completion_normal_path_has_no_extra_calls(monkeypatch):
     job, data = await complete(monkeypatch, provider)
     assert job.status == "done" and len(provider.calls) == 2
     assert data.reference_answer == REFERENCE and saved_draft(data) is not None
-    response = await api.get_ai_completion(job.assignment_id, job.id, current=SimpleNamespace(id=job.owner_id))
-    assert {item["target_id"] for item in response["targets"]} == {"q1:reference_answer", "q1:criterion"}
-    assert all(item["question_number"] == "1" for item in response["targets"])
 
 
 @pytest.mark.asyncio
