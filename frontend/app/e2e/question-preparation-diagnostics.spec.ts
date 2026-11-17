@@ -54,7 +54,7 @@ for (const width of [1440, 390]) test(`preparation diagnostics and concise rubri
   await expect(diagnostics.getByText("第 1.10 题")).toBeVisible();
   await expect(diagnostics).toContainText("已保存 2 个题干、1 份标答、1 份评分标准");
   await expect(diagnostics).toContainText("需处理：评分标准未生成或不完整");
-  await expect(diagnostics).toContainText("建议复核：本题公式待核对");
+  await expect(diagnostics).not.toContainText("建议复核：");
   await expect(page.getByText("未找齐指定题目", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("preparation-failure.png"), fullPage: true });
   await page.getByRole("button", { name: "人工继续处理", exact: true }).click();

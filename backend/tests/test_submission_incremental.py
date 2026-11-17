@@ -599,3 +599,297 @@ def test_maximum_source_diagnostics_fit_parent_without_discarding_page_evidence(
     source = {"page_diagnostics": diagnostics, "invalidated_question_ids": [f"q{i}" for i in range(500)]}
     assert workflow_repository._validate_json_object(source, field="payload",
         max_bytes=workflow_repository.MAX_OPERATION_PAYLOAD_BYTES) == source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("confirm_blank", [False, True])
+@pytest.mark.parametrize("second_unresolved", [False, True])
+async def test_source_attention_tracks_current_answers_after_teacher_repairs(monkeypatch, confirm_blank, second_unresolved):
+    from backend.services.submission_source_state import load_source_states
+    owner, task = _seed_task()
+    for i in range(1, 4):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{i}", order_index=i-1,
+            number=str(i), type="programming", stem=f"Question {i}: print the requested value.",
+            criterion="Award up to 10 points for correct code.", max_score=10)
+    registry = _registry(monkeypatch, lambda _: SimpleNamespace(content=json.dumps(dict(
+        stu_id="S1", stu_name="Sample Student", stu_ans=[dict(q_id="q1", number="1", type="programming", content="print(1)", flag=[])]))))
+    content = b"# Question 1\ndef solve():\n    return 1\n"
+    filename, content_type = "S1_Sample.py", "text/x-python"
+    if second_unresolved:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as zipped:
+            zipped.writestr(filename, content)
+            zipped.writestr("S9_Other.py", content)
+        filename, content, content_type = "submissions.zip", archive.getvalue(), "application/zip"
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename=filename, content=content, content_type=content_type, registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    before = task_facade.get_task(**args)
+    source = before["submission_sources"][0]
+    assert source["status"] == "parsed", (source["reason_code"], source["internal_status"], registry.provider.ainvoke.await_count)
+    assert source["answer_required_diagnostic_count"] == 2
+    original = load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner))
+    calls = registry.provider.ainvoke.await_count
+    display_id = next(p.display_student_id for p in workflow_repository.list_student_presentations(task).values()
+                      if p.source_id == source["source_id"])
+    task_facade.update_student_answer(**args, display_student_id=display_id, q_id="q2",
+        patch={"content": "print(2)", "review_status": "confirmed"}, expected_revision=before["workflow_revision"])
+    after_one = task_facade.get_task(**args)
+    current = after_one["submission_sources"][0]
+    assert current["answer_required_diagnostic_count"] == 1
+    assert [a["q_id"] for a in current["answer_diagnostics"]] == ["q3"]
+    reads = []
+    original_serializer = task_facade._serialize_student_data
+    def counted_serializer(*args, **kwargs):
+        reads.append(1)
+        return original_serializer(*args, **kwargs)
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", counted_serializer)
+        assert task_facade.task_state(**args)["submission_sources"][0]["answer_required_diagnostic_count"] == 1
+    assert reads == []  # A lightweight poll never builds the full student/answer DTOs.
+    task_facade.update_student_identity(**args, current_display_id=display_id,
+        new_display_id="RepairedS1", new_display_name="Corrected Student", expected_revision=after_one["workflow_revision"])
+    current_task = task_facade.get_task(**args)
+    assert current_task["submission_sources"][0]["answer_required_diagnostic_count"] == 1
+    patch = {"content": "" if confirm_blank else "print(3)", "review_status": "confirmed"}
+    if confirm_blank:
+        patch["flag"] = ["manual_blank_confirmed"]
+    task_facade.update_student_answer(**args, display_student_id="RepairedS1", q_id="q3", patch=patch,
+        expected_revision=current_task["workflow_revision"])
+    for final in [task_facade.get_task(**args), task_facade.task_state(**args)]:
+        projected = final["submission_sources"][0]
+        assert projected["answer_diagnostics"] == []
+        assert projected["answer_diagnostic_count"] == projected["answer_required_diagnostic_count"] == 0
+        if second_unresolved:
+            other = final["submission_sources"][1]
+            assert other["answer_required_diagnostic_count"] == 2
+            assert {a["q_id"] for a in other["answer_diagnostics"]} == {"q2", "q3"}
+    assert ("submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]) is second_unresolved
+    assert load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner)) == original
+    assert registry.provider.ainvoke.await_count == calls  # Reading/repairing does not rerun recognition.
+
+
+@pytest.mark.asyncio
+async def test_clean_source_discovers_new_assignment_conflicts_and_clears_them_after_repair(monkeypatch):
+    from backend.tests.test_programming_source_answers import seed, SUM, COUNT, SOURCE
+    from backend.services.submission_source_state import load_source_states
+    owner, task = seed(SUM, COUNT)
+    registry = _registry(monkeypatch, lambda _: (_ for _ in ()).throw(AssertionError("Native input called a model")))
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1_Alice.py", content=SOURCE.encode(), content_type="text/x-python", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    before = task_facade.get_task(**args)
+    assert before["submission_sources"][0]["status"] == "parsed"
+    assert before["submission_sources"][0]["answer_diagnostic_count"] == 0
+    assert before["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    history = load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner))
+    original = next(a for a in before["student_data"]["S1"]["stu_ans"] if a["q_id"] == "q2")
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q2",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q3"}, expected_revision=before["workflow_revision"])
+    conflicted = task_facade.get_task(**args)
+    assert all("answer_assignment_conflict" in a["flag"] for a in conflicted["student_data"]["S1"]["stu_ans"])
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    for snapshot in [conflicted, task_facade.task_state(**args)]:
+        source = snapshot["submission_sources"][0]
+        assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 2
+        assert len(source["answer_diagnostics"]) == 2
+        assert all("answer_assignment_conflict" in a["flag"] for a in source["answer_diagnostics"])
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q3",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q2"}, expected_revision=conflicted["workflow_revision"])
+    for snapshot in [task_facade.get_task(**args), task_facade.task_state(**args)]:
+        source = snapshot["submission_sources"][0]
+        assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 0
+        assert source["answer_diagnostics"] == []
+    assert load_source_states(workflow_repository.get_operation(queued["job_id"], owner_id=owner)) == history
+    registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_current_source_review_fields_match_full_review_policy_and_scope(monkeypatch):
+    from sqlalchemy import delete, select, update
+    from backend.db.models import SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.tests.test_programming_source_answers import seed, SUM, COUNT, SOURCE
+
+    owner, task = seed(SUM, COUNT)
+    registry = _registry(monkeypatch, lambda _: pytest.fail("Native input called a model"))
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1_Alice.py", content=SOURCE.encode(), content_type="text/x-python", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    source_id = task_facade.get_task(**args)["submission_sources"][0]["source_id"]
+    all_whitespace = "".join(chr(cp) for cp in range(0x3001) if chr(cp).isspace())
+    cases = [
+        ([], "pending", SOURCE),
+        (["answer_recognition_confidence:0.4"], "pending", SOURCE),
+        (["answer_recognition_confidence:0.4"], "confirmed", SOURCE),
+        (["recognition_manual_pending"], "pending", SOURCE),
+        (["recognition_manual_pending"], "confirmed", SOURCE),
+        (["recognition_manual_pending"], "confirmed", all_whitespace),
+        (["recognition_invalid_fields:number,type"], "pending", SOURCE),
+        (["recognition_invalid_fields:number,type"], "pending", all_whitespace),
+        (["recognition_failed"], "confirmed", SOURCE),
+        (["manual_blank_confirmed"], "confirmed", ""),
+        (["recognition_manual_pending"], "confirmed", all_whitespace + "x" + all_whitespace),
+    ]
+    for flags, status, content in cases:
+        with session_scope() as session:
+            session.execute(update(SubmissionAnswerRecord).values(content=content, flag=flags))
+            answer_ids = session.scalars(select(SubmissionAnswerRecord.id)).all()
+        for answer_id in answer_ids:
+            workflow_repository.set_answer_review_status(answer_id, status)
+        assert task_facade.task_state(**args)["submission_sources"] == task_facade.get_task(**args)["submission_sources"], (flags, status, repr(content[:40]))
+        fields = workflow_repository.current_source_answer_review_fields(task, owner_id=owner, source_ids=[source_id])
+        assert all(row.has_content == bool(content.strip()) and "content" not in row._mapping for row in fields)
+
+    assert workflow_repository.current_source_answer_review_fields(task, owner_id="other-owner", source_ids=[source_id]) == []
+    assert workflow_repository.current_source_answer_review_fields(task, owner_id=owner, source_ids=["other-source"]) == []
+    # Empty current revisions must still synthesize missing-question diagnostics.
+    with session_scope() as session:
+        session.execute(delete(SubmissionAnswerRecord))
+    for snapshot in (task_facade.get_task(**args), task_facade.task_state(**args)):
+        assert snapshot["submission_sources"][0]["answer_required_diagnostic_count"] == 2
+    with session_scope() as session:
+        session.execute(update(workflow_repository.AssignmentStudentPresentationRecord).values(is_active=False))
+    assert workflow_repository.current_source_answer_review_fields(task, owner_id=owner, source_ids=[source_id]) == []
+    assert task_facade.task_state(**args)["submission_sources"] == []
+    registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("student_count", [1, 10])
+async def test_state_poll_batches_current_diagnostics_without_serializing_answer_bodies(monkeypatch, student_count):
+    from sqlalchemy import event
+    from backend.db.session import get_engine
+    from backend.tests.test_programming_source_answers import seed, SUM, COUNT, SOURCE
+
+    owner, task = seed(SUM, COUNT)
+    registry = _registry(monkeypatch, lambda _: pytest.fail("Native input called a model"))
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as zipped:
+        for index in range(student_count):
+            zipped.writestr(f"S{index}_Student.py", SOURCE + "\n# " + "large body " * 1000)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="submissions.zip", content=archive.getvalue(), content_type="application/zip", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    args = dict(task_id=task, owner_id=owner)
+    before = task_facade.get_task(**args)
+    # A clean source must still discover newly introduced conflicts.
+    original = next(a for a in before["student_data"]["S0"]["stu_ans"] if a["q_id"] == "q2")
+    task_facade.update_student_answer(**args, display_student_id="S0", q_id="q2",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q3"}, expected_revision=before["workflow_revision"])
+
+    statements, serialized_bodies, body_columns = [], [], []
+    serializer = task_facade._serialize_student_data
+    def count_serialized_bodies(*args, **kwargs):
+        students = serializer(*args, **kwargs)
+        serialized_bodies.extend(answer["content"] for student in students.values() for answer in student["stu_ans"])
+        return students
+    def count_sql(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+    def inspect_columns(conn, cursor, statement, parameters, context, executemany):
+        body_columns.extend(column[0] for column in cursor.description or [] if column[0] == "content")
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", count_sql)
+    event.listen(engine, "after_cursor_execute", inspect_columns)
+    try:
+        # Isolate the cost added by current-source diagnostics from pre-existing state queries.
+        with monkeypatch.context() as scope:
+            scope.setattr(workflow_repository, "current_source_answer_review_fields", lambda *a, **kw: [])
+            task_facade.task_state(**args)
+        baseline = len(statements)
+        statements.clear()
+        monkeypatch.setattr(task_facade, "_serialize_student_data", count_serialized_bodies)
+        state = task_facade.task_state(**args)
+    finally:
+        event.remove(engine, "before_cursor_execute", count_sql)
+        event.remove(engine, "after_cursor_execute", inspect_columns)
+    print(f"poll students={student_count}: baseline={baseline}, actual={len(statements)}, "
+          f"serialized_answer_characters={sum(map(len, serialized_bodies))}")
+    assert serialized_bodies == []
+    assert body_columns == []
+    assert len(statements) - baseline == 1  # One batch query, independent of student count.
+    assert "student_data" not in state
+    sources = state["submission_sources"]
+    assert len(sources) == student_count
+    assert sorted(source["answer_required_diagnostic_count"] for source in sources) == [0] * (student_count - 1) + [2]
+    conflict = next(source for source in sources if source["answer_required_diagnostic_count"])
+    assert len(conflict["answer_diagnostics"]) == 2
+    assert all("answer_assignment_conflict" in answer["flag"] for answer in conflict["answer_diagnostics"])
+    registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container", [False, True])
+async def test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads(monkeypatch, container):
+    from backend.services.submission_source_state import load_source_states
+    from backend.db import source_outcome_repository
+
+    owner, task = _seed_task(with_question=True)
+    add_reviewed_question(task, teacher_id=owner, q_id="q2", order_index=1,
+        number="2", type="concept", stem="Second question", criterion="Correct answer: 10 points", max_score=10)
+    registry = _registry(monkeypatch, lambda _: pytest.fail("Manual handoff called a model"))
+    filename, content, content_type = "S1_Alice.txt", b"saved original", "text/plain"
+    if container:
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w"):
+            pass  # A real empty archive cannot establish a student count.
+        filename, content, content_type = "answers.zip", archive.getvalue(), "application/zip"
+    args = dict(task_id=task, owner_id=owner)
+    queued = task_facade.queue_task_submission_parsing(**args, filename=filename, content=content,
+        content_type=content_type, registry=registry)
+    stop_task_run(**args, job_id=queued["job_id"],
+        expected_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision)
+    paused = task_facade.get_task(**args)
+    await continue_manually(**args, job_id=queued["job_id"], expected_revision=paused["workflow_revision"])
+    manual = task_facade.get_task(**args)
+    if container:
+        assert manual["manual_student_count_required"]
+        await continue_manually(**args, job_id=manual["parse_job_id"],
+            expected_revision=manual["workflow_revision"], student_count=2)
+        manual = task_facade.get_task(**args)
+    for index, display_id in enumerate(manual["student_data"]):
+        for q_id in ("q1", "q2"):
+            current = task_facade.get_task(**args)
+            task_facade.update_student_answer(**args, display_student_id=display_id, q_id=q_id,
+                patch={"content": "Teacher transcribed answer " * 1000, "review_status": "confirmed"},
+                expected_revision=current["workflow_revision"])
+        current = task_facade.get_task(**args)
+        task_facade.update_student_identity(**args, current_display_id=display_id,
+            new_display_id=f"S{index+1}", new_display_name=f"Synthetic learner {index+1}",
+            expected_revision=current["workflow_revision"])
+    clean = task_facade.get_task(**args)
+    assert clean["submission_sources"][0]["resolution_status"] == "manual_resolved"
+    assert clean["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    assert task_facade.grading_readiness(**args)["ready"]
+    operation = workflow_repository.get_operation(clean["parse_job_id"], owner_id=owner)
+    history = load_source_states(operation)
+    outcomes = source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt)
+    original = next(answer for answer in clean["student_data"]["S1"]["stu_ans"] if answer["q_id"] == "q1")
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q1",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q2"}, expected_revision=clean["workflow_revision"])
+    conflicted = task_facade.get_task(**args)
+    source = conflicted["submission_sources"][0]
+    print(f"manual container={container}: status={source['resolution_status']}, required={source['answer_required_diagnostic_count']}")
+    assert source["answer_required_diagnostic_count"] == source["answer_diagnostic_count"] == 2
+    assert source["resolution_status"] == source["status"] == "manual_review"
+    assert len(source["answer_diagnostics"]) == 2
+    assert all("answer_assignment_conflict" in answer["flag"] for answer in source["answer_diagnostics"])
+    assert "submission_recognition_blocked" in task_facade.grading_readiness(**args)["blocking_issues"]
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", lambda *a, **kw: pytest.fail("Manual poll loaded complete answers"))
+        assert task_facade.task_state(**args)["submission_sources"] == conflicted["submission_sources"]
+    task_facade.update_student_answer(**args, display_student_id="S1", q_id="q2",
+        patch={"answer_id": original["answer_id"], "target_q_id": "q1"}, expected_revision=conflicted["workflow_revision"])
+    repaired = task_facade.get_task(**args)
+    with monkeypatch.context() as scope:
+        scope.setattr(task_facade, "_serialize_student_data", lambda *a, **kw: pytest.fail("Manual poll loaded complete answers"))
+        assert task_facade.task_state(**args)["submission_sources"] == repaired["submission_sources"]
+    assert repaired["submission_sources"][0]["resolution_status"] == "manual_resolved"
+    assert repaired["submission_sources"][0]["answer_required_diagnostic_count"] == 0
+    assert task_facade.grading_readiness(**args)["ready"]
+    assert load_source_states(workflow_repository.get_operation(operation.id, owner_id=owner)) == history
+    assert source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt) == outcomes
+    registry.provider.ainvoke.assert_not_awaited()

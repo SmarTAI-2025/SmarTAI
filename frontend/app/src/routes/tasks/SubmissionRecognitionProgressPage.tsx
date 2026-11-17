@@ -166,6 +166,7 @@ export function SubmissionRecognitionProgressPage() {
             additionalActions={[...(failedJobId && !info.retryUnavailable ? [{ label: openingManual ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually"), onClick: () => void continueManually(), busy: openingManual || manualRecognition.isPending, disabled: retryRecognition.isPending || refreshing }] : []), { label: t("submissionProgressRefresh"), onClick: () => void refresh(), busy: retryRecognition.isPending || refreshing, disabled: openingManual }]}
           />}
           {!paused && <SubmissionSourceOutcomePanel
+            requiredOnly
             summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}
             sources={progressQuery.data?.submission_sources ?? taskQuery.data?.submission_sources}
             locale={locale}
@@ -286,6 +287,7 @@ export function SubmissionRecognitionProgressPage() {
       </section>
 
       <SubmissionSourceOutcomePanel
+        requiredOnly
         summary={progressQuery.data?.submission_source_summary ?? taskQuery.data?.submission_source_summary}
         sources={progressQuery.data?.submission_sources ?? taskQuery.data?.submission_sources}
         locale={locale}

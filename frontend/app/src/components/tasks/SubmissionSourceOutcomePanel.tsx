@@ -20,12 +20,14 @@ export function SubmissionSourceOutcomePanel({
   locale,
   taskId,
   className,
+  requiredOnly = false,
 }: {
   summary?: SubmissionSourceSummary;
   sources?: SubmissionSourceOutcome[];
   locale: Locale;
   taskId?: string;
   className?: string;
+  requiredOnly?: boolean;
 }) {
   const { hash } = useLocation();
   const sourceKey = sources.map(source => source.source_id).join(",");
@@ -38,9 +40,15 @@ export function SubmissionSourceOutcomePanel({
   const counts = summary ?? summarize(sources);
   if (counts.uploaded <= 0) return null;
   const hasTerminalAttention = counts.failed > 0 || counts.identity_needs_review > 0 || Boolean(counts.manual_review);
-  const hasQuestionWarnings = sources.some((source) => source.unknown_question_ids.length > 0);
-  const hasAttention = hasTerminalAttention || hasQuestionWarnings;
-  const ordered = [...sources].sort((left, right) => {
+  const requiredAnswerCount = sources.reduce((total, source) => total + (source.answer_required_diagnostic_count
+    ?? source.answer_diagnostics?.filter(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
+      .some(note => note.severity === "blocking")).length ?? 0), 0);
+  const hasQuestionWarnings = !requiredOnly && sources.some((source) => source.unknown_question_ids.length > 0);
+  const hasAttention = hasTerminalAttention || requiredAnswerCount > 0 || hasQuestionWarnings;
+  const ordered = sources.filter(source => !requiredOnly || source.status === "failed"
+    || source.status === "identity_needs_review" || source.status === "manual_review"
+    || source.answer_diagnostics?.some(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
+      .some(note => note.severity === "blocking"))).sort((left, right) => {
     const priority = (item: SubmissionSourceOutcome) => (
       item.status === "failed" ? 0
         : item.status === "identity_needs_review" || item.status === "manual_review" ? 1
@@ -48,6 +56,15 @@ export function SubmissionSourceOutcomePanel({
     );
     return priority(left) - priority(right) || left.file_name.localeCompare(right.file_name);
   });
+  let remainingAnswers = 20;
+  const visibleSources = requiredOnly ? ordered.slice(0, 20).map(source => {
+    const requiredAnswers = (source.answer_diagnostics ?? []).filter(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
+      .some(note => note.severity === "blocking"));
+    const answers = requiredAnswers.slice(0, remainingAnswers);
+    remainingAnswers -= answers.length;
+    return { ...source, answer_diagnostics: answers,
+      answer_required_diagnostic_count: source.answer_required_diagnostic_count ?? requiredAnswers.length };
+  }) : ordered;
 
   return (
     <section
@@ -61,14 +78,16 @@ export function SubmissionSourceOutcomePanel({
           </h2>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {equation(counts, locale)}
-            {hasTerminalAttention
-              ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
+            {requiredAnswerCount > 0
+              ? tx(locale, `。有 ${requiredAnswerCount} 份作答需要处理，请逐题核对。`, `. ${requiredAnswerCount} responses need action; review each answer.`)
+              : hasTerminalAttention
+                ? tx(locale, "。请查看下方原因并处理。", ". Review the details below to continue.")
               : hasQuestionWarnings
                 ? tx(locale, "。部分成功文件还包含未匹配题号，请展开核对。", ". Some recognized files also contain unmatched question IDs; expand the list to review them.")
               : tx(locale, "。", ".")}
           </p>
         </div>
-        {taskId && hasAttention && !counts.manual_review ? (
+        {taskId && (hasTerminalAttention || hasQuestionWarnings) && !counts.manual_review ? (
           <Link
             to={`/tasks/${taskId}/submissions/upload`}
             className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-md border bg-card px-3 text-xs font-semibold text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
@@ -99,18 +118,26 @@ export function SubmissionSourceOutcomePanel({
             </span>
             <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
-          <ol className="mt-2 max-h-[520px] space-y-2 overflow-y-auto pr-1">
-            {ordered.map((source) => (
-              <SourceOutcomeRow key={source.source_id} source={source} locale={locale} />
+          <ol className={cn("mt-2 space-y-2 overflow-y-auto pr-1", requiredOnly ? "max-h-[260px]" : "max-h-[520px]")}>
+            {visibleSources.map((source) => (
+              <SourceOutcomeRow key={source.source_id} source={source} locale={locale} requiredOnly={requiredOnly} />
             ))}
           </ol>
+          {requiredOnly && ordered.length > visibleSources.length ? <p className="mt-2 text-xs text-muted-foreground">{tx(locale,
+            "先显示 20 份文件，进入复核可查看全部。", "Showing 20 files. Open review to see all items.")}</p> : null}
         </details>
       ) : null}
     </section>
   );
 }
 
-function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome; locale: Locale }) {
+function SourceOutcomeRow({ source, locale, requiredOnly }: { source: SubmissionSourceOutcome; locale: Locale; requiredOnly: boolean }) {
+  const diagnostics = (source.answer_diagnostics ?? []).map(answer => ({ answer,
+    notes: answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale, true)
+      .filter(note => !requiredOnly || note.severity === "blocking") })).filter(item => item.notes.length > 0);
+  const shown = requiredOnly ? diagnostics.slice(0, 20) : diagnostics;
+  const diagnosticCount = requiredOnly ? source.answer_required_diagnostic_count ?? diagnostics.length
+    : source.answer_diagnostic_count ?? diagnostics.length;
   const copy = getSubmissionSourceReasonCopy(source, locale);
   const Icon = source.status === "parsed"
     ? CheckCircle2
@@ -149,20 +176,17 @@ function SourceOutcomeRow({ source, locale }: { source: SubmissionSourceOutcome;
           ) : null}
           {source.page_diagnostics ? <PageDiagnostics source={source} locale={locale} /> : null}
           {source.student_candidate ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "已识别身份：", "Recognized identity: ")}{source.student_candidate}</p> : null}
-          {(source.answer_diagnostic_count ?? 0) > 0 ? <p className="mt-2 text-xs font-medium">{tx(locale, `${source.answer_diagnostic_count} 份作答需要关注`, `${source.answer_diagnostic_count} responses need attention`)}</p> : null}
-          {(source.answer_diagnostics ?? []).map(answer => {
-            // Review notes only inspect whether content exists; no response
-            // text is sent in this diagnostic projection.
-            const notes = answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale, true);
-            return notes.length ? <div key={answer.q_id} className="mt-2 rounded-md border px-3 py-2 text-xs leading-5">
+          {diagnosticCount > 0 ? <p className="mt-2 text-xs font-medium">{tx(locale, `${diagnosticCount} 份作答需要关注`, `${diagnosticCount} responses need attention`)}</p> : null}
+          {shown.map(({ answer, notes }, index) => {
+            return notes.length ? <div key={`${answer.q_id}:${index}`} className="mt-2 rounded-md border px-3 py-2 text-xs leading-5">
               <strong>{tx(locale, `第 ${answer.number || answer.q_id} 题`, `Question ${answer.number || answer.q_id}`)}</strong>
               {notes.map(note => <p key={note.label} className={note.severity === "blocking" ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300"}>
                 {tx(locale, note.severity === "blocking" ? "需处理：" : "建议复核：", note.severity === "blocking" ? "Required: " : "Suggested: ")}{note.label}
               </p>)}
             </div> : null;
           })}
-          {(source.answer_diagnostic_count ?? 0) > (source.answer_diagnostics?.length ?? 0) ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "这里先列出部分问题，进入复核可查看全部。", "Some issues are shown here. Open review to see them all.")}</p> : null}
-          {source.unknown_question_ids.length > 0 && source.reason_code !== "no_matching_answer" ? (
+          {diagnosticCount > shown.length ? <p className="mt-1 text-xs text-muted-foreground">{tx(locale, "这里先列出部分问题，进入复核可查看全部。", "Some issues are shown here. Open review to see them all.")}</p> : null}
+          {!requiredOnly && source.unknown_question_ids.length > 0 && source.reason_code !== "no_matching_answer" ? (
             <p className="mt-1 rounded-md bg-amber-50 px-2 py-1.5 text-[11px] font-medium leading-5 text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
               {tx(locale, "同时发现未匹配题号：", "Also found unmatched question IDs: ")}
               {source.unknown_question_ids.join(locale === "zh-CN" ? "、" : ", ")}

@@ -2,6 +2,8 @@
 from copy import deepcopy
 import re
 import json
+from backend.domain.confidence_policy import question_issue_blocks_progress
+from backend.domain.question_types import normalize_question_type
 
 
 def normalize_formula_issue(issue):
@@ -16,12 +18,51 @@ def normalize_formula_issue(issue):
     return {**issue, "code": "recognition_needs_review", "severity": "warning", "details": details}
 
 
+def effective_question_issues(presentation, question_type=None):
+    from backend.services.math_grading_context import uses_math_grading
+    non_math = bool(normalize_question_type(question_type)) and not uses_math_grading(question_type)
+    issues = []
+    for issue in presentation.get("preparation_issues", []):
+        issue = normalize_formula_issue(issue)
+        if (non_math and issue.get("field") == "rubric"
+                and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"):
+            # Keep the old diagnostic for provenance, but do not require a
+            # compiler that the corrected question type will never use.
+            issue = {**issue, "status": "resolved"}
+        coverage = (issue.get("details") or {}).get("coverage") or {}
+        # Old source scores/labels were broadcast to every question. They are
+        # not per-question assessments; keep actual failure evidence visible,
+        # including incomplete question fragments from saved-text recovery.
+        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"}
+                and not (issue.get("code") == "recognition_partial" and issue.get("severity") == "blocking")
+                and (issue.get("details") or {}).get("confidence_scope") != "question"
+                and not (issue.get("details") or {}).get("error_code")
+                and not (issue.get("details") or {}).get("incomplete")
+                and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
+            continue
+        if (issue.get("field") != "answer" and issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
+                and ((issue.get("details") or {}).get("error_code")
+                     or (issue.get("details") or {}).get("incomplete")
+                     or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
+            issue = {**issue, "severity": "blocking", "status": "open"}
+        if issue.get("code") == "manual_completion_required":
+            issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
+                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
+        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
+            issue.get("code") in {"low_confidence", "recognition_needs_review"}
+            and not (issue.get("details") or {}).get("error_code")
+            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
+        ):
+            issue = {**issue, "severity": "warning"}
+        issues.append(issue)
+    return issues
+
+
 def preparation_review(packages):
     result = []
     for q_id, row in packages.items():
         issues = []
-        for original in row.get("preparation_issues", []):
-            issue = normalize_formula_issue(original)
+        for issue in effective_question_issues(row, row.get("type")):
             if issue.get("status") != "open":
                 continue
             details = issue.get("details") or {}
@@ -35,7 +76,7 @@ def preparation_review(packages):
                 safe["invalid_fields"] = list(draft["invalid_fields"])[:24]
             issues.append({"issue_id": issue.get("issue_id", ""), "q_id": q_id,
                 "field": issue.get("field"), "code": issue.get("code"),
-                "severity": issue.get("severity"), "status": "open", "details": safe})
+                "severity": "blocking" if question_issue_blocks_progress(issue, row) else "warning", "status": "open", "details": safe})
         if issues:
             result.append({"q_id": q_id, "number": str(row.get("number") or ""), "issues": issues})
     return result
@@ -44,10 +85,12 @@ def preparation_review(packages):
 def bounded_preparation_review(rows):
     """Leave room for per-question counters in the 64 KiB progress envelope."""
     result, size = [], 0
-    ordered = sorted(rows, key=lambda row: not any(i.get("severity") == "blocking" for i in row["issues"]))
-    for row in ordered:
+    for original in rows:
+        row = {**original, "issues": [{**i, "severity": "blocking"} for i in original["issues"] if question_issue_blocks_progress(i, original)]}
+        if not row["issues"]:
+            continue
         cost = len(json.dumps(row, ensure_ascii=False).encode("utf-8"))
-        if size + cost > 8000 or len(result) >= 12:
+        if size + cost > 8000 or len(result) >= 20:
             break
         result.append(row)
         size += cost
@@ -113,9 +156,14 @@ def public_preparation_review(value):
                     if isinstance(coverage.get(key), list)}
                 if isinstance(coverage.get("missing_targets"), list):
                     safe["coverage"]["missing_targets"] = [n[:80] for n in coverage["missing_targets"][:500] if isinstance(n, str)]
+            effective = effective_question_issues({"preparation_issues": [{**issue, "details": safe}]})
+            if not effective:
+                continue
+            issue = effective[0]
+            safe = issue.get("details") or {}
             items.append({"issue_id": str(issue.get("issue_id", ""))[:120], "q_id": row["q_id"][:120],
                 "field": issue["field"], "code": issue["code"], "status": "open",
-                "severity": "blocking" if issue.get("severity") == "blocking" else "warning", "details": safe})
+                "severity": "blocking" if question_issue_blocks_progress(issue, row) else "warning", "details": safe})
         if items:
             result.append({"q_id": row["q_id"][:120], "number": str(row.get("number") or "")[:120], "issues": items})
     return result

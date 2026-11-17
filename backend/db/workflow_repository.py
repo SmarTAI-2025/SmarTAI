@@ -30,7 +30,9 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     and_,
+    case,
     delete,
+    func,
     or_,
     select,
     update,
@@ -45,6 +47,7 @@ from backend.db.models import (  # noqa: F401
     GradeResultRecord,
     GradingRunRecord,
     StoredFileRecord,
+    SubmissionAnswerRecord,
     SubmissionRecord,
     SubmissionRevisionRecord,
 )
@@ -2033,6 +2036,60 @@ def answer_review_statuses(answer_ids: Iterable[str]) -> dict[str, str]:
             )
         ).all()
         return {row.answer_id: row.review_status for row in rows}
+
+
+def current_source_answer_review_fields(
+    assignment_id: str, *, owner_id: str, source_ids: Iterable[str],
+    manual_container_source_id: str | None = None,
+) -> list:
+    """Batch current review facts without transferring answer bodies to Python.
+
+    Keep blank detection identical to Python str.strip(), including Unicode
+    whitespace. SQLite calls the two-argument function trim; PostgreSQL btrim.
+    The outer join retains empty revisions so missing questions remain visible.
+    Manual count handoff may associate several students with a container source.
+    """
+    ids = list(source_ids)
+    if not ids:
+        return []
+    whitespace = " \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
+    with session_scope() as session:
+        trim = func.btrim if session.get_bind().dialect.name == "postgresql" else func.trim
+        source_id = AssignmentStudentPresentationRecord.source_id
+        if manual_container_source_id:
+            source_id = case((AssignmentStudentPresentationRecord.identity_match_method == "manual_review",
+                              func.coalesce(source_id, manual_container_source_id)), else_=source_id)
+        return list(session.execute(
+            select(
+                source_id.label("source_id"),
+                SubmissionRecord.student_id,
+                SubmissionAnswerRecord.id,
+                SubmissionAnswerRecord.answer_key,
+                SubmissionAnswerRecord.q_id,
+                SubmissionAnswerRecord.number,
+                SubmissionAnswerRecord.type,
+                SubmissionAnswerRecord.flag,
+                (func.length(trim(SubmissionAnswerRecord.content, whitespace)) > 0).label("has_content"),
+                SubmissionAnswerPresentationRecord.review_status,
+            )
+            .select_from(SubmissionRecord)
+            .join(AssignmentRecord, AssignmentRecord.id == SubmissionRecord.assignment_id)
+            .join(AssignmentStudentPresentationRecord, and_(
+                AssignmentStudentPresentationRecord.assignment_id == SubmissionRecord.assignment_id,
+                AssignmentStudentPresentationRecord.student_id == SubmissionRecord.student_id,
+            ))
+            .outerjoin(SubmissionAnswerRecord, SubmissionAnswerRecord.revision_id == SubmissionRecord.current_revision_id)
+            .outerjoin(SubmissionAnswerPresentationRecord, SubmissionAnswerPresentationRecord.answer_id == SubmissionAnswerRecord.id)
+            .where(
+                SubmissionRecord.assignment_id == assignment_id,
+                SubmissionRecord.current_revision_id.is_not(None),
+                AssignmentRecord.teacher_id == owner_id,
+                AssignmentRecord.deletion_requested_at.is_(None),
+                AssignmentStudentPresentationRecord.is_active.is_(True),
+                source_id.in_(ids),
+            )
+            .order_by(SubmissionAnswerRecord.id)
+        ))
 
 
 def save_run_setup(

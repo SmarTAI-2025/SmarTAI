@@ -42,11 +42,11 @@ for (const stage of ["submissions", "grading"] as const) test(`${stage}: failure
   if (stage === "submissions") {
     await expect(page.getByText("第 1.10 题", { exact: true })).toBeVisible();
     await expect(page.getByText(/需处理：待核对：作答内容/)).toHaveClass(/text-red-700/);
-    await expect(page.getByText(/建议复核：置信度 0.4/)).toHaveClass(/text-amber-700/);
+    await expect(page.getByText(/建议复核：置信度 0.4/)).toHaveCount(0);
     await expect(page.getByText(/已识别身份：样例学生/)).toBeVisible();
   } else {
     const issues = page.getByRole("region", { name: "批改问题明细" });
-    await expect(issues).toContainText("样例学生 · 第 1.10 题");
+    await expect(issues).toContainText("样例学生（S1） · 第 1.10 题");
     await expect(issues).toContainText("Gemini：模型返回的评分格式无法读取");
     await expect(issues).toContainText("1 份缺少有效分数");
   }

@@ -71,11 +71,11 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     render(<MemoryRouter initialEntries={["/tasks/task-1/problems/progress"]}><Routes>
       <Route path="/tasks/:taskId/problems/progress" element={<ProblemRecognitionProgressPage />} />
     </Routes></MemoryRouter>);
-    expect(screen.getByText("需要处理 2 题 · 建议复核 1 题")).toBeVisible();
+    expect(screen.getByText("需要处理 2 题")).toBeVisible();
     expect(screen.getByText(/已保存 3 个题干、2 份标答、1 份评分标准/)).toBeVisible();
     expect(screen.getByText("第 1.8 题")).toBeVisible();
     expect(screen.getByText(/评分标准缺少其他正确解法的扣分规则/)).toBeVisible();
-    expect(screen.getByText(/建议复核：本题公式待核对/)).toBeVisible();
+    expect(screen.queryByText(/建议复核：/)).not.toBeInTheDocument();
     expect(screen.queryByText("未找齐指定题目")).toBeNull();
   });
   it("shows the locator output limit, the saved stem count and available recovery actions", () => {

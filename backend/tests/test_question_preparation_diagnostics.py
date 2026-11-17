@@ -44,8 +44,7 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
     assert len(progress["completed_question_ids"]) == 2
     review = {r["number"]: r["issues"] for r in progress["preparation_review"]}
     assert [i["field"] for i in review["1.8"]] == ["rubric"]
-    assert review["1.10"][0]["severity"] == "warning"
-    assert "incomplete" not in review["1.10"][0]["details"]
+    assert "1.10" not in review  # Advisory formula review stays on the review page.
 
     task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
         failure.value.code, expected_lease_token=operation.lease_token, operation_progress=progress)
@@ -79,6 +78,18 @@ def test_public_progress_preserves_field_diagnostics_without_model_content():
     assert result[0]["issues"][0]["details"] == dict(reason="invalid_structured_rubric",
         invalid_fields=["part_rubric.parts[0].alternative"])
     assert "private" not in str(result)
+
+
+def test_bounded_progress_excludes_advisory_issues_before_twenty_question_limit():
+    from backend.services.question_preparation_diagnostics import bounded_preparation_review
+    yellow = dict(severity="warning", code="recognition_needs_review", field="stem", status="open")
+    red = dict(severity="blocking", code="generation_failed", field="rubric", status="open")
+    rows = bounded_preparation_review([
+        *[dict(q_id=f"yellow-{i}", issues=[yellow]) for i in range(25)],
+        *[dict(q_id=f"red-{i}", issues=[red, yellow]) for i in range(25)],
+    ])
+    assert len(rows) == 20 and all(row["q_id"].startswith("red-") for row in rows)
+    assert all(row["issues"] == [red] for row in rows)
 
 
 def test_formula_warning_is_not_a_backend_progress_blocker():
@@ -116,3 +127,44 @@ async def test_upstream_failure_is_bound_to_the_question_and_persisted_without_r
     assert len(cause) == 1 and cause[0]["field"] == "rubric"
     assert cause[0]["details"]["provider_http_status"] == 503
     assert "PRIVATE" not in str(issues)
+
+
+@pytest.mark.parametrize("field,code,severity,details,required", [
+    ("answer", "recognition_partial", "blocking", {"incomplete": True}, False),
+    ("rubric", "source_conflict", "warning", {}, True),
+    ("programming_tests", "source_conflict", "warning", {"reason": "test_case_output_conflict"}, True),
+    ("stem", "recognition_partial", "warning", {"coverage": {"failed_pages": [2]}}, True),
+    ("programming_tests", "generation_failed", "blocking", {}, False),
+])
+def test_progress_classifies_issues_with_the_existing_review_policy(field, code, severity, details, required):
+    from backend.services.question_preparation_diagnostics import preparation_review, bounded_preparation_review
+    issue = dict(issue_id="i1", field=field, code=code, severity=severity, details=details, status="open")
+    presentation = dict(type="programming", preparation_issues=[issue])
+    gate = any(task_facade.question_issue_blocks_progress(i, presentation)
+               for i in task_facade._effective_question_issues(presentation, presentation["type"]))
+    assert gate is required
+    review = preparation_review({"q1": {"number": "1.2.3", **presentation}})
+    assert any(i["severity"] == "blocking" for r in review for i in r["issues"]) is required
+    public = public_progress({"preparation_review": bounded_preparation_review(review)}, terminal=True)
+    assert bool(public["preparation_review"]) is required
+
+
+def test_optional_answers_do_not_displace_conflicts_from_the_twenty_question_preview():
+    from backend.services.question_preparation_diagnostics import preparation_review, bounded_preparation_review
+    packages = {
+        **{f"optional-{i}": dict(number=str(i), preparation_issues=[dict(field="answer", code="recognition_partial", severity="blocking", status="open", details={"incomplete": True})]) for i in range(25)},
+        **{f"conflict-{i}": dict(number=str(i), preparation_issues=[dict(field="rubric", code="source_conflict", severity="warning", status="open")]) for i in range(25)},
+    }
+    review = preparation_review(packages)
+    assert sum(any(i["severity"] == "blocking" for i in r["issues"]) for r in review) == 25
+    preview = bounded_preparation_review(review)
+    assert len(preview) == 20 and all(r["q_id"].startswith("conflict-") for r in preview)
+
+
+@pytest.mark.parametrize("details", ["PRIVATE_BAD_DETAILS", {"required_fields": None}, {"raw_response": "PRIVATE"}])
+def test_public_review_normalizes_only_sanitized_persisted_issue_details(details):
+    from backend.services.question_preparation_diagnostics import public_preparation_review
+    result = public_preparation_review([dict(q_id="q1", number="1", issues=[dict(
+        issue_id="conflict", field="rubric", code="source_conflict", severity="warning", status="open", details=details)])])
+    assert result[0]["issues"][0]["severity"] == "blocking"
+    assert "PRIVATE" not in str(result)

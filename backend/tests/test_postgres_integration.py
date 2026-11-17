@@ -83,6 +83,25 @@ def test_postgres_progress_omits_trace_json_and_preserves_checkpoints(pg_databas
 
 
 @pytest.mark.asyncio
+async def test_postgres_current_source_diagnostics_remain_lightweight_and_match_review(pg_database, monkeypatch):
+    from backend.tests.test_submission_incremental import (
+        test_current_source_review_fields_match_full_review_policy_and_scope,
+        test_state_poll_batches_current_diagnostics_without_serializing_answer_bodies,
+    )
+    await test_current_source_review_fields_match_full_review_policy_and_scope(monkeypatch)
+    await test_state_poll_batches_current_diagnostics_without_serializing_answer_bodies(monkeypatch, 10)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("container", [False, True])
+async def test_postgres_manual_source_diagnostics_follow_conflicts_and_repairs(pg_database, monkeypatch, container):
+    from backend.tests.test_submission_incremental import (
+        test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads,
+    )
+    await test_manual_source_diagnostics_follow_new_conflicts_and_repairs_without_full_answer_reads(monkeypatch, container)
+
+
+@pytest.mark.asyncio
 async def test_provider_admission_recovers_a_conflicting_learning_write(pg_database, monkeypatch):
     from backend.tests.test_adaptive_admission_lifecycle import (
         test_failed_generation_save_refreshes_and_allows_later_verified_save,

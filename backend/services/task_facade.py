@@ -66,6 +66,7 @@ from backend.domain import education
 from backend.domain.grading_review import result_programming_review_reason, teacher_resolved_programming_score
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
+from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
     DuplicateActiveRun,
@@ -432,7 +433,7 @@ def list_tasks(*, owner_id: str) -> dict[str, dict]:
     return output
 
 
-def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
+def get_task(*, task_id: str, owner_id: str, full: bool = True, _include_source_rows: bool = False) -> dict:
     assignment = assignment_repository.get_assignment(task_id, actor_id=owner_id)
     try:
         workflow = workflow_repository.get_live_workflow(
@@ -454,7 +455,8 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
     status = paused_status or ("error" if grading_error_code else _presentation_status(workflow, questions, submissions, latest_run))
     selected_docs = _selected_knowledge(task_id, owner_id)
     tag_ids = _get_task_tags(task_id, owner_id)
-    source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+    student_data = _serialize_student_data(task_id, owner_id, submissions) if full else None
+    source_summary, source_rows = _submission_source_projection(workflow, owner_id, current_students=student_data, questions=questions)
     incomplete_submissions = status in {"submissions_ready", "grading_setup"} and bool(source_summary["failed"] or source_summary["pending"])
     submission_error_code = next((row["reason_code"] for row in source_rows if row.get("reason_code")), "submission_parse_failed") if incomplete_submissions else None
     if incomplete_submissions:
@@ -534,14 +536,13 @@ def get_task(*, task_id: str, owner_id: str, full: bool = True) -> dict:
                 feedback_language=(workflow.grading_setup or {}).get("feedback_language", "zh"),
             ) for question in questions
         }
-        payload["student_data"] = {} if incomplete_submissions else _serialize_student_data(
-            task_id, owner_id, submissions
-        )
+        payload["student_data"] = {} if incomplete_submissions else student_data
+    if full or _include_source_rows:
         payload["submission_sources"] = source_rows
     return payload
 
 
-def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, int], list[dict]]:
+def _submission_source_projection(workflow, owner_id: str, *, current_students=None, questions=None) -> tuple[dict[str, int], list[dict]]:
     from backend.services.review_diagnostics import public_answer_diagnostics
     empty = {
         "uploaded": 0,
@@ -575,18 +576,52 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
     manual_review = operation.operation_type == "submission_manual_review"
     from backend.services.submission_source_state import load_source_states
     source_states = load_source_states(operation)
-    manually_resolved_sources = set()
-    unresolved_sources = set()
-    if manual_review:
-        for student in _serialize_student_data(workflow.assignment_id, owner_id, _active_submissions(workflow.assignment_id, owner_id)).values():
-            if student.get("identity_status") == "matched" and not any(
-                _answer_recognition_failures(answer.get("flag"))
-                for answer in student["stu_ans"]
+    manual_container = (operation.checkpoint or {}).get("manual_student_container_source_id") if manual_review else None
+    def current_source_id(presentation):
+        return presentation.source_id or (manual_container if presentation.identity_match_method == "manual_review" else None)
+    # Recognition checkpoints are immutable history. Once attached, review
+    # edits and confirmations on the current submission are authoritative.
+    current_diagnostics = {}
+    diagnostic_sources = {result.source.id for result in results}
+    if diagnostic_sources and operation.status not in {"pending", "running"}:
+        answers_by_source = defaultdict(list)
+        if current_students is None:
+            # Manual count handoff can put several students in one container.
+            # Detect duplicate assignments within each student before grouping by source.
+            fields_by_student = defaultdict(list)
+            for answer in workflow_repository.current_source_answer_review_fields(
+                workflow.assignment_id, owner_id=owner_id, source_ids=diagnostic_sources,
+                manual_container_source_id=manual_container,
             ):
-                manually_resolved_sources.add(student.get("source_id"))
-            else:
-                unresolved_sources.add(student.get("source_id"))
-        manually_resolved_sources -= unresolved_sources
+                fields = fields_by_student[(answer.source_id, answer.student_id)]
+                if answer.id is not None:
+                    fields.append(answer)
+            if questions is None:
+                questions = assignment_repository.list_questions(workflow.assignment_id, teacher_id=owner_id)
+            for (source_id, _student_id), answers in fields_by_student.items():
+                answers_by_source[source_id].extend(_serialize_review_answers(
+                    answers, {answer.id: answer.review_status or "pending" for answer in answers},
+                    questions, diagnostics_only=True,
+                ))
+        else:
+            for presentation in presentations.values():
+                student = current_students.get(presentation.display_student_id)
+                source_id = current_source_id(presentation)
+                if presentation.is_active and source_id in diagnostic_sources and student is not None:
+                    answers_by_source[source_id].extend(student["stu_ans"])
+        current_diagnostics = {source_id: public_answer_diagnostics(answers, limit=None)
+                               for source_id, answers in answers_by_source.items()}
+    manually_resolved_sources = set()
+    if manual_review:
+        identities_by_source = defaultdict(list)
+        for presentation in presentations.values():
+            if presentation.is_active:
+                identities_by_source[current_source_id(presentation)].append(presentation.identity_status == "matched")
+        manually_resolved_sources = {
+            source_id for source_id, diagnostics in current_diagnostics.items()
+            if all(identities_by_source.get(source_id, [False]))
+            and not public_answer_diagnostics(diagnostics, limit=None, required_only=True)
+        }
     rows: list[dict] = []
     summary = dict(empty)
     for result in results:
@@ -649,6 +684,12 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             internal_status = outcome.status
             summary["failed"] += 1
         summary["uploaded"] += 1
+        diagnostic_state = {} if manual_review else source_states.get(result.source.stored_file_id, {})
+        if result.source.id in current_diagnostics:
+            diagnostics = current_diagnostics[result.source.id]
+            diagnostic_state = {**diagnostic_state, "answer_diagnostics": diagnostics[:20],
+                "answer_diagnostic_count": len(diagnostics),
+                "answer_required_diagnostic_count": len(public_answer_diagnostics(diagnostics, limit=None, required_only=True))}
         rows.append({
             "source_id": result.source.id,
             "file_id": result.source.stored_file_id,
@@ -667,8 +708,9 @@ def _submission_source_projection(workflow, owner_id: str) -> tuple[dict[str, in
             "recognition_reason_code": safe_reason,
             "page_diagnostics": source_states.get(result.source.stored_file_id, {}).get("page_diagnostics"),
             "answer_diagnostics": public_answer_diagnostics(
-                source_states.get(result.source.stored_file_id, {}).get("answer_diagnostics", [])) if not manual_review else [],
-            "answer_diagnostic_count": source_states.get(result.source.stored_file_id, {}).get("answer_diagnostic_count", 0) if not manual_review else 0,
+                diagnostic_state.get("answer_diagnostics", [])),
+            "answer_diagnostic_count": diagnostic_state.get("answer_diagnostic_count", 0),
+            "answer_required_diagnostic_count": diagnostic_state.get("answer_required_diagnostic_count", 0 if manual_review else None),
             "resolution_status": (
                 "identity_resolved"
                 if outcome
@@ -1097,12 +1139,15 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     }
 
 
-def _serialize_review_answers(answers, statuses, questions=()):
+def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_only=False):
     duplicates = {q_id for q_id, count in Counter(answer.q_id for answer in answers).items() if count > 1}
     return [{
         "answer_id": answer.answer_key or answer.id,
-        "q_id": answer.q_id, "number": answer.number, "type": normalize_question_type(answer.type), "content": answer.content,
-        "flag": _public_answer_flags(answer.flag, content=answer.content, review_status=statuses.get(answer.id))
+        "q_id": answer.q_id, "number": answer.number, "type": normalize_question_type(answer.type),
+        **({"has_content": bool(answer.has_content)} if diagnostics_only else {"content": answer.content}),
+        "flag": _public_answer_flags(answer.flag, content=None if diagnostics_only else answer.content,
+                                    has_content=bool(answer.has_content) if diagnostics_only else None,
+                                    review_status=statuses.get(answer.id))
                 + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
         "recognition_confidence": _answer_recognition_confidence(answer.flag),
         "review_status": statuses.get(answer.id, "pending"),
@@ -3498,7 +3543,8 @@ async def run_task_submission_parsing(
                         from backend.services.review_diagnostics import public_answer_diagnostics
                         diagnostics = public_answer_diagnostics(student.get("stu_ans", []), limit=None)
                         await save_source_state(result.source_id, result.stored_file_id,
-                            answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics))
+                            answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics),
+                            answer_required_diagnostic_count=len(public_answer_diagnostics(diagnostics, limit=None, required_only=True)))
                     await reporter.set_completed_units(len(completed_sources))
                 await reporter.update_stage_metrics(
                     submissions_recognized=len(progress_students),
@@ -4750,14 +4796,14 @@ def _fail_operation(
 
 
 def task_state(*, task_id: str, owner_id: str) -> dict:
-    payload = get_task(task_id=task_id, owner_id=owner_id, full=False)
+    payload = get_task(task_id=task_id, owner_id=owner_id, full=False, _include_source_rows=True)
     try:
         workflow = workflow_repository.get_live_workflow(
             task_id, owner_id=owner_id
         )
     except NotFound:
         return payload
-    _source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+    source_rows = payload["submission_sources"]
     progress: dict | None = None
     active_operation_status: str | None = None
     if workflow.active_job_id:
@@ -4935,7 +4981,13 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     if run.status in {"partial_failed", "failed", "cancelled"}:
         from backend.services.review_diagnostics import public_grading_diagnostics
         review_rows, review_summary = public_grading_diagnostics(
-            grading_repository.list_results_for_run(run_id, include_missing=True))
+            [result for result in grading_repository.list_results_for_run(run_id, include_missing=True)
+             if _correction_review_blocks_finalization(result)])
+        presentations = workflow_repository.list_student_presentations(run.assignment_id)
+        for row in review_rows:
+            presentation = presentations.get(row["student_id"])
+            if presentation:
+                row["student_id"] = presentation.display_student_id
     return {
         "contract_version": 1, "job_id": run_id,
         "phase": "paused" if paused else "done" if run.status in {"completed", "partial_failed"} else (
@@ -4992,7 +5044,7 @@ def grading_readiness(
     questions = assignment_repository.get_questions_by_assignment(task_id)
     submissions = _active_submissions(task_id, owner_id)
     presentations = workflow_repository.list_student_presentations(task_id)
-    source_summary, source_rows = _submission_source_projection(workflow, owner_id)
+    source_summary, source_rows = _submission_source_projection(workflow, owner_id, questions=questions)
 
     issues: list[str] = []
     warnings: list[str] = []
@@ -5094,22 +5146,24 @@ def _answer_recognition_confidence(flags):
     return None
 
 
-def _answer_matching_confirmation_allowed(flags, content):
+def _answer_matching_confirmation_allowed(flags, content=None, *, has_content=None):
     """Only a complete transcription with a matching doubt can be confirmed as-is."""
     flags = list(flags or [])
-    return bool(str(content or "").strip() and "recognition_manual_pending" in flags
+    has_content = bool(str(content or "").strip()) if has_content is None else has_content
+    return bool(has_content and "recognition_manual_pending" in flags
         and not any(flag in {"recognition_failed", "parse_failed", "no_matching_answer",
                              "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"}
                     or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:",
                                         "recognition_invalid_fields:")) for flag in flags))
 
 
-def _metadata_only_recognition_fields(flags, content):
+def _metadata_only_recognition_fields(flags, content=None, *, has_content=None):
     """A teacher may confirm verified text when only bounded metadata failed."""
     flags = list(flags or [])
     fields = {field for flag in flags if flag.startswith("recognition_invalid_fields:")
               for field in flag.split(":", 1)[1].split(",")}
-    if (not str(content or "").strip() or not fields
+    has_content = bool(str(content or "").strip()) if has_content is None else has_content
+    if (not has_content or not fields
             or not fields <= {"number", "type", "flag", "recognition_confidence"}
             or any(flag in {"recognition_failed", "parse_failed", "no_matching_answer",
                             "recognition_incomplete", "recognition_paused", "provider_submit_uncertain"}
@@ -5119,16 +5173,16 @@ def _metadata_only_recognition_fields(flags, content):
     return fields
 
 
-def _public_answer_flags(flags, *, content=None, review_status=None):
+def _public_answer_flags(flags, *, content=None, review_status=None, has_content=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
               if flag not in SOURCE_LANGUAGE_FLAGS and not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
               and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
-    if _metadata_only_recognition_fields(flags, content):
+    if _metadata_only_recognition_fields(flags, content, has_content=has_content):
         result.append("recognition_metadata_review")
-    if _answer_matching_confirmation_allowed(flags, content):
+    if _answer_matching_confirmation_allowed(flags, content, has_content=has_content):
         if review_status == "confirmed":
             result = [flag for flag in result if flag != "recognition_manual_pending"]
         else:
@@ -5136,47 +5190,6 @@ def _public_answer_flags(flags, *, content=None, review_status=None):
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
         result.append("recognition_failed")
     return result
-
-
-def _effective_question_issues(presentation, question_type=None):
-    from backend.services.question_preparation_diagnostics import normalize_formula_issue
-    from backend.services.math_grading_context import uses_math_grading
-    non_math = bool(normalize_question_type(question_type)) and not uses_math_grading(question_type)
-    issues = []
-    for issue in presentation.get("preparation_issues", []):
-        issue = normalize_formula_issue(issue)
-        if (non_math and issue.get("field") == "rubric"
-                and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"):
-            # Keep the old diagnostic for provenance, but do not require a
-            # compiler that the corrected question type will never use.
-            issue = {**issue, "status": "resolved"}
-        coverage = (issue.get("details") or {}).get("coverage") or {}
-        # Old source scores/labels were broadcast to every question. They are
-        # not per-question assessments; keep actual failure evidence visible,
-        # including incomplete question fragments from saved-text recovery.
-        if (issue.get("code") in {"recognition_partial", "recognition_needs_review"}
-                and not (issue.get("code") == "recognition_partial" and issue.get("severity") == "blocking")
-                and (issue.get("details") or {}).get("confidence_scope") != "question"
-                and not (issue.get("details") or {}).get("error_code")
-                and not (issue.get("details") or {}).get("incomplete")
-                and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))):
-            continue
-        if (issue.get("field") != "answer" and issue.get("code") in {"recognition_partial", "recognition_needs_review"} and issue.get("status") != "resolved"
-                and ((issue.get("details") or {}).get("error_code")
-                     or (issue.get("details") or {}).get("incomplete")
-                     or any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets")))):
-            issue = {**issue, "severity": "blocking", "status": "open"}
-        if issue.get("code") == "manual_completion_required":
-            issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
-                field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
-        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
-            issue.get("code") in {"low_confidence", "recognition_needs_review"}
-            and not (issue.get("details") or {}).get("error_code")
-            and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
-        ):
-            issue = {**issue, "severity": "warning"}
-        issues.append(issue)
-    return issues
 
 
 def _question_review_blockers(questions) -> list[str]:
