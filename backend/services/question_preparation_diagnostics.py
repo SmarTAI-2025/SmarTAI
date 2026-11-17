@@ -6,6 +6,26 @@ from backend.domain.confidence_policy import question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 
 
+def required_programming_tests_missing(problem):
+    """A funded test-suite award cannot be graded without its test evidence."""
+    if normalize_question_type(problem.get("type")) != "编程题" or problem.get("test_cases"):
+        return False
+    draft = problem.get("rubric_draft")
+    plan = draft.get("plan") if isinstance(draft, dict) else None
+    rules = plan.get("part_rubric") if isinstance(plan, dict) else None
+    parts = rules.get("parts") if isinstance(rules, dict) else None
+    return any(isinstance(step, dict) and step.get("test_suite") is True
+               for part in parts if isinstance(part, dict) and isinstance(part.get("steps"), list)
+               for step in part["steps"]
+               ) if isinstance(parts, list) else False
+
+
+def required_programming_tests_issue(q_id):
+    return {"issue_id": f"required-tests:{q_id}", "q_id": q_id, "field": "programming_tests",
+            "code": "generation_failed", "status": "open", "severity": "blocking",
+            "source_tokens": [], "details": {"reason": "required_programming_tests_missing"}}
+
+
 def normalize_formula_issue(issue):
     """A transcription disagreement is not evidence of missing source content."""
     if (issue.get("details") or {}).get("reason") != "conflicting_printed_formula":
@@ -48,7 +68,8 @@ def effective_question_issues(presentation, question_type=None):
         if issue.get("code") == "manual_completion_required":
             issue = {**issue, "details": {**(issue.get("details") or {}), "required_fields": [
                 field for field in (issue.get("details") or {}).get("required_fields", []) if field in {"number", "type", "stem", "criterion"}]}}
-        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests") or (
+        if issue.get("field") == "answer" or (issue.get("code") == "generation_failed" and issue.get("field") == "programming_tests"
+                and (issue.get("details") or {}).get("reason") != "required_programming_tests_missing") or (
             issue.get("code") in {"low_confidence", "recognition_needs_review"}
             and not (issue.get("details") or {}).get("error_code")
             and not any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
@@ -105,7 +126,8 @@ def public_preparation_review(value):
              "rubric_step_reference_conflict", "invalid_test_case", "reference_solution_failed_case",
              "math_rubric_advisory", "ai_source_conflict", "unmapped_source_content", "max_score_not_found", "default_max_score_requires_review"}
     fields = {"stem", "answer", "rubric", "source", "programming_tests", "max_score"}
-    reasons = {"conflicting_printed_formula", "invalid_structured_rubric", "test_case_output_conflict", "alternative_cap_review"}
+    reasons = {"conflicting_printed_formula", "invalid_structured_rubric", "test_case_output_conflict", "alternative_cap_review",
+               "required_programming_tests_missing"}
     for row in value[:500] if isinstance(value, list) else []:
         if not isinstance(row, dict) or not isinstance(row.get("q_id"), str):
             continue

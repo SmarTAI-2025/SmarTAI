@@ -7,6 +7,18 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("keeps missing funded tests blocking and visible even on a previously confirmed question", () => {
+    const required = issue({ field: "programming_tests", code: "generation_failed", severity: "blocking",
+      details: { reason: "required_programming_tests_missing" } });
+    const row = question({ type: "编程题", test_cases: [], preparation_issues: [required] });
+    for (const review_status of ["needs_review", "confirmed"] as const) {
+      expect(questionReviewIssues({ ...row, review_status })).toHaveLength(1);
+      expect(questionReviewNextBlocked({ ...row, review_status })).toBe(true);
+      expect(questionReviewNotes({ ...row, review_status }, "zh-CN", code => code)).toEqual([
+        { severity: "blocking", label: "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。" },
+      ]);
+    }
+  });
   it("uses the same missing-test advisory for the matrix, queue and detail without blocking", () => {
     const row = question({ type: "编程题", test_cases: [] });
     const issues = questionReviewIssues(row);

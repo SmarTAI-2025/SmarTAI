@@ -1085,6 +1085,17 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     effective_issues = [issue for issue in _effective_question_issues(presentation, question.type)
         if (issue.get("details") or {}).get("reason") != "alternative_cap_review"
         or issue.get("issue_id") in current_cap_ids]
+    from backend.services.question_preparation_diagnostics import required_programming_tests_missing, required_programming_tests_issue
+    # This dependency follows the current saved rule and cases, not a stale
+    # warning retained from an earlier attempt or a teacher's previous rule.
+    effective_issues = [issue for issue in effective_issues
+        if (issue.get("details") or {}).get("reason") != "required_programming_tests_missing"]
+    if (required_programming_tests_missing({**presentation, "type": question.type, "test_cases": question.test_cases})
+            and not any(issue.get("field") == "programming_tests" and issue.get("status") == "open"
+                        and issue.get("severity") == "blocking" for issue in effective_issues)):
+        effective_issues = [issue for issue in effective_issues
+            if not (issue.get("field") == "programming_tests" and issue.get("code") == "generation_failed")]
+        effective_issues.append(required_programming_tests_issue(question.q_id))
     if math_plan and math_plan.part_rubric:
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh"),
@@ -5201,11 +5212,11 @@ def _question_review_blockers(questions) -> list[str]:
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
-        review_issues = _effective_question_issues(presentation, question.type)
+        problem = _serialize_problem(question)
+        review_issues = problem["preparation_issues"]
         if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
                 and _manual_question_fields_missing(question, presentation)):
             issues.append("question_manual_completion_required")
-        problem = _serialize_problem(question)
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
