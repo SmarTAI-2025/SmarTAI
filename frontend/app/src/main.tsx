@@ -73,12 +73,6 @@ const QuestionMaterialImportProgressPage = React.lazy(() =>
 const QuestionMaterialImportReviewPage = React.lazy(() =>
   import("@/routes/tasks/QuestionMaterialImportReviewPage").then((module) => ({ default: module.QuestionMaterialImportReviewPage })),
 );
-const QuestionAICompletionPage = React.lazy(() =>
-  import("@/routes/tasks/QuestionAICompletionPage").then((module) => ({ default: module.QuestionAICompletionPage })),
-);
-const QuestionAICompletionProgressPage = React.lazy(() =>
-  import("@/routes/tasks/QuestionAICompletionProgressPage").then((module) => ({ default: module.QuestionAICompletionProgressPage })),
-);
 const GradingSetupPage = React.lazy(() =>
   import("@/routes/tasks/GradingSetupPage").then((module) => ({ default: module.GradingSetupPage })),
 );
@@ -165,8 +159,8 @@ const router = createBrowserRouter([{ element: <PublicRouteLayout />, children: 
       { path: "tasks/:taskId/questions/import", element: routeElement(<QuestionMaterialImportPage />) },
       { path: "tasks/:taskId/questions/import/progress/:jobId", element: routeElement(<QuestionMaterialImportProgressPage />) },
       { path: "tasks/:taskId/questions/import/review/:jobId", element: routeElement(<QuestionMaterialImportReviewPage />) },
-      { path: "tasks/:taskId/questions/ai-complete", element: routeElement(<QuestionAICompletionPage />) },
-      { path: "tasks/:taskId/questions/ai-complete/progress/:jobId", element: routeElement(<QuestionAICompletionProgressPage />) },
+      // Reserve the retired path so it cannot fall through as a question ID.
+      { path: "tasks/:taskId/questions/ai-complete/*", element: routeElement(<NotFoundPage />) },
       { path: "tasks/:taskId/questions/:questionId", element: <Navigate to="content" replace /> },
       { path: "tasks/:taskId/questions/:questionId/:section", element: routeElement(<QuestionPreparationDetailPage />) },
       { path: "tasks/:taskId/grading-setup", element: routeElement(<GradingSetupPage />) },
