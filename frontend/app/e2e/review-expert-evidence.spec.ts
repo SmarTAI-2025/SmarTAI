@@ -59,7 +59,7 @@ for (const width of [390, 1440]) test(`deductions retain one net score and refer
   await expect(result.getByText("Net subtotal should not be a step")).toHaveCount(0);
   await expect(result).toContainText("[10]");
   await expect(result).toContainText("[0,0,0]");
-  await result.getByText("查看各专家原始结果").click();
+  await result.getByText(/^查看各专家(?:批改|原始)结果$/).click();
   const panel = result.getByRole("tabpanel");
   await expect(panel.getByText("-1 分", { exact: true })).toHaveCount(3);
   await expect(panel.getByText(reviewReason, { exact: true })).toBeVisible();
@@ -227,7 +227,7 @@ for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) {
     for (const [index, example] of examples.entries()) {
       if (surface === "teacher") await page.goto(`/tasks/${taskId}/review/S1/q${index + 1}`);
       const area = surface === "teacher" ? page.locator(`[data-question-id="q${index + 1}"]`).getByRole("region", { name: "SmarTAI Grading Result" }) : page.locator(".demo-content-tabs");
-      if (surface === "teacher") await area.getByText("View Original Model Results").click();
+      if (surface === "teacher") await area.getByText(/^View (?:Expert Grading Details|Original Model Results)$/).click();
       const panel = surface === "teacher" ? area.getByRole("tabpanel") : area.locator("section").filter({ has: page.getByText(`Fractional model ${index + 1}`, { exact: true }) }).last();
       if (surface === "demo") {
         await expect(area.getByText(corrections[index].comment, { exact: true })).toHaveCount(1);

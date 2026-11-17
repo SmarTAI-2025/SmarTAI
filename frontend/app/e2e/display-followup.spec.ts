@@ -54,7 +54,7 @@ for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) for 
     for (const [index, example] of examples.entries()) {
       if (surface === "teacher") await page.goto(`/tasks/${taskId}/review/S1/q${index + 1}`);
       const area = surface === "teacher" ? page.locator(`[data-question-id="q${index + 1}"]`).getByRole("region", { name: zh ? "SmarTAI 批改结果" : "SmarTAI Grading Result" }) : page.locator(".demo-content-tabs");
-      if (surface === "teacher") await area.getByText(zh ? "查看各专家原始结果" : "View Original Model Results").click();
+      if (surface === "teacher") await area.getByText(zh ? /^查看各专家(?:批改|原始)结果$/ : /^View (?:Expert Grading Details|Original Model Results)$/).click();
       const panel = surface === "teacher" ? area.getByRole("tabpanel") : area.locator("section").filter({ has: page.getByText(`${example.name} A`, { exact: true }) }).last();
       if (surface === "demo") {
         for (const text of [`Shared ${example.name} explanation.`, `Original ${example.name}.`, `Independent ${example.name} assessment.`, `Final ${example.name} review.`, `Unique ${example.name} review.`])

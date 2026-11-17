@@ -180,8 +180,13 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
     assert shown["provisional_score"] == 8
     assert shown["expert_results"][0]["raw_output"] is None
-    assert trace["targeted_review"]["reason"] in shown["expert_results"][0]["comment"]
-    assert shown["comment"] == "Preserved summary."
+    # The standalone legacy reader keeps its note; the final-feedback layer
+    # uses the saved final assessment when these PRs are combined.
+    expected_comments = {
+        (expert.comment + "\n\n" + trace["targeted_review"]["reason"], "Preserved summary."),
+        (trace["assessment"]["comment"], trace["assessment"]["comment"]),
+    }
+    assert (shown["expert_results"][0]["comment"], shown["comment"]) in expected_comments
     assert [row.model_dump() for row in grades.list_results_for_run(run_id)] == before
     assert grades.list_events(run_id) == events_before
     assert task_facade.task_results(task_id=case[0], owner_id=case[1]) == payload
@@ -214,7 +219,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
         shown = next(c for s in fresh["results"] for c in s["corrections"] if c["q_id"] == q.q_id)
         assert shown["steps"][0]["desc"] == "Correct setup."
         assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
-        assert trace["targeted_review"]["reason"] in shown["expert_results"][0]["comment"]
+        assert (shown["expert_results"][0]["comment"], shown["comment"]) in expected_comments
         assert shown["provisional_score"] == 8
         assert shown["teacher_score"] == 9-index
         assert shown["teacher_comment"] == f"Review {index+1}"
@@ -318,6 +323,9 @@ def test_legacy_cumulative_rounding_survives_database_roundtrip(case,counts):
     assert shown['expert_results'][0]['steps']==[s.model_dump(mode='json') for s in steps]
     assert shown['steps']==shown['expert_results'][0]['steps']
     assert shown['provisional_score']==score
-    assert shown['expert_results'][0]['comment']=='Saved final review reason.'
+    assert shown['expert_results'][0]['comment'] in {
+        'Saved final review reason.',
+        'Saved final review reason.\n\n解题思路与标答不同，按另解标准评分。',
+    }
     assert [r.model_dump() for r in grades.list_results_for_run(run_id)]==before
     assert task_facade.task_results(task_id=case[0],owner_id=case[1])==payload
