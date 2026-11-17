@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import settledExamples from "./fixtures/cumulative-scoring.json" with { type: "json" };
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const taskId = "asg_review_evidence";
@@ -12,6 +13,74 @@ const results = [{ student_id: "S1", student_name: "Example teacher data", corre
     { provider_id: "failed-provider", provider: "failed-model", score: 0, max_score: 10, confidence: 0, error_kind: "parse_failed", comment: "Could not parse the score.", steps: [] }], synthesis_method: "weighted_average" })) }];
 const task = { task_id: taskId, owner_id: "shared-owner", name: "Expert evidence", status: "graded", workflow_revision: 1, final_result_version: 0, problem_data, student_data,
   problem_count: 2, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
+
+for (const width of [390, 1440]) test(`deductions retain one net score and reference steps remain fixed at ${width}px`, async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await page.setViewportSize({ width, height: 1000 });
+  await page.addInitScript(() => {
+    localStorage.setItem("smartai_locale", "zh-CN");
+    localStorage.setItem("smartai_token", "synthetic-teacher-token");
+  });
+  const errorDetails = [
+    "由 x² = 1 推出 x = 1 时，遗漏了 x = -1 这一解。",
+    "在等式两边约去 x - 1 前没有排除 x = 1，此时除数为零，约分不成立。",
+    "只验证了 n = 1 的情形，没有给出从 n = k 到 n = k + 1 的归纳步骤，不能证明对所有正整数成立。",
+  ];
+  const reviewReason = "定向复核依据：已重新核对原作答，三个错误独立，分别按另解规则扣分。";
+  const fullReason = "定向复核依据：原有等价变换已覆盖两个方向，无需重抄标答。";
+  const advice = "证明依据核对建议：请核对第二个推理的定义域。";
+  const votes = [
+    { ...experts[0], provider: "Deducted", comment: `三个独立错误各扣 1 分，得 7 分。\n\n${reviewReason}\n\n${advice}`, score: 7, steps: [{ step_no: 1, part_id: "p1", score: 7, is_correct: false, is_alternative: true, desc: "Net subtotal should not be a step",
+      deductions: errorDetails.map(desc => ({ desc, points: 1 })) }] },
+    { ...experts[1], provider: "Complete", comment: `${fullReason}\n\n${advice}`, score: 10, steps: [{ step_no: 1, part_id: "p1", score: 10, is_correct: true, is_alternative: true, desc: "Correct work should not be a deduction", deductions: [] }] },
+    { ...experts[2], provider: "Reference", score: 0, steps: [1,2,3].map(n => ({ step_no: n, part_id: "p1", item_id: `s${n}`, score: 0, is_correct: false, desc: `Missing frozen goal ${n}` })) },
+  ];
+  await page.route(`${backend}/**`, async route => {
+    const path = new URL(route.request().url()).pathname;
+    const json = (value: unknown) => route.fulfill({ json: value });
+    if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+    if (path === "/auth/me") return json({ id: "shared-owner", username: "Synthetic teacher", role: "teacher", is_active: true });
+    if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
+    if (path.startsWith("/experts") || path === "/tags/") return json([]);
+    if (path === `/tasks/${taskId}`) return json(task);
+    if (path.endsWith("/result")) return json({ task_id: taskId, primary_provider_id: votes[0].provider_id, problem_data, student_data,
+      results: [{ ...results[0], corrections: [{ ...results[0].corrections[0], expert_results: votes }] }], timestamp: 1 });
+    if (path.endsWith("/finalization")) return json({ task_id: taskId, workflow_revision: 1, final_result_version: 0, final_result_dirty: false, remaining_review_count: 0, ready_for_confirmation: true });
+    throw new Error(`Unexpected request ${path}`);
+  });
+  await page.goto(`/tasks/${taskId}/review/S1/q1`);
+  const result = page.locator('[data-question-id="q1"]').getByRole("region", { name: "SmarTAI 批改结果" });
+  await expect(result.getByText("Deducted（7/10, [7], conf=0.95）")).toBeVisible();
+  await expect(result.locator("ol").first().getByText("-1 分", { exact: true })).toHaveCount(3);
+  for (const detail of errorDetails) await expect(result.locator("ol").first().getByText(detail, { exact: true })).toBeVisible();
+  await expect(result.getByText(/Independent error/)).toHaveCount(0);
+  await expect(result.getByText("Net subtotal should not be a step")).toHaveCount(0);
+  await expect(result).toContainText("[10]");
+  await expect(result).toContainText("[0,0,0]");
+  await result.getByText(/^查看各专家(?:批改|原始)结果$/).click();
+  const panel = result.getByRole("tabpanel");
+  await expect(panel.getByText("-1 分", { exact: true })).toHaveCount(3);
+  await expect(panel.getByText(reviewReason, { exact: true })).toBeVisible();
+  await expect(panel.getByText(advice, { exact: true })).toBeVisible();
+  await expect(panel.locator("ol").getByText(reviewReason)).toHaveCount(0);
+  await result.getByRole("tab", { name: "Complete", exact: true }).click();
+  await expect(panel).toContainText("10/10, [10]");
+  await expect(panel.getByText("另解批改", { exact: true })).toBeVisible();
+  await expect(panel.locator("ol")).toHaveCount(0);
+  await expect(panel.getByText(fullReason, { exact: true })).toBeVisible();
+  await expect(panel.getByText(advice, { exact: true })).toBeVisible();
+  await result.getByRole("tab", { name: "Reference", exact: true }).click();
+  await expect(panel).toContainText("0/10, [0,0,0]");
+  await expect(panel.getByText("另解批改", { exact: true })).toHaveCount(0);
+  await expect(panel.locator("li")).toHaveCount(3);
+  await result.getByRole("tab", { name: "Deducted", exact: true }).click();
+  for (const detail of errorDetails) await expect(panel.getByText(detail, { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth+1)).toBe(true);
+  expect(errors).toEqual([]);
+  await panel.screenshot({ path: testInfo.outputPath(`grading-deductions-${width}.png`) });
+});
 
 for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
   test(`${demo ? "Demo" : "Teacher"} ${locale}: same evidence and score precision for both disagreement signals`, async ({ page }, testInfo) => {
@@ -112,6 +181,73 @@ for (const demo of [false, true]) for (const locale of ["zh-CN", "en-US"]) {
     await singleResult.getByText(zh ? "查看各专家原始结果" : "View Original Model Results").click();
     await expect(singleResult.getByRole("tab")).toHaveCount(1);
     await expect(singleResult.getByRole("tabpanel").getByText("Original expert explanation 1.")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+}
+
+for (const surface of ["teacher", "demo"]) for (const width of [390, 1440]) {
+  test(`fractional deductions reconcile on ${surface} at ${width}px`, async ({ page }, testInfo) => {
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 1000 });
+    await page.addInitScript(({ surface, taskId }) => {
+      localStorage.setItem("smartai_locale", "en-US");
+      localStorage.setItem("smartai_token", "synthetic-teacher-token");
+      if (surface === "demo") {
+        sessionStorage.setItem("smartai_frontier_token", "synthetic-guest-token");
+        sessionStorage.setItem("smartai_frontier_owner", "shared-owner");
+        sessionStorage.setItem("smartai_frontier_generation", "1");
+        sessionStorage.setItem("smartai_frontier_tasks", JSON.stringify([taskId]));
+      }
+    }, { surface, taskId });
+    const examples = settledExamples.map((example, index) => ({ ...example,
+      expected: [["-1", "-1", "-1", "-1", "-1", "-1", "≈-0.666667"], ["-0.125", "-0.125", "-0.125"], ["-0.001"], []][index] }));
+    const corrections = examples.map((example, index) => {
+      const comment = `Review ${index + 1}: each cited equation loses a solution; the frozen deduction policy applies.`;
+      const steps = example.steps;
+      return { ...results[0].corrections[0], q_id: `q${index + 1}`, score: example.score, provisional_score: example.score, max_score: example.max_score,
+        comment, steps, expert_results: [{ provider: `Fractional model ${index + 1}`, provider_id: "fractional", score: example.score, max_score: example.max_score, confidence: .99, comment, steps }], synthesis_method: "single" };
+    });
+    const current = { ...task,
+      problem_data: Object.fromEntries(examples.map((example, index) => [`q${index + 1}`, { ...problem_data.q1, q_id: `q${index + 1}`, number: String(index + 1), max_score: example.max_score }])),
+      student_data: { S1: { ...student_data.S1, stu_ans: examples.map((_, index) => ({ ...student_data.S1.stu_ans[0], q_id: `q${index + 1}`, number: String(index + 1), type: "reasoning" })) } } };
+    await page.route(`${backend}/**`, async route => {
+      const path = new URL(route.request().url()).pathname;
+      if (route.request().method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+      if (path === "/auth/me") return route.fulfill({ json: { id: "shared-owner", username: "Synthetic teacher", role: "teacher", is_active: true } });
+      if (path === "/auth/activity") return route.fulfill({ json: { token: "synthetic-teacher-token" } });
+      if (path === `/tasks/${taskId}` || path.endsWith("/state")) return route.fulfill({ json: current });
+      if (path.endsWith("/grading-setup")) return route.fulfill({ json: { configured: true, grading_setup: {}, available_experts: [] } });
+      if (path.endsWith("/result")) return route.fulfill({ json: { ...current, primary_provider_id: "fractional", results: [{ ...results[0], corrections }] } });
+      if (path.endsWith("/finalization")) return route.fulfill({ json: { task_id: taskId, remaining_review_count: 0, ready_for_confirmation: true } });
+      return route.fulfill({ json: [] });
+    });
+    if (surface === "demo") await page.goto(`/frontier/live?taskId=${taskId}`);
+    for (const [index, example] of examples.entries()) {
+      if (surface === "teacher") await page.goto(`/tasks/${taskId}/review/S1/q${index + 1}`);
+      const area = surface === "teacher" ? page.locator(`[data-question-id="q${index + 1}"]`).getByRole("region", { name: "SmarTAI Grading Result" }) : page.locator(".demo-content-tabs");
+      if (surface === "teacher") await area.getByText(/^View (?:Expert Grading Details|Original Model Results)$/).click();
+      const panel = surface === "teacher" ? area.getByRole("tabpanel") : area.locator("section").filter({ has: page.getByText(`Fractional model ${index + 1}`, { exact: true }) }).last();
+      if (surface === "demo") {
+        await expect(area.getByText(corrections[index].comment, { exact: true })).toHaveCount(1);
+        if (example.expected.length) await panel.locator("summary").click();
+      }
+      const amounts = await panel.locator("li > span:last-child").allTextContents();
+      expect(amounts).toEqual(example.expected.map(value => `${value} pts`));
+      expect(amounts.every(value => parseFloat(value.replace("≈", "")) < 0)).toBe(true);
+      await expect(panel.locator("[data-score-rounding]")).toHaveCount(example.steps.filter(step => Math.abs(step.rounding_adjustment) > 1e-12).length);
+      await expect(panel.locator("li [data-score-rounding]")).toHaveCount(0);
+      if (!example.expected.length) {
+        await expect(panel.getByText("Scoring steps", { exact: true })).toHaveCount(0);
+        await expect(panel.getByText("Deductions", { exact: true })).toHaveCount(0);
+      }
+      await expect(panel.getByText(corrections[index].comment, { exact: true })).toBeVisible();
+      await panel.screenshot({ path: testInfo.outputPath(`fractional-${surface}-${index}-${width}.png`) });
+    }
+    await expect(page).toHaveTitle(/SmarTAI/i);
+    await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     expect(errors).toEqual([]);
   });
 }

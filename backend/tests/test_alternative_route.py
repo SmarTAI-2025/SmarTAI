@@ -271,7 +271,7 @@ def test_teacher_semantic_edit_commits_the_new_rule_and_reuses_it_for_grading(mo
     assert rules.parts[0].alternative.deduct_per_error == 1
     common = dict(student_quote="算错常数项", relevance="partial")
     def judge(method, rule):
-        events = [dict(id="x",rule_id=rule,evidence="算错常数项",origin_quote="算错常数项",reason="独立错误")]
+        events = [dict(id="x",rule_id=rule,evidence="算错常数项",origin_quote="算错常数项",reason="常数项移到等式右边时没有变号，所得常数项不正确。")]
         return _factorization_score(rules,method=method,errors=events,**common)
     assert (judge("reference","calc"), judge("alternative","alternative")) == (8,9)
 

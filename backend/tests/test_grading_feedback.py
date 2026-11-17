@@ -5,7 +5,7 @@ import json
 import pytest
 
 from backend.models import Correction, ExpertResult, StepScore
-from backend.services.grading_feedback import _concise_steps, _combined_steps, concise_result_feedback
+from backend.services.grading_feedback import _concise_steps, _combined_steps, _review_comment, concise_result_feedback
 from backend.skills.math_grading import TRACE_VERSION, weighted_math_steps
 from backend.tests.test_math_grading import assessment, plan_for
 from backend.tests.test_grading_checkpoints import prepare, stop
@@ -131,6 +131,18 @@ def test_legacy_aggregate_preserves_other_explanations_and_does_not_mutate():
     assert _combined_steps([{**combined[0], "desc": "Independent judge conclusion."}], old, new, 10)[0]["desc"] == "Independent judge conclusion."
 
 
+def test_legacy_single_expert_projection_retains_deduction_metadata_and_net_score():
+    saved = [dict(step_no=1, part_id="p", score=7, is_correct=False, desc="Saved reasoning")]
+    shown = [{**saved[0], "is_alternative": True, "deductions": [
+        dict(desc=f"Wrong sign in equation {n}.", points=1) for n in range(1, 4)]}]
+    original = [dict(provider="model", score=7, steps=saved)]
+    rendered = [{**original[0], "steps": shown}]
+    assert _combined_steps(saved, original, rendered, 10) == shown
+    assert "deductions" not in saved[0]
+    adjusted = [{**saved[0], "score": 8}]
+    assert _combined_steps(adjusted, original, rendered, 10) == adjusted
+
+
 def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     from backend.db import grading_repository as grades
     from backend.db import workflow_repository as workflows
@@ -148,6 +160,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     checkpoints.save_math_plan(problem_from_question(q), plan)
     _, steps, trace = legacy_fixture()
     trace["plan_id"] = plan.plan_id
+    trace["targeted_review"] = {"provider": "reviewer", "reason": "The omitted domain condition still warrants the deduction."}
     expert = ExpertResult(provider="model-a", provider_id=setup.setup["primary_provider_id"],
         score=8, max_score=10, confidence=.9, comment="Preserved summary.",
         steps=[StepScore(**s) for s in steps], raw_output=json.dumps(trace))
@@ -167,7 +180,13 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
     assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
     assert shown["provisional_score"] == 8
     assert shown["expert_results"][0]["raw_output"] is None
-    assert shown["comment"] == "Preserved summary."
+    # The standalone legacy reader keeps its note; the final-feedback layer
+    # uses the saved final assessment when these PRs are combined.
+    expected_comments = {
+        (expert.comment + "\n\n" + trace["targeted_review"]["reason"], "Preserved summary."),
+        (trace["assessment"]["comment"], trace["assessment"]["comment"]),
+    }
+    assert (shown["expert_results"][0]["comment"], shown["comment"]) in expected_comments
     assert [row.model_dump() for row in grades.list_results_for_run(run_id)] == before
     assert grades.list_events(run_id) == events_before
     assert task_facade.task_results(task_id=case[0], owner_id=case[1]) == payload
@@ -200,6 +219,7 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
         shown = next(c for s in fresh["results"] for c in s["corrections"] if c["q_id"] == q.q_id)
         assert shown["steps"][0]["desc"] == "Correct setup."
         assert shown["expert_results"][0]["steps"][0]["desc"] == "Correct setup."
+        assert (shown["expert_results"][0]["comment"], shown["comment"]) in expected_comments
         assert shown["provisional_score"] == 8
         assert shown["teacher_score"] == 9-index
         assert shown["teacher_comment"] == f"Review {index+1}"
@@ -211,6 +231,27 @@ def test_saved_legacy_result_is_concise_on_read_without_changing_history(case):
             GradingRunEventRecord.message == "review_revision_created"))
         event.payload = {"source_run_id": run_id}
     assert concise_result_feedback(stored) == stored  # Cyclic/broken provenance is not guessed.
+
+
+@pytest.mark.parametrize("deductions", [[], [{"desc": "The root x=-2 fails the original equation.", "points": 2}]])
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_saved_review_notes_remain_visible_outside_hidden_net_score_rows(deductions, language):
+    plan, _, trace = legacy_fixture()
+    reason = "原方程代入已核对，按该路线的独立错误扣分。" if language == "zh" else "Substitution in the original equation confirms the independent error."
+    label = "定向复核依据：" if language == "zh" else "Targeted review: "
+    advice = ("证明依据核对建议：仍需核对逆向推理。\n尤其是定义域。" if language == "zh" else
+              "Proof evidence to check: Verify the reverse implication.\nEspecially the domain.")
+    trace.update(targeted_review={"reason": reason}, review_advisory=True)
+    expert = {"comment": "Original explanation.", "steps": [{"score": 8 if deductions else 10,
+        "desc": "Net score\n" + label + reason + "\n" + advice, "deductions": deductions, "is_alternative": True}]}
+    original = deepcopy(expert)
+    result = _review_comment(expert, trace, plan)
+    assert result == expert["comment"] + "\n\n" + label + reason + "\n\n" + advice
+    assert _review_comment({**expert, "comment": result}, trace, plan) == result
+    assert expert == original
+    assert _review_comment(expert, {**trace, "plan_id": "other"}, plan) == expert["comment"]
+    assert _review_comment(expert, {**trace, "version": "old"}, plan) == expert["comment"]
+    assert _review_comment(expert, trace, None) == expert["comment"]
 
 
 @pytest.mark.parametrize("field", ["owner_id", "assignment_id", "fingerprint"])
@@ -230,3 +271,61 @@ def test_review_copy_cannot_inherit_unrelated_evidence(case, monkeypatch, field)
         return frozen if key == run_id else SimpleNamespace(**{**identity, field: "different"})
     monkeypatch.setattr(workflows, "get_run_setup", get_setup)
     assert _feedback_context(run_id) == ({}, {})
+
+
+@pytest.mark.parametrize('counts', [[0,1],[0,0,0]])
+def test_legacy_cumulative_rounding_survives_database_roundtrip(case,counts):
+    from sqlalchemy import select
+    from backend.db import grading_repository as grades
+    from backend.db.models import AssignmentQuestionRecord, SubmissionAnswerRecord
+    from backend.db.session import session_scope
+    from backend.services import task_facade
+    from backend.services.rubric_drafts import RubricDefinition, generated_rubric, bind_draft, retarget_draft
+    from backend.services.math_grading_context import problem_from_question
+    from backend.tests.test_frozen_part_rubric import question_row
+    from backend.tests.test_scoring_structure import rules, decision, ANSWER
+    from backend.skills.math_grading import MathAssessment
+    from backend.skills.part_scoring import settle_parts
+
+    template=rules(alternative={'maximum':{'fraction':'1/3'},'deduct_per_error':.001})
+    rubric=template.model_copy(update={'total_pts':10*len(counts),'parts':tuple(template.parts[0].model_copy(
+        update={'id':f'p{i}','label':f'({i+1})','stem':f'Prove claim {i+1}.'}) for i in range(len(counts)))})
+    row=question_row(rubric.model_dump(mode='json'))
+    row['reference_answer']='Use a direct argument.'
+    row['ai_completion_provenance']={'criterion':{}}
+    row['criterion'],draft=generated_rubric(row,RubricDefinition(part_rubric=rubric))
+    with session_scope() as session:
+        question=session.scalar(select(AssignmentQuestionRecord).where(
+            AssignmentQuestionRecord.assignment_id==case[0],AssignmentQuestionRecord.q_id=='q1'))
+        for key in ('number','type','stem','criterion','reference_answer','max_score'):
+            setattr(question,key,row[key])
+        question.source={'presentation':{'rubric_draft':draft.model_dump(mode='json'), 'question_structure':row.get('question_structure'), 'ai_completion_provenance':row['ai_completion_provenance']}}
+        for answer in session.scalars(select(SubmissionAnswerRecord).where(SubmissionAnswerRecord.question_id==question.id)):
+            answer.content=ANSWER
+    run_id=start(case,'rounding-history-'+str(len(counts)))['job_id']
+    checkpoints,questions,revisions,setup=prepare(case,run_id)
+    p=problem_from_question(questions[0]);plan=bind_draft(retarget_draft(draft,p),p)
+    checkpoints.save_math_plan(p,plan)
+    decisions=[decision(errors=count).model_copy(update={'part_id':f'p{i}','target_quote':f'part:p{i}'}) for i,count in enumerate(counts)]
+    assessment=MathAssessment(route_id='parts',route_reason='Frozen',comment='Saved final review reason.',part_decisions=decisions)
+    score,steps=settle_parts(plan.part_rubric,decisions,ANSWER,p.stem)
+    assert [s.score for s in steps]==([3.33,3.34] if len(counts)==2 else [3.33,3.34,3.33])
+    legacy=[StepScore(**{k:v for k,v in s.model_dump().items() if k not in {'deductions','deduction_base','is_alternative','rounding_adjustment'}}) for s in steps]
+    expert=ExpertResult(provider='old-model',provider_id=setup.setup['primary_provider_id'],score=score,max_score=p.max_score,
+        confidence=.99,comment=assessment.comment,steps=legacy,raw_output=json.dumps(
+            {'version':TRACE_VERSION,'plan_id':plan.plan_id,'assessment':assessment.model_dump(mode='json')}))
+    checkpoints.save_correction(revisions[0][1],Correction(q_id='q1',type=p.type,score=score,max_score=p.max_score,
+        confidence=.99,comment=expert.comment,steps=legacy,expert_results=[expert],synthesis_method='single'))
+    stop(case,run_id)
+    before=[r.model_dump() for r in grades.list_results_for_run(run_id)]
+    payload=task_facade.task_results(task_id=case[0],owner_id=case[1])
+    shown=next(c for s in payload['results'] for c in s['corrections'] if c['q_id']=='q1')
+    assert shown['expert_results'][0]['steps']==[s.model_dump(mode='json') for s in steps]
+    assert shown['steps']==shown['expert_results'][0]['steps']
+    assert shown['provisional_score']==score
+    assert shown['expert_results'][0]['comment'] in {
+        'Saved final review reason.',
+        'Saved final review reason.\n\n解题思路与标答不同，按另解标准评分。',
+    }
+    assert [r.model_dump() for r in grades.list_results_for_run(run_id)]==before
+    assert task_facade.task_results(task_id=case[0],owner_id=case[1])==payload

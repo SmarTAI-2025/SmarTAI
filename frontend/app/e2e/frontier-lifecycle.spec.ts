@@ -150,6 +150,61 @@ async function guest(page: Page) {
   return errors;
 }
 
+for (const width of [390, 1440]) test(`Quick Demo shows expert deductions without synthetic award steps (${width}px)`, async ({ page }, testInfo) => {
+  const errors = await guest(page);
+  page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+  await page.setViewportSize({ width, height: 1000 });
+  const problems = { q1: { ...task.problem_data.q1, max_score: 10 }, q2: { ...task.problem_data.q2, max_score: 10 } };
+  const deductions = ["The second root has the wrong sign: x = -2 does not solve the equation.",
+    "Dividing by x - 1 discards x = 1 without checking that case.",
+    "The concluding inequality reverses direction when multiplying by a negative number."];
+  const reviewReason = "Targeted review: Rechecking the original equations confirms three independent errors.";
+  const fullReason = "Targeted review: The equivalences already cover both directions and earn full credit.";
+  const advice = "Proof evidence to check: Check the domain of the reverse implication.";
+  const alt = (score: number) => ({ provider: "Alternative model", score, max_score: 10, comment: `${score === 10 ? fullReason : reviewReason}\n\n${advice}`,
+    steps: [{ step_no: 1, part_id: "p", score, is_correct: score === 10, is_alternative: true, desc: "Net score is not an awarded step",
+      deductions: score === 10 ? [] : deductions.map(desc => ({ desc, points: 1 })) }] });
+  const reference = { provider: "Reference model", score: 0, max_score: 10, comment: "Reference obligations were not established.",
+    steps: [1, 2, 3].map(n => ({ step_no: n, part_id: "p", item_id: `s${n}`, score: 0, is_correct: false, desc: `Missing reference obligation ${n}` })) };
+  const student = { stu_id: "S1", stu_name: "Synthetic student", identity_status: "matched", stu_ans: [] };
+  const current = { ...task, status: "graded", problem_data: problems, problem_count: 2, student_count: 1, student_data: { S1: student } };
+  await page.route(`${backend}/**`, async route => {
+    const path = new URL(route.request().url()).pathname, json = (value: unknown) => route.fulfill({ json: value });
+    if (path === "/auth/me") return json({ id: "guest-owner", username: "Guest", role: "teacher", is_active: true });
+    if (path === `/tasks/${task.task_id}` || path.endsWith("/state")) return json(current);
+    if (path.endsWith("/grading-setup")) return json({ task_id: task.task_id, configured: true, grading_setup: {}, available_experts: [] });
+    if (path.endsWith("/result")) return json({ ...current, results: [{ student_id: "S1", student_name: student.stu_name,
+      corrections: [3.5, 10].map((score, index) => ({ q_id: `q${index + 1}`, score, provisional_score: score, max_score: 10,
+        comment: "Combined assessment", steps: [{ step_no: 1, score, is_correct: false, desc: "Legacy aggregate award must not render" }],
+        expert_results: index ? [alt(10)] : [reference, alt(7)], confidence: .9, review_reasons: [], requires_human_review: false })) }] });
+    return json([]);
+  });
+  await page.goto(`/frontier/live?taskId=${task.task_id}`);
+  await expect(page).toHaveURL(new RegExp(`/frontier/live\\?taskId=${task.task_id}$`));
+  await expect(page).toHaveTitle(/SmarTAI/i);
+  const tabs = page.locator(".demo-content-tabs");
+  await expect(tabs.getByRole("heading", { name: "Detailed grading results" })).toBeVisible();
+  await expect(tabs.getByText("3.5 / 10", { exact: true })).toBeVisible();
+  await expect(tabs.getByText("Alternative method", { exact: true })).toHaveCount(2);
+  await expect(tabs.getByText("Legacy aggregate award must not render")).toHaveCount(0);
+  await expect(tabs.getByText("Net score is not an awarded step")).toHaveCount(0);
+  for (const text of [reviewReason, fullReason]) await expect(tabs.getByText(text, { exact: true })).toBeVisible();
+  await expect(tabs.getByText(advice, { exact: true })).toHaveCount(2);
+  await expect(tabs.locator("li").getByText(/Targeted review|Proof evidence to check/)).toHaveCount(0);
+  await tabs.getByText("Deductions", { exact: false }).click();
+  for (const detail of deductions) await expect(tabs.getByText(detail)).toBeVisible();
+  await expect(tabs.getByText("-1 pts", { exact: true })).toHaveCount(3);
+  await tabs.getByText("Scoring steps", { exact: false }).click();
+  await expect(tabs.getByText("0 pts", { exact: true })).toHaveCount(3);
+  await tabs.getByRole("tab", { name: "Materials", exact: true }).click();
+  await tabs.getByRole("tab", { name: "Grading details", exact: true }).click();
+  await expect(tabs.getByText(deductions[0])).toBeVisible();
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  expect(errors).toEqual([]);
+  await tabs.screenshot({ path: testInfo.outputPath(`demo-expert-deductions-${width}.png`) });
+});
+
 for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390, 320]) {
   test(`Quick Demo content tabs preserve recognition and grading (${locale}, ${width}px)`, async ({ page }, testInfo) => {
     const errors = await guest(page), zh = locale === "zh-CN";

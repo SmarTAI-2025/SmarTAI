@@ -1,9 +1,10 @@
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
+import { ScoreRoundingNotes } from "@/components/tasks/ScoreRoundingNotes";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
-import { aiCorrectionScore, buildResultsModel, formatScore } from "@/components/tasks/resultsModel";
+import { aiCorrectionScore, buildResultsModel, formatScore, formatScoringRow, scoringRows, validExpertResults } from "@/components/tasks/resultsModel";
 import type { Locale } from "@/i18n/messages";
-import type { TaskResultResponse } from "@/types";
+import type { ExpertResult, StepScore, TaskResultResponse } from "@/types";
 
 export type DemoContentStage = "materials" | "submissions" | "results";
 type ContentTab = "materials" | "submissions" | "grading" | "analysis";
@@ -52,6 +53,67 @@ export function DemoContentTabs({ stage, locale, materials, submissions, result,
   </section>;
 }
 
+function feedbackParagraphs(text = "") {
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  const parts: string[] = [], lines: string[] = [];
+  let fence: string | null = null, mathEnd: string | null = null;
+  const flush = () => {
+    const part = lines.join("\n").trim();
+    if (part) parts.push(part);
+    lines.length = 0;
+  };
+  for (const line of normalized.split("\n")) {
+    if (fence) {
+      lines.push(line);
+      const closing = line.match(/^[ \t]*(`+|~+)[ \t]*$/)?.[1];
+      if (closing?.[0] === fence[0] && closing.length >= fence.length) { flush(); fence = null; }
+    } else if (mathEnd) {
+      lines.push(line);
+      if (line.includes(mathEnd)) { flush(); mathEnd = null; }
+    } else {
+      const code = line.match(/^[ \t]*(`{3,}|~{3,})/);
+      const math = line.match(/^[ \t]*(\$\$|\\\[)/);
+      if (code || math) {
+        flush();
+        lines.push(line);
+        if (code) fence = code[1];
+        else {
+          const end = math![1] === "$$" ? "$$" : "\\]";
+          if (line.slice(math![0].length).includes(end)) flush();
+          else mathEnd = end;
+        }
+      } else if (!line.trim()) flush();
+      else lines.push(line);
+    }
+  }
+  flush();
+  return parts;
+}
+
+/** Prefer attributed expert text; retain distinct summary and expert paragraphs. */
+function demoFeedback(summary: string, experts: ExpertResult[]) {
+  const shown = new Set<string>();
+  const comments = experts.map(expert => {
+    const parts = feedbackParagraphs(expert.comment);
+    const remaining = parts.filter(part => !shown.has(part));
+    parts.forEach(part => shown.add(part));
+    return remaining.join("\n\n");
+  });
+  const remaining = (text: string) => feedbackParagraphs(text).filter(part =>
+    ![...shown].some(text => text === part || text.startsWith(part + "\n") || text.endsWith("\n" + part))).join("\n\n");
+  // The weighted fallback wraps each saved comment in this exact provider header.
+  // Remove that wrapper only for a known expert, never a guessed prose heading.
+  const distinctSummary = summary.replace(/\r\n?/g, "\n").split(/\n\n———\n\n/).map(block => {
+    const lines = block.split("\n");
+    if (experts.some(expert => lines[0].startsWith(`【${expert.provider}（`) && lines[0].endsWith("）】"))) {
+      const body = remaining(lines.slice(1).join("\n"));
+      return body ? `${lines[0]}\n${body}` : "";
+    }
+    return remaining(block);
+  }).filter(Boolean).join("\n\n");
+  return { summary: distinctSummary, comments };
+}
+
 function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResponse; taskId: string; locale: Locale }) {
   const zh = locale === "zh-CN";
   const model = buildResultsModel(undefined, result);
@@ -72,24 +134,44 @@ function DemoGradingDetails({ result, taskId, locale }: { result: TaskResultResp
             {total !== null ? <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{formatScore(total)} / {formatScore(max)}</span> : null}
           </div>
           <div className="mt-3 grid gap-2 border-t pt-3">
-            {student.corrections.map((correction, index) => <section key={`${correction.q_id}-${index}`} className="rounded-md bg-muted/45 px-3 py-2">
+            {student.corrections.map((correction, index) => {
+              const experts = validExpertResults(correction);
+              const feedback = demoFeedback(correction.comment ?? "", experts);
+              return <section key={`${correction.q_id}-${index}`} className="rounded-md bg-muted/45 px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <span className="text-[11px] font-bold text-primary">{labels.get(correction.q_id) ?? correction.q_id}</span>
                 <span className="shrink-0 rounded-full bg-primary/5 px-2 py-1 text-[11px] font-semibold text-primary">{scores[index] === null ? (zh ? "无有效分数" : "No valid score") : `${formatScore(scores[index])} / ${formatScore(correction.max_score)}`}</span>
               </div>
-              <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{correction.comment || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath>
-              {correction.steps?.length ? <details className="mt-3 border-t pt-2">
-                <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">{zh ? "评分步骤" : "Scoring steps"}<span className="ml-2 font-normal">{correction.steps.length} {zh ? "项" : correction.steps.length === 1 ? "step" : "steps"}</span></summary>
-                <ol className="mt-2 space-y-2">{correction.steps.map((step, stepIndex) => <li key={`${step.step_no}-${stepIndex}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
-                  <span className="font-semibold text-muted-foreground">{step.step_no}</span>
-                  <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-                  <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScore(step.score)} {zh ? "分" : "pts"}</span>
-                </li>)}</ol>
-              </details> : null}
-            </section>)}
+              {feedback.summary || !feedback.comments.some(Boolean) ? <MarkdownMath className="mt-2 text-[12px] leading-5 text-foreground">{feedback.summary || (zh ? "SmarTAI 未返回文字说明。" : "SmarTAI returned no written rationale.")}</MarkdownMath> : null}
+              {experts.length ? experts.map((expert, expertIndex) =>
+                <section key={`${expert.provider_id ?? expert.provider}-${expertIndex}`} className="mt-3 border-t pt-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-semibold">
+                    <span className="min-w-0 break-words">{expert.provider}</span>
+                    <span className="shrink-0">{formatScore(expert.score)} / {formatScore(expert.max_score ?? correction.max_score)}</span>
+                  </div>
+                  {feedback.comments[expertIndex] ? <MarkdownMath className="mt-1 text-[12px] leading-5">{feedback.comments[expertIndex]}</MarkdownMath> : null}
+                  <DemoScoringEvidence steps={expert.steps} zh={zh} />
+                </section>) : <DemoScoringEvidence steps={correction.steps} zh={zh} />}
+            </section>; })}
           </div>
         </article>;
       })}
     </div>
   </section>;
+}
+
+function DemoScoringEvidence({ steps, zh }: { steps: StepScore[]; zh: boolean }) {
+  const rows = scoringRows(steps);
+  return <>
+    {steps.some(step => step.is_alternative) ? <p className="mt-2 text-[11px] text-muted-foreground">{zh ? "另解批改" : "Alternative method"}</p> : null}
+    {rows.length ? <details className="mt-3 border-t pt-2">
+      <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">{rows.every(row => row.deduction) ? (zh ? "扣分点" : "Deductions") : (zh ? "评分步骤" : "Scoring steps")}<span className="ml-2 font-normal">{rows.length} {zh ? "项" : "items"}</span></summary>
+      <ol className="mt-2 space-y-2">{rows.map((step, index) => <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
+        <span className="font-semibold text-muted-foreground">{index + 1}</span>
+        <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
+        <span className={`font-semibold ${step.is_correct ? "text-accent" : "text-warning"}`}>{formatScoringRow(step)} {zh ? "分" : "pts"}</span>
+      </li>)}</ol>
+    </details> : null}
+    <ScoreRoundingNotes steps={steps} zh={zh} />
+  </>;
 }

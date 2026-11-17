@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, Field, StrictBool
 from pydantic.json_schema import SkipJsonSchema
 
-from backend.models import StepScore
+from backend.models import ScoreAward, ScoreDeduction, StepScore
 from backend.services.math_source_evidence import SourceMatch, match_source_quote, source_catalog
 from backend.services.part_rubric import Frozen, Key, Text
 
@@ -25,7 +25,7 @@ class ErrorEvent(Frozen):
     id: Key
     rule_id: Key
     evidence: Text
-    reason: Text
+    reason: Text = Field(description="Student-facing error detail: identify the exact false statement, invalid operation or omitted obligation, and explain why it is wrong or incomplete. Never use a generic label such as 'Independent error 1'.")
     # The originating wrong step or missing target, not a generated error ID.
     origin_quote: Text
     target_id: Key | None = None
@@ -178,7 +178,10 @@ For funded steps with required_conditions, supply condition_results keyed by ste
 condition in its frozen order. True means credit is allowed by that clause (e.g. the required unit
 is present); false means its disqualifying condition applies. For a mixed part judge
 all steps first and report only the explicitly frozen additional deductions as errors.
-For deductions report actual distinct errors with rule_id, evidence, and origin_quote;
+For deductions report actual distinct errors with rule_id, evidence, and origin_quote.
+Each reason is displayed directly to the student: identify the specific expression, inference or
+omitted obligation and explain why it is wrong or incomplete. Do not output generic labels such as
+"Independent error 1", "独立错误1" or "扣分点1", and do not merely repeat the deduction rule;
 a repeated consequence has the same origin. If rules have an exclusive_group, select at most one
 loss for the entire goal. For a mathematically complete goal select none. On the main deduction route, determine
 which requested results the work establishes before choosing a rule. For the same
@@ -279,7 +282,33 @@ def _obligation_evidence(question, scope, fragment, question_lines):
     )
 
 
-def settle_parts(rules, decisions, answer, question):
+def charged_deductions(part, decision, base):
+    """Project effective charges under the same frozen caps as settlement."""
+    alternative = decision.method == "alternative"
+    rules = {} if alternative else {rule.id: rule for rule in part.deductions}
+    floor = part.alternative.minimum.resolve(part.total_pts) if alternative else Fraction(0)
+    remaining, charged, counts, details = base - floor, {}, {}, []
+    for event in decision.errors:
+        rule = rules.get(event.rule_id)
+        count = counts.get(event.rule_id, 0) + 1
+        counts[event.rule_id] = count
+        amount = _amount(part.alternative.deduct_per_error or 0) if alternative else _amount(rule.deduct_pts)
+        if rule and rule.limit is not None and count > rule.limit:
+            amount = Fraction(0)
+        ceiling = part.alternative.max_deduction if alternative else rule.max_deduction
+        if ceiling is not None:
+            amount = min(amount, max(Fraction(0), _amount(ceiling) - charged.get(event.rule_id, 0)))
+        amount = min(amount, max(Fraction(0), remaining))
+        charged[event.rule_id] = charged.get(event.rule_id, Fraction(0)) + amount
+        remaining -= amount
+        if amount:
+            details.append(ScoreDeduction(desc=event.reason, points=float(amount)))
+    return details
+
+
+def settle_parts(rules, decisions, answer, question, *, require_specific_reasons=True):
+    # Historical display may retain old wording. Evidence, policies and arithmetic
+    # still pass every check; all new grading uses the strict default.
     catalog = source_catalog(answer, "", "")
     question_lines = source_catalog("", question, "")
 
@@ -306,6 +335,9 @@ def settle_parts(rules, decisions, answer, question):
                     verified_errors.add(_span_identity(origin))
     total = Fraction(0)
     rows = []
+    deduction_details = {}
+    award_details = {}
+    deduction_bases = {}
     for part in rules.parts:
         d = by_id[part.id]
         scope = part.stem or question
@@ -369,7 +401,9 @@ def settle_parts(rules, decisions, answer, question):
                     f"{part.id}: zero credit permits only known, missed step IDs. "
                     "Omit earned steps and deduction events, or classify supported progress as partial."
                 )
-            amounts = [(None, Fraction(0), d.progress)]
+            reasons = {step.id: step.reason for step in d.steps}
+            amounts = ([(step.id, Fraction(0), reasons.get(step.id, d.progress)) for step in part.steps]
+                       if part.steps and not alternative else [(None, Fraction(0), d.progress)])
         elif not alternative and part.steps:
             decisions_for_steps = d.steps
             if (
@@ -444,6 +478,8 @@ def settle_parts(rules, decisions, answer, question):
             if len({event.id for event in d.errors}) != len(d.errors):
                 raise ValueError("Duplicate deduction event ID.")
             for event in d.errors:
+                if require_specific_reasons and re.fullmatch(r"(?:independent\s+error|deduction\s+point|独立错误|扣分点)\s*[\d一二三四五六七八九十]*[.。:：]?", event.reason.strip(), re.IGNORECASE):
+                    raise ValueError("Describe the specific wrong statement or omitted obligation and explain why; a generic error label is not a deduction reason.")
                 if not (
                     support(event.evidence)
                     or _obligation_evidence(question, scope, event.evidence, question_lines)
@@ -501,12 +537,22 @@ def settle_parts(rules, decisions, answer, question):
                     rule = penalty_rules[rule_id]
                     loss = _amount(rule.deduct_pts) * min(count, rule.limit or count)
                     losses += min(loss, _amount(rule.max_deduction)) if rule.max_deduction is not None else loss
+            deduction_base = sum(value for _, value, _ in amounts) if mixed else cap
             if mixed and losses:
+                budgets = {step.id: _amount(step.total_pts) for step in part.steps}
+                award_details[part.id] = [ScoreAward(item_id=key, desc=reason, points=float(value),
+                    is_correct=value == budgets[key]) for key, value, reason in amounts]
                 earned = sum(value for _, value, _ in amounts)
                 detail = " · ".join([*(reason for _, _, reason in amounts), *(event.reason for event in d.errors)])
                 amounts = [(None, max(Fraction(0), earned - losses), detail)]
             elif not mixed:
                 amounts = [(None, max(floor, cap - losses), d.progress)]
+            if not mixed or losses:
+                deduction_details[part.id] = charged_deductions(part, d, deduction_base)
+                deduction_bases[part.id] = float(deduction_base)
+        elif alternative or not part.steps:
+            deduction_details[part.id] = []
+            deduction_bases[part.id] = float(cap)
         subtotal = sum(x[1] for x in amounts)
         if d.relevance == "complete" and (subtotal != cap or d.errors):
             raise ValueError("Complete work must satisfy all applicable goals.")
@@ -552,6 +598,11 @@ def settle_parts(rules, decisions, answer, question):
                 desc=reason,
                 is_correct=full,
                 score=float(current - previous),
+                rounding_adjustment=float(Fraction(current - previous) - value),
+                awards=award_details.get(part) if step is None else None,
+                deductions=deduction_details.get(part) if step is None else None,
+                deduction_base=deduction_bases.get(part) if step is None else None,
+                is_alternative=bool(part and by_id[part].method == "alternative"),
             )
         )
         previous = current

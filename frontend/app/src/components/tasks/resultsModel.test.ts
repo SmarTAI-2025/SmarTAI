@@ -14,7 +14,61 @@ import {
   reviewConfirmationScore,
   reviewReasonLabel,
   summarizeReviewScoreSources,
+  scoringRows,
+  formatScoringRow,
 } from "./resultsModel";
+
+it("shows only charged errors for a deduction subtotal and preserves step awards", () => {
+  const subtotal = { step_no: 1, part_id: "p1", desc: "Net score", score: 7, is_correct: false,
+    deductions: [1, 2, 3].map(n => ({ desc: `Error ${n}`, points: 1 })) };
+  expect(scoringRows([subtotal]).map(row => [row.desc, row.score])).toEqual([
+    ["Error 1", -1], ["Error 2", -1], ["Error 3", -1],
+  ]);
+  expect(subtotal.score).toBe(7);
+  expect(scoringRows([{ ...subtotal, score: 10, deductions: [] }])).toEqual([]);
+  const step = { step_no: 1, desc: "First rubric goal", score: 0, is_correct: false };
+  expect(scoringRows([step])).toEqual([{ ...step, deduction: false }]);
+});
+
+it("expands mixed awards and losses without displaying or adding the saved net subtotal", () => {
+  const subtotal = { step_no: 1, part_id: "p", desc: "Net subtotal", score: 4, is_correct: false,
+    awards: [
+      { item_id: "setup", desc: "Correct setup", points: 5, is_correct: true },
+      { item_id: "result", desc: "Wrong result", points: 0, is_correct: false },
+    ], deductions: [{ desc: "A sign is reversed", points: 1 }] };
+  const before = structuredClone(subtotal);
+  const rows = scoringRows([subtotal]);
+  expect(rows.map(row => [row.desc, row.score, row.deduction])).toEqual([
+    ["Correct setup", 5, false], ["Wrong result", 0, false], ["A sign is reversed", -1, true],
+  ]);
+  expect(rows.reduce((sum, row) => sum + row.score, 0)).toBe(subtotal.score);
+  expect(rows.map(formatScoringRow)).toEqual(["5", "0", "-1"]);
+  expect(subtotal).toEqual(before);
+});
+
+it.each([
+  { net: 3.33, base: 10, amounts: [1, 1, 1, 1, 1, 1, 2 / 3], shown: ["-1", "-1", "-1", "-1", "-1", "-1", "≈-0.666667"] },
+  { net: 9.63, base: 10, amounts: [.125, .125, .125], shown: ["-0.125", "-0.125", "-0.125"] },
+  { net: 4.67, base: 5, amounts: [.125, .125, 1 / 12], shown: ["-0.125", "-0.125", "≈-0.0833333"] },
+])("keeps actual charges independent from saved rounded net $net", ({ net, base, amounts, shown }) => {
+  const step = { step_no: 1, part_id: "p", score: net, deduction_base: base, desc: "Net", is_correct: false,
+    deductions: amounts.map((points, i) => ({ desc: `Equation ${i} loses a solution.`, points })) };
+  const original = structuredClone(step);
+  const rows = scoringRows([step]);
+  expect(rows.map(formatScoringRow)).toEqual(shown);
+  expect(rows.every(row => row.score < 0)).toBe(true);
+  expect(rows.map(row => row.score)).toEqual(amounts.map(points => -points));
+  expect(step).toEqual(original);
+});
+
+it.each([.001, .0000001, .005, .125, 2 / 3])("never turns a small charge %s into credit or zero", points => {
+  const step = { step_no: 2, part_id: "p2", desc: "Net", score: 3.34, is_correct: false,
+    deduction_base: 10 / 3, rounding_adjustment: 3.34 - (10 / 3 - points), deductions: [{ desc: "A sign was reversed.", points }] };
+  const row = scoringRows([step])[0];
+  expect(row.score).toBe(-points);
+  expect(Number(formatScoringRow(row).replace("≈", ""))).toBeLessThan(0);
+  expect(scoringRows([{ ...step, deductions: [] }])).toEqual([]);
+});
 
 function correction(patch: Partial<Correction> = {}): Correction {
   return {

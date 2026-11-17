@@ -1,4 +1,4 @@
-import type { Correction, ProblemInfo, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
+import type { Correction, ProblemInfo, StepScore, StudentAnswerInfo, StudentResult, StudentSubmission, Task, TaskResultResponse } from "@/types";
 import type { Locale } from "@/i18n/messages";
 import type { ReviewAttention } from "@/lib/reviewConfirmation";
 import { confidenceNeedsAttention, confidenceValue } from "@/lib/confidencePolicy";
@@ -155,6 +155,27 @@ function roundAIScore(value: number, maxScore: number, decimals = 1): number {
   const shifted = Number(`${coefficient}e${Number(exponent) + decimals}`);
   const rounded = Number.isFinite(shifted) ? Math.round(shifted) / (10 ** decimals) : value;
   return value <= maxScore ? Math.min(rounded, maxScore) : rounded;
+}
+
+export function scoringRows(steps: StepScore[] = []) {
+  return steps.flatMap(step => step.deductions == null
+    ? [{ ...step, deduction: false }]
+    : [
+      ...(step.awards ?? []).map(item => ({ ...step, item_id: item.item_id, desc: item.desc, score: item.points, is_correct: item.is_correct, deduction: false })),
+      ...step.deductions.map(item => ({ ...step, desc: item.desc, score: -item.points, is_correct: false, deduction: true })),
+    ]);
+}
+
+export function formatEvidenceAmount(value: number, signed = false) {
+  // Preserve small nonzero charges. Long recurring values are explicitly
+  // approximate; neither net-score rounding nor another part changes a charge.
+  const magnitude = Math.abs(value);
+  const shown = Number(magnitude.toPrecision(6));
+  return `${shown === magnitude ? "" : "≈"}${value < 0 ? "-" : signed && value > 0 ? "+" : ""}${shown}`;
+}
+
+export function formatScoringRow(row: ReturnType<typeof scoringRows>[number]) {
+  return row.deduction || row.awards != null ? formatEvidenceAmount(row.score) : formatScore(row.score, undefined, row.part_id ? 2 : 1);
 }
 
 export function formatScore(value: number | null | undefined, maxScore?: number, decimals?: number) {

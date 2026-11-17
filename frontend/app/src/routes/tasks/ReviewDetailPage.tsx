@@ -1,3 +1,4 @@
+import { ScoreRoundingNotes } from "@/components/tasks/ScoreRoundingNotes";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { validExpertResults, hasPartialExperts } from "@/components/tasks/resultsModel";
@@ -32,6 +33,8 @@ import {
   effectiveCorrectionScore,
   formatConfidence,
   formatScore,
+  scoringRows,
+  formatScoringRow,
   reviewConfirmationScore,
   type QuestionSummary,
   type StudentSummary,
@@ -727,7 +730,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
             {pausedMessage ? <p className="mt-3 rounded-[7px] border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-6 text-blue-900 dark:border-blue-900 dark:bg-blue-950/40 dark:text-blue-100">{pausedMessage}</p> : null}
             {correction ? (
               <>
-                {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence?.toFixed(2) ?? "--"}）</p> : null}
+                {primaryExpert ? <p className="mt-3 break-words text-xs font-semibold text-foreground">{primaryExpert.provider}（{expertScoreSummary(primaryExpert)}, conf={primaryExpert.confidence?.toFixed(2) ?? "--"}）<ExpertMethod locale={locale} expert={primaryExpert} /></p> : null}
                 <MarkdownMath className="mt-3 text-[13px] leading-6 text-foreground">{(primaryExpert && !disputedScore ? primaryExpert.comment : correction.comment) || tx(locale, "SmarTAI 未返回文字说明。", "SmarTAI returned no written rationale.")}</MarkdownMath>
                 <ScoringSteps locale={locale} steps={primaryExpert && !disputedScore ? primaryExpert.steps : correction.steps} />
                   <dl className="mt-4 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3">
@@ -739,7 +742,7 @@ function ReviewQuestionCard({ locale, student, question, correction, primaryProv
                   <dl className="mt-3 grid grid-cols-[repeat(auto-fit,minmax(min(100%,160px),1fr))] gap-2 text-xs">
                     {correction.expert_results.map((expert, index) => (
                       <div key={`${expert.provider}-${index}`} className="min-w-0 rounded-[7px] bg-muted/60 px-3 py-2">
-                        <dt className="break-words text-muted-foreground">{expert.provider}</dt>
+                        <dt className="break-words text-muted-foreground">{expert.provider}<ExpertMethod locale={locale} expert={expert} /></dt>
                         <dd className="mt-1 font-semibold text-foreground">
                           {expert.error_kind ? `--/${expert.max_score}` : <>{formatScore(expert.score, expert.max_score, expert.steps?.some(step => step.part_id) ? 2 : 1)}/{expert.max_score}{expert.steps?.length ? <span className="mt-1 block break-words text-muted-foreground">{expertStepScores(expert)}</span> : null}</>}
                         </dd>
@@ -829,7 +832,13 @@ function ExpertScore({ locale, expert }: { locale: Locale; expert: ExpertResult 
     return <>{tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
   }
   if (expert.error_kind) return <>{expert.error_kind === "quota_exhausted" ? tx(locale, "额度不足", "Quota exhausted") : expert.error_kind === "transient_llm" ? tx(locale, "网络或超时错误", "Network error or timeout") : tx(locale, "模型出错", "Model error")} · {tx(locale, "无有效分数，不参与合成", "No valid score; excluded from synthesis")}</>;
-  return <>{expertScoreSummary(expert)}, conf={expert.confidence?.toFixed(2) ?? "--"}</>;
+  return <>{expertScoreSummary(expert)}, conf={expert.confidence?.toFixed(2) ?? "--"}<ExpertMethod locale={locale} expert={expert} /></>;
+}
+
+function ExpertMethod({ locale, expert }: { locale: Locale; expert: ExpertResult }) {
+  if (expert.error_kind || !expert.steps.some(step => step.is_alternative)) return null;
+  return <span className="ml-2 text-xs font-normal text-muted-foreground">{expert.steps.every(step => step.is_alternative)
+    ? tx(locale, "另解批改", "Alternative solution") : tx(locale, "含另解批改", "Includes alternative solution")}</span>;
 }
 
 function ExpertResults({ locale, experts }: { locale: Locale; experts: ExpertResult[] }) {
@@ -862,17 +871,20 @@ function ExpertResults({ locale, experts }: { locale: Locale; experts: ExpertRes
 }
 
 function ScoringSteps({ locale, steps }: { locale: Locale; steps?: StepScore[] }) {
-  if (!steps?.length) return null;
-  return <div className="mt-4 border-t pt-3">
-    <p className="text-[11px] font-semibold text-muted-foreground">{tx(locale, "评分步骤", "Scoring steps")}</p>
-    <ol className="mt-2 space-y-2">{steps.map((step, index) => (
+  const rows = scoringRows(steps);
+  return <>
+    {rows.length ? <div className="mt-4 border-t pt-3">
+    <p className="text-[11px] font-semibold text-muted-foreground">{rows.every(row => row.deduction) ? tx(locale, "扣分点", "Deductions") : tx(locale, "评分步骤", "Scoring steps")}</p>
+    <ol className="mt-2 space-y-2">{rows.map((step, index) => (
       <li key={`${step.step_no}-${index}`} className="grid grid-cols-[24px_minmax(0,1fr)_auto] gap-2 rounded-[7px] bg-muted/55 px-3 py-2 text-[11px] leading-5">
-        <span className="font-semibold text-muted-foreground">{step.step_no}</span>
+        <span className="font-semibold text-muted-foreground">{index + 1}</span>
         <MarkdownMath className="min-w-0 text-foreground">{step.desc}</MarkdownMath>
-        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScore(step.score, undefined, step.part_id ? 2 : 1)} {tx(locale, "分", "pts")}</span>
+        <span className={cn("font-semibold", step.is_correct ? "text-emerald-600" : "text-amber-600")}>{formatScoringRow(step)} {tx(locale, "分", "pts")}</span>
       </li>
     ))}</ol>
-  </div>;
+    </div> : null}
+    <ScoreRoundingNotes steps={steps} zh={locale === "zh-CN"} />
+  </>;
 }
 
 function ContentBlock({ title, meta, children }: { title: string; meta?: string; children: ReactNode }) {
