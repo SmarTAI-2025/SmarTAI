@@ -308,7 +308,8 @@ _OPEN_PROOF_RULE = {
 
 
 def generated_rubric(problem: dict, definition: RubricDefinition, *, language="zh", previous_rules=None,
-                     verified_policy_ids=(), verified_policy_checks=(), follow_through_strictness=None):
+                     verified_policy_ids=(), verified_policy_checks=(), follow_through_strictness=None,
+                     check_step_granularity=True):
     """Validate against original teacher rules BEFORE rendering AI additions."""
     original = str(problem.get("criterion") or "")
     prior = saved_draft(problem) if original else None
@@ -327,6 +328,9 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
             rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]},
                                previous=previous_rules, language=language, verified_policy_ids=verified_policy_ids,
                                verified_policy_checks=verified_policy_checks)
+            from backend.services.part_rubric import validate_generated_step_granularity
+            if check_step_granularity:
+                validate_generated_step_granularity(rules)
         except TeacherPolicyUnresolved:
             raise
         except ValueError as exc:
@@ -1069,6 +1073,7 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
                     update={"rubric_version": previous_rules.rubric_version + 1})})
             _, draft = generated_rubric(source, definition, language=language,
                                        previous_rules=None if alternative_ids else previous_rules,
+                                       check_step_granularity=not (alternative_ids and previous_rules),
                                        follow_through_strictness=follow_through_strictness,
                                        verified_policy_ids=[check["policy_id"] for check in semantic_checks], verified_policy_checks=semantic_checks)
         except SchemaError as exc:

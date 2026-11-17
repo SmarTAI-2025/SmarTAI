@@ -3686,6 +3686,54 @@ async def confirm_ai_completion(
         return domain_error_response(exc)
 
 
+async def _generate_ai_completion_candidates(*, problems_data, selected, test_case_count,
+                                             provider, reporter, generation_language):
+    """Retry only rejected targets, retaining independently validated siblings."""
+    from copy import deepcopy
+    from backend.llm.providers import ProviderRequestError
+    from backend.tools.structured_llm import (
+        PermanentLLMError, TransientLLMError, llm_attempt_budget,
+    )
+
+    data, pending, accepted, feedback = deepcopy(problems_data), list(selected), [], {}
+    # Share the existing three-attempt generation/format/transport allowance.
+    # Required proof audits keep their existing independent bounded allowance.
+    with llm_attempt_budget():
+        for attempt in range(3):
+            if attempt:
+                await reporter._emit_message(f"Retrying {len(pending)} missing material targets; accepted fields are kept.")
+            try:
+                candidates = await generate_missing_question_materials(
+                    problems_data=data, requested_targets=pending, test_case_count=test_case_count,
+                    provider=provider, reporter=reporter, generation_language=generation_language,
+                    manage_progress_lifecycle=attempt == 0, allow_partial=True, repair_feedback=feedback,
+                )
+            except (ValueError, OSError, ProviderRequestError, PermanentLLMError, TransientLLMError):
+                if not accepted:
+                    raise
+                break  # A later failed request must not discard accepted independent fields.
+            for candidate in candidates:
+                target = next((t for t in pending if t["target_id"] == candidate.target_id), None)
+                if target is None or (target["q_id"], target["target"]) != (candidate.q_id, candidate.target):
+                    raise ValidationError("The AI returned an unknown completion target.",
+                                          code="unknown_ai_completion_target")
+                row = data[candidate.q_id]
+                row[candidate.target] = ([c.model_dump(mode="json") for c in candidate.test_cases]
+                                         if candidate.target == "test_cases" else candidate.text_value)
+                row["ai_completion_provenance"] = {**(row.get("ai_completion_provenance") or {}),
+                    candidate.target: {"source_kind": "ai_generated"}}
+                if candidate.rubric_draft:
+                    row["rubric_draft"] = candidate.rubric_draft
+                accepted.append(candidate)
+                pending.remove(target)
+                feedback.pop(candidate.target_id, None)
+            if not pending:
+                break
+    if not accepted:
+        raise ValidationError("No requested materials could be verified.", code="provider_response_invalid")
+    return accepted
+
+
 async def _run_ai_completion(
     *, task_id: str, owner_id: str, job_id: str, job_attempt: int,
     problems_data: dict[str, dict], selected: list[dict],
@@ -3706,8 +3754,8 @@ async def _run_ai_completion(
         )
         candidates = recovered_candidates
         if candidates is None:
-            candidates = await generate_missing_question_materials(
-                problems_data=problems_data, requested_targets=selected,
+            candidates = await _generate_ai_completion_candidates(
+                problems_data=problems_data, selected=selected,
                 test_case_count=test_case_count, provider=provider,
                 reporter=reporter,
                 generation_language=generation_language,

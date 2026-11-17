@@ -113,6 +113,58 @@ async def test_review_changes_one_item_and_preserves_independent_credit_differen
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("score,changed,remaining", [(1, False, True), (6, True, True), (8, True, False)])
+async def test_accepted_revision_reports_actual_score_changes_and_residual_disagreement(score, changed, remaining):
+    original, result, calls = await review({"revisions": [point_edit(score=score)]})
+    outcome = grading.read_math_trace(result[0])["review_outcome"]
+    assert outcome == {"provider": "offline", "accepted_revision": True,
+                       "score_changed": changed, "step_scores_changed": changed,
+                       "scoring_disagreement_remaining": remaining}
+    assert result[1] == original[1] and len(calls) == 1
+    if not changed:
+        assert result[0].score == original[0].score
+        assert [s.score for s in result[0].steps] == [s.score for s in original[0].steps]
+        assert result[0].comment != original[0].comment
+
+
+@pytest.mark.asyncio
+async def test_rejected_schema_records_field_locations_without_rejected_content():
+    marker = "PRIVATE_REJECTED_FIELD"
+    bad = {"expert_index": 0, "awards": "PRIVATE_REJECTED_VALUE", marker: "private"}
+    original, result, calls = await review({"revisions": [bad]}, {"revisions": [bad]})
+    assert len(calls) == 2
+    for before, after in zip(original, result):
+        assert after.score == before.score and after.steps == before.steps
+        diagnostic = grading.read_math_trace(after)["review_diagnostic"]
+        assert diagnostic["status"] == "failed" and diagnostic["stage"] == "revision_validation"
+        assert diagnostic["schema_errors"]
+        assert all(issue["expert_index"] == 0 for issue in diagnostic["schema_errors"])
+        errors = [e for issue in diagnostic["schema_errors"] for e in issue["errors"]]
+        assert any(e["loc"][-1] == "comment" and e["type"] == "missing" for e in errors)
+        saved = json.dumps(diagnostic)
+        assert marker not in saved and "PRIVATE_REJECTED_VALUE" not in saved
+        assert all(set(e) == {"loc", "type"} for e in errors)
+
+
+@pytest.mark.asyncio
+async def test_failed_review_retains_normalized_quota_cause_without_exception_text(monkeypatch):
+    from backend.llm.providers import ProviderRequestError
+    p, a, plan = problem(), answer(), plan_for()
+    votes = [expert_for(assessment(method=score), plan, a.content) for score in (1, 8)]
+    call = AsyncMock(side_effect=ProviderRequestError("provider_daily_quota_exceeded"))
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    with math_plans_context({p.q_id: plan}), grading.math_review_scope():
+        result = await grading.review_math_experts(p, a, votes, SimpleNamespace(provider_id="offline"))
+    assert call.await_count == 1
+    for before, after in zip(votes, result):
+        assert after.score == before.score
+        diagnostic = grading.read_math_trace(after)["review_diagnostic"]
+        assert diagnostic["error_type"] == "ProviderRequestError"
+        assert diagnostic["error_kind"] == "daily_quota_exhausted"
+        assert diagnostic["provider"] == "offline"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("bad,code", [
     (point_edit(1, awards=[{"item_id": "method", "score": 6, "reason": "Invalid citation.",
                             "citations": [{"source_id": "student:404", "verdict": "supported"}]}]),
@@ -290,7 +342,7 @@ async def test_shared_evidence_guidance_scoped_to_requested_written_rubric(kind,
     replies = [json.dumps(payload)]
     if expected:
         replies += [json.dumps({"parts":[{"part_id":"p1", "goals":[{"target":question["stem"], "source_id":"question:1", "points":4}]}]}),
-                    json.dumps({"parts":[{"part_id":"p1", "verdict":"consistent", "reason":"One requested result."}]})]
+                    json.dumps({"parts":[{"part_id":"p1", "verdict":"consistent", "reason":"One requested result.", "bundled_steps":[]}]})]
     provider = Provider(replies)
     await generate_missing_question_materials({"q1": question}, [
         {"q_id": "q1", "target_id": "q1:criterion", "target": "criterion"}

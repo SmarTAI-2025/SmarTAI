@@ -31,8 +31,8 @@ def rubric():
                     alternative=dict(deduct_per_error=1.5))]))
 
 
-def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1"):
-    return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason)]})
+def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1", *, bundled_steps=()):
+    return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason, bundled_steps=list(bundled_steps))]})
 
 
 def initial(rules=None, *, reference=True):
@@ -124,6 +124,41 @@ async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
 
 
 @pytest.mark.asyncio
+async def test_reported_bundle_cannot_be_accepted_by_an_overall_consistent_verdict():
+    feedback = {}
+    issue = "square: computing the square and proving nonidentity are independently earnable goals"
+    rules = rubric()
+    part = rules.parts[0]
+    bundled = part.steps[1].model_copy(update={"total_pts": 5,
+        "criterion": "Prove the square equals 1 and prove the element is not the identity."})
+    rules = rules.model_copy(update={"parts": (part.model_copy(update={
+        "steps": (part.steps[0], bundled, part.steps[3])}),)})
+    provider = Provider([initial(rules), audit(reason=issue, bundled_steps=["square"])])
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    assert [c.target for c in candidates] == ["reference_answer"]
+    assert issue in feedback["q1:criterion"]
+    assert "without changing the part budget" in feedback["q1:criterion"]
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bundled", [["other"], ["square", "square"]])
+async def test_bundle_check_cannot_reference_unknown_or_duplicate_steps(bundled):
+    provider = Provider([audit(bundled_steps=bundled), audit(bundled_steps=bundled)])
+    with pytest.raises(proof.ProofRubricUnverified):
+        await proof.prepare_proof_steps(provider, STEM, rubric(), language="zh")
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_bundle_check_must_be_answered_but_does_not_require_per_step_audits():
+    omitted = json.dumps({"parts": [dict(part_id="p1", verdict="consistent", reason="Seems valid")]})
+    provider = Provider([omitted, audit()])
+    assert await proof.prepare_proof_steps(provider, STEM, rubric(), language="zh")
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_generic_tiers_are_rejected_without_spending_an_audit_call():
     from backend.tests.proof_ledger_fixture import goal_ledger
     rules = goal_ledger(rubric(), [(STEM, 10)])
@@ -145,6 +180,36 @@ async def test_teacher_rules_are_not_replanned():
                    dict(stem=STEM + " [3 marks for the witness]")):
         assert not proof.use_proof_steps({**row, **change})
     assert not provider.calls
+
+
+@pytest.mark.parametrize("stem", [
+    "（10分）" + STEM, STEM + "（10分）", "(10 points) " + STEM,
+    STEM + " (10 points)", STEM + " [10 marks]", "（满分：10分）" + STEM,
+    "本题满分 10 分。" + STEM, STEM + " 本题满分10分", "1. (10 points) " + STEM,
+    "第1题（10分）" + STEM, "Total: 10 points. " + STEM,
+])
+def test_question_total_alone_does_not_disable_proof_audit(stem):
+    assert proof.use_proof_steps(dict(type="推理题", stem=stem, max_score=10))
+
+
+@pytest.mark.parametrize("policy", [
+    " [3 marks for the witness]", " 第一步3分，第二步7分。", " No partial credit.",
+    " (5 points)", " Award 10 points for the witness.", " (10 points for the witness)",
+    " 第一步（10分）", " Step 1 (10 points)",
+    " 第二步：证明该元素不是单位元（10分）",
+    " Step 2: prove the element is not the identity (10 points)",
+    " 第二步：证明该元素不是单位元（满分10分）",
+    " 每步满分10分。", " Maximum 10 points per step.",
+    " 证明该元素不是单位元满分10分。", " The witness earns a maximum 10 points.",
+    " Total: 10 points for the witness.",
+])
+def test_step_allocations_and_credit_policies_still_bypass_replanning(policy):
+    assert not proof.use_proof_steps(dict(type="推理题", stem=STEM + policy, max_score=10))
+
+
+@pytest.mark.parametrize("maximum", [None, "unknown", 5])
+def test_ambiguous_total_is_not_silently_stripped(maximum):
+    assert not proof.use_proof_steps(dict(type="推理题", stem=STEM + " (10 points)", max_score=maximum))
 
 
 @pytest.mark.asyncio
