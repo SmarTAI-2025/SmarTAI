@@ -138,14 +138,20 @@ async def test_ocr_retry_subset_does_not_make_ambiguous_alias_unique():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('conflict', ['number', 'copied_stem', None])
-async def test_existing_single_model_call_has_aliases_and_conflict_review(monkeypatch, conflict):
+@pytest.mark.parametrize('question_type', ['计算题', 'programming'])
+@pytest.mark.parametrize('conflict', ['number', 'copied_stem', 'model', None])
+async def test_existing_single_model_call_has_aliases_and_conflict_review(monkeypatch, conflict, question_type):
     known = problems()
-    answer = dict(q_id='q2', number=known['q2']['number'], type='计算题', content='Wrong but readable answer.', flag=[])
+    for problem in known.values():
+        problem['type'] = question_type
+    answer = dict(q_id='q2', number=known['q2']['number'], type=question_type,
+                  content='Wrong but readable answer.', flag=[], recognition_confidence=.99)
     if conflict == 'number':
         answer['number'] = '1.2.1'
     elif conflict == 'copied_stem':
         answer['content'] = known['q1']['stem'] + '\nMy work.'
+    elif conflict == 'model':
+        answer['flag'] = ['recognition_manual_pending']
     response = SimpleNamespace(content=json.dumps(dict(stu_id='S1', stu_name='Alice', stu_ans=[answer])))
     invoke = AsyncMock(return_value=response)
     monkeypatch.setattr(ingest_agent, 'ainvoke_with_retry', invoke)

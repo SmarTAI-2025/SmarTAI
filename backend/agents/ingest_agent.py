@@ -1030,7 +1030,7 @@ async def parse_student_answer_sources(
                 if independent_answers else (parsed.model_dump(), ()))
             from backend.services.question_matching import mark_question_match_conflicts
             mark_question_match_conflicts(payload, problems_data)
-            _review_transcribed_programming_answers(payload, problems_data)
+            _sanitize_transcribed_programming_answers(payload, problems_data)
             payload["source_filename"] = source.filename
             payload["source_id"] = source.source_id
             payload["stored_file_id"] = source.stored_file_id
@@ -1242,18 +1242,13 @@ def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
     )
 
 
-def _review_transcribed_programming_answers(student, problems):
-    """Only teacher-reviewed document transcriptions may become executable answers."""
+def _sanitize_transcribed_programming_answers(student, problems):
+    """Keep native-source hints out of transcriptions; use the shared review policy."""
     for answer in student.get("stu_ans", []):
         qid = answer.get("q_id")
         if qid in problems and is_programming_question_type(problems[qid].get("type")):
             flags = [f for f in answer.get("flag", []) if f not in SOURCE_LANGUAGE_FLAGS and not f.startswith("programming_source_entry:")]
-            answer["flag"] = list(dict.fromkeys([*flags, "recognition_manual_pending"]))
-            if answer.get("content"):
-                recognition = student.setdefault("recognition", {})
-                reviews = recognition.setdefault("model_review_question_ids", [])
-                if qid not in reviews:
-                    reviews.append(qid)
+            answer["flag"] = list(dict.fromkeys(flags))
 
 
 def _source_identity(text, filename, identity_mode, roster):
@@ -1447,7 +1442,7 @@ async def parse_student_answer_sources_from_ocr_markdown(
             "identity_match_method": identity_mode,
             "identity_status": "matched" if identity_matched else "needs_review",
         }
-        _review_transcribed_programming_answers(payload, problems_data)
+        _sanitize_transcribed_programming_answers(payload, problems_data)
         results.append(SubmissionSourceParseResult(
             source_id=source.source_id,
             stored_file_id=source.stored_file_id,

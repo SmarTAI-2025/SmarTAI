@@ -209,7 +209,8 @@ async def test_confirmed_replacement_of_ambiguous_source_survives_retry(monkeypa
     registry.provider.ainvoke.assert_not_awaited()
 
 
-def test_mounted_mixed_text_requires_teacher_review_before_grading(client_registry, monkeypatch):
+@pytest.mark.parametrize("confidence", [.95, .6, .3, None])
+def test_mounted_mixed_text_uses_shared_confidence_review(client_registry, monkeypatch, confidence):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -218,7 +219,8 @@ def test_mounted_mixed_text_requires_teacher_review_before_grading(client_regist
     client, registry = client_registry
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     response = dict(stu_id="S1", stu_name="Alice", stu_ans=[dict(q_id="q2", number="2", type="programming",
-        content="def sum_positive(nums): return 0", flag=["programming_source_entry:misleading"])])
+        content="def sum_positive(nums): return 0", recognition_confidence=confidence,
+        flag=["programming_source_entry:misleading", PYTHON_FLAG])])
     model = AsyncMock(return_value=SimpleNamespace(content=json.dumps(response)))
     monkeypatch.setattr(registry.provider, "ainvoke", model, raising=False)
     text = "My explanation of the algorithm follows.\n" + SOURCE
@@ -227,10 +229,29 @@ def test_mounted_mixed_text_requires_teacher_review_before_grading(client_regist
     assert queued.status_code == 200
     asyncio.run(task_facade.run_durable_submission_recognition(_claim(owner, queued.json()["job_id"])))
     row, = client.get(f"/tasks/{task}", headers=headers(owner)).json()["student_data"]["S1"]["stu_ans"]
-    assert "recognition_manual_pending" in row["flag"] and "programming_source_entry:misleading" not in row["flag"]
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(
-        task_id=task, owner_id=owner)["blocking_issues"]
+    assert row["content"] == response["stu_ans"][0]["content"]
+    assert row["recognition_confidence"] == confidence
+    assert row["flag"] == []
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert "submission_recognition_blocked" not in readiness["blocking_issues"]
+    assert ("submission_recognition_needs_review" in readiness["warnings"]) == (confidence == .3)
     model.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question_type", ["concept", "programming"])
+async def test_ocr_document_mapping_uses_same_review_for_every_question_type(question_type):
+    from backend.agents.ingest_agent import SubmissionSourceInput, parse_student_answer_sources_from_ocr_markdown
+    source = SubmissionSourceInput(source_id="source", stored_file_id="stored", filename="S1_Alice.pdf",
+        content_type="application/pdf", text="# Question 2\nAnswer text with an explicit question number.")
+    known = questions(SUM)
+    known["q2"]["type"] = question_type
+    result, = await parse_student_answer_sources_from_ocr_markdown([source], known)
+    assert result.status == "parsed"
+    answer, = result.student["stu_ans"]
+    assert answer["q_id"] == "q2"
+    assert answer["flag"] == ["ocr_only_structure_requires_teacher_review"]
+    assert task_facade._public_answer_flags(answer["flag"], content=answer["content"]) == answer["flag"]
 
 
 @pytest.mark.parametrize("stem,expected_flags", [
@@ -301,7 +322,7 @@ def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkey
     monkeypatch.setattr(registry.provider, "supports_vision", True, raising=False)
     monkeypatch.setattr(registry.provider, "ainvoke_vision", vision, raising=False)
     structured = dict(stu_id="S1", stu_name="Alice", stu_ans=[dict(q_id="q2", number="2",
-        type="programming", content=transcription, flag=[])])
+        type="programming", content=transcription, flag=[], recognition_confidence=.3)])
     monkeypatch.setattr(registry.provider, "ainvoke", AsyncMock(return_value=SimpleNamespace(content=json.dumps(structured))), raising=False)
     upload = client.post(f"/tasks/{task}/parse_submissions", headers=headers(owner),
                          files={"file": ("S1_Alice.png", data.getvalue(), "image/png")})
@@ -310,8 +331,11 @@ def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkey
     snapshot = client.get(f"/tasks/{task}", headers=headers(owner)).json()
     row, = snapshot["student_data"]["S1"]["stu_ans"]
     vision.assert_awaited_once()
-    assert row["content"] == transcription and "recognition_manual_pending" in row["flag"]
-    assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
+    assert row["content"] == transcription and row["flag"] == []
+    assert row["recognition_confidence"] == .3
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert "submission_recognition_needs_review" in readiness["warnings"]
+    assert "submission_recognition_blocked" not in readiness["blocking_issues"]
     task_facade.update_student_answer(task_id=task, owner_id=owner, display_student_id="S1", q_id="q2",
         patch={"answer_id": row["answer_id"], "target_q_id": "q2", "content": correct, "review_status": "confirmed"},
         expected_revision=snapshot["workflow_revision"])
