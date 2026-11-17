@@ -53,14 +53,16 @@ async def test_question_parser_keeps_independent_scores_and_source_low_cannot_ov
 
 
 @pytest.mark.asyncio
-async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypatch):
+@pytest.mark.parametrize("question_type", ["concept", "programming"])
+@pytest.mark.parametrize("independent_answers", [False, True])
+async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypatch, question_type, independent_answers):
     async def invoke(_provider, messages):
         student = "S1" if "S1.txt" in messages[-1].content else "S2"
         scores = [.95, .3] if student == "S1" else [.6, None]
         return SimpleNamespace(content=json.dumps({
             "stu_id": student, "stu_name": student,
             "stu_ans": [
-                dict(q_id=f"q{i}", number=str(i), type="concept", content="1 + 1 = 3",
+                dict(q_id=f"q{i}", number=str(i), type=question_type, content="1 + 1 = 3",
                      flag=["recognition_low_confidence"], recognition_confidence=score)
                 for i, score in enumerate(scores, 1)
             ],
@@ -73,9 +75,10 @@ async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypat
             content_type="text/plain", text="Literal student answers",
         ) for s in ("S1", "S2")
     ]
-    questions = {f"q{i}": dict(q_id=f"q{i}", number=str(i), type="concept", stem=f"Question {i}")
+    questions = {f"q{i}": dict(q_id=f"q{i}", number=str(i), type=question_type, stem=f"Question {i}")
                  for i in (1, 2)}
-    results = await ingest_agent.parse_student_answer_sources(sources, questions, SimpleNamespace())
+    results = await ingest_agent.parse_student_answer_sources(sources, questions, SimpleNamespace(),
+                                                            independent_answers=independent_answers)
     results = attach_submission_recognition(results, [
         SimpleNamespace(source_id=s.source_id, recognition={"confidence": "low", "coverage": {}})
         for s in sources
@@ -86,6 +89,7 @@ async def test_answer_parser_scopes_confidence_to_student_and_question(monkeypat
             actual[result.source_id, answer["q_id"]] = task_facade._answer_recognition_confidence(answer["flag"])
             assert answer["content"] == "1 + 1 = 3"  # Recognition never fixes a wrong answer.
             assert "recognition_low_confidence" not in answer["flag"]
+            assert not task_facade._public_answer_flags(answer["flag"], content=answer["content"])
     assert actual == {("S1", "q1"): .95, ("S1", "q2"): .3, ("S2", "q1"): .6, ("S2", "q2"): None}
 
 

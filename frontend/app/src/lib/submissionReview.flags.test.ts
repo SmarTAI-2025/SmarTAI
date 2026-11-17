@@ -78,10 +78,10 @@ describe("OCR review labels", () => {
     expect(answerReviewNotes(incomplete, "en-US").some(note => note.label.includes("pages:2"))).toBe(false);
   });
 
-  it("shows advice only on the low-confidence answer, across questions and students", () => {
+  it.each(["calculation", "concept", "reasoning", "programming", "other"])("shows advice only on the low-confidence %s answer, across questions and students", type => {
     const scores = [[.96, .3], [.6, null]];
     const attention = scores.map(student => student.map((recognition_confidence, i) => {
-      const answer = { q_id: `q${i}`, number: `${i}`, type: "reasoning", content: "Literal work",
+      const answer = { q_id: `q${i}`, number: `${i}`, type, content: "Literal work",
         recognition_confidence, flag: ["recognition_low_confidence"] };
       const notes = answerReviewNotes(answer, "zh-CN");
       expect(notes).toHaveLength(recognition_confidence === .3 ? 1 : 0);
