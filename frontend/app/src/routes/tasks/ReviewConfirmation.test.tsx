@@ -376,6 +376,18 @@ describe("one-click grading review", () => {
     expect(screen.getByRole("tab", {name: "建议处理 (2)"})).toBeInTheDocument();
   });
 
+  it("shows student interface failures only in the yellow advisory queue", async () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {type: "programming", confidence: .95, score: 8, provisional_score: 8, review_reasons: ["programming_interface_only"]}),
+    ]}];
+    show();
+    expect(screen.getByRole("tab", {name: "需要处理 (0)"})).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (1)"}));
+    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (1)"});
+    expect(within(advisory).getByText(/无法按题目要求调用函数/)).toHaveClass("text-amber-700");
+  });
+
   it.each([
     ["zh-CN", "SmarTAI 批改结果", "建议 9 / 10，待复核", "教师用例 5/5 通过。模型建议扣分，待核对。"],
     ["en-US", "SmarTAI Grading Result", "Suggested 9 / 10, pending review", "All 5/5 teacher tests passed. Review the proposed deduction."],

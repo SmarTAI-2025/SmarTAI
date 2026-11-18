@@ -30,7 +30,11 @@ def number(value: Any) -> float | None:
 
 
 TEACHER_CASE_SCORE_REASONS = ("programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit")
-PROGRAMMING_REVIEW_REASONS = ("programming_partial_evidence_conflict", *TEACHER_CASE_SCORE_REASONS, "programming_ai_only", "programming_code_review_only", "programming_interface_only")
+PROGRAMMING_REVIEW_REASONS = ("programming_partial_evidence_conflict", *TEACHER_CASE_SCORE_REASONS, "programming_code_review_only")
+
+
+def programming_interface_only(failure_counts, passed_count: int) -> bool:
+    return passed_count == 0 and bool(failure_counts) and set(failure_counts) <= {"target_function_missing", "signature_mismatch"}
 
 
 def teacher_case_score_review_reason(evidence, score, maximum) -> str | None:
@@ -55,17 +59,14 @@ def teacher_case_score_review_reason(evidence, score, maximum) -> str | None:
     return None
 
 
-def programming_evidence_review_reason(evidence: dict) -> str:
+def programming_evidence_review_reason(evidence: dict) -> str | None:
     if (evidence.get("partial_check") or {}).get("status") == "confirmed":
         return "programming_partial_evidence_conflict"
     if evidence.get("score_review_reason") in TEACHER_CASE_SCORE_REASONS:
         return evidence["score_review_reason"]
     if evidence.get("execution_status") != "executed":
         return "programming_code_review_only"
-    if ((evidence.get("teacher_tests") or {}).get("total", 0) > 0
-            and evidence.get("primary_reason") in {"target_function_missing", "signature_mismatch"}):
-        return "programming_interface_only"
-    return "programming_ai_only"
+    return None
 
 
 def programming_review_reason(reasons, experts) -> str | None:
@@ -75,8 +76,9 @@ def programming_review_reason(reasons, experts) -> str | None:
         evidence = expert.get("programming_evidence") if isinstance(expert, dict) else None
         if (isinstance(evidence, dict) and not expert.get("error_kind")
                 and evidence.get("contract") == "smartai.programming_evidence"
-                and evidence.get("score_status") == "provisional"):
-            restored.add(programming_evidence_review_reason(evidence))
+                and evidence.get("score_status") == "provisional"
+                and (reason := programming_evidence_review_reason(evidence))):
+            restored.add(reason)
     return next((reason for reason in PROGRAMMING_REVIEW_REASONS if reason in restored), None)
 
 
@@ -183,7 +185,8 @@ def review_state(correction: dict) -> tuple[bool, bool]:
                                             or disagreement or partial or bool(reasons & {
                                                 "partial_experts", "degraded_to_single", "math_scoring_uncertainty",
                                                 "math_expert_disagreement", "math_verification_conflict",
-                                                "math_proof_concern", "math_model_review", "math_alternative_method", "programming_extra_boundary",
+                                                "math_proof_concern", "math_model_review", "math_alternative_method",
+                                                "programming_extra_boundary", "programming_interface_only",
                                             })))
     return pending, reviewed
 
