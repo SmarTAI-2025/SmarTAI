@@ -57,7 +57,7 @@ async def recognize(monkeypatch, source, candidate, *, partial=True, question_ty
     return annotate_major_question_structures(result)
 
 
-def reviewed_problem(problem, form):
+def rubric_definition(problem, form):
     if form == "explanation":
         steps = [
             {"id": "trace", "criterion": "Trace the multiplication before the addition", "total_pts": 6},
@@ -65,14 +65,41 @@ def reviewed_problem(problem, form):
         ]
     else:
         steps = [{"id": "stdout", "criterion": "Identify the actual printed output", "total_pts": 10}]
-    definition = RubricDefinition(part_rubric={
+    return RubricDefinition(part_rubric={
         "id": "q1", "label": "1", "stem": problem["stem"], "total_pts": 10,
         "parts": [{"id": "p1", "total_pts": 10, "steps": steps, "alternative": {"deduct_per_error": 1}}],
     })
-    criterion, draft = generated_rubric(problem, definition, language="en")
-    return {**problem, "criterion": criterion, "rubric_draft": draft.model_dump(mode="json"),
+
+
+def confirmed_problem(problem, criterion, draft):
+    return {**problem, "criterion": criterion, "rubric_draft": draft,
             "ai_completion_provenance": {"criterion": {"source_kind": "ai_generated"}},
             "review_status": "confirmed", "max_score_review_status": "confirmed"}
+
+
+def reviewed_problem(problem, form):
+    criterion, draft = generated_rubric(problem, rubric_definition(problem, form), language="en")
+    return confirmed_problem(problem, criterion, draft.model_dump(mode="json"))
+
+
+async def generate_problem(monkeypatch, questions, form):
+    targets = requested_major_question_materials(questions)
+    target, = targets
+    assert target["target"] == "criterion"
+    question = questions["q1"]
+    reply = {"candidates": [{**target, "rubric_definition":
+                           rubric_definition(question, form).model_dump(mode="json", exclude_unset=True)}]}
+    call = AsyncMock(return_value=SimpleNamespace(content=json.dumps(reply), duration_ms=1))
+    monkeypatch.setattr(ingest_agent, "ainvoke_with_retry", call)
+    feedback = {}
+    drafts = await ingest_agent.generate_missing_question_materials(
+        questions, targets, 1, SimpleNamespace(provider_id="fixture"),
+        generation_language="en", allow_partial=True, repair_feedback=feedback,
+    )
+    assert len(drafts) == 1, feedback
+    call.assert_awaited_once()
+    draft, = drafts
+    return confirmed_problem(question, draft.text_value, draft.rubric_draft)
 
 
 def stub_oci(monkeypatch, *, stdout="7\n"):
@@ -170,8 +197,7 @@ async def test_question_preparation_to_saved_grades(monkeypatch, form, answers, 
     questions = await recognize(monkeypatch, stem, candidate)
     extracted = questions["q1"]
     assert ArtifactProblemV1.model_validate(extracted).model_dump()["code_output"] == extracted["code_output"]
-    assert [item["target"] for item in requested_major_question_materials(questions)] == ["criterion"]
-    problem = reviewed_problem(extracted, form)
+    problem = await generate_problem(monkeypatch, questions, form)
     owner, task, provider = task_with_problem(problem, answers)
     stored, = assignment_repository.list_questions(task, teacher_id=owner)
     assert stored.source["presentation"]["code_output"] == extracted["code_output"]

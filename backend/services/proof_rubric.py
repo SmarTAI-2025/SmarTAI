@@ -9,6 +9,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from backend.domain.code_output import code_output_data
 from backend.domain.question_types import normalize_question_type
 from backend.llm.providers import ProviderRequestError
 from backend.services.part_rubric import (
@@ -43,6 +44,7 @@ class ProofRubricUnverified(ValueError):
 def use_proof_steps(row):
     return (
         normalize_question_type(row.get("type") or "") == "推理题"
+        and not code_output_data(row)
         and not row.get("criterion")
         and not row.get("rubric_draft")
         and not row.get("teacher_subpart_points")
