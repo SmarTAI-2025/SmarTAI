@@ -103,11 +103,17 @@ def unavailable_output(problem, language):
 
 
 def output_only_correction(problem, correct, language):
+    from backend.services.rubric_drafts import saved_draft
+
     comment = output_feedback(correct, language)
     score = problem.max_score if correct else 0
+    draft = saved_draft(problem)
+    rules = draft.plan.part_rubric if draft else None
+    # Retain the same hundredth-point precision as this frozen written rubric.
+    part_id = rules.parts[0].id if rules and len(rules.parts) == 1 else None
+    step = StepScore(step_no=1, part_id=part_id, score=score, is_correct=correct, desc=comment)
     return Correction(q_id=problem.q_id, type=problem.type, score=score, max_score=problem.max_score,
-                      confidence=1, comment=comment, steps=[StepScore(step_no=1, score=score,
-                      is_correct=correct, desc=comment)], synthesis_method="code_output_verified")
+                      confidence=1, comment=comment, steps=[step], synthesis_method="code_output_verified")
 
 
 @contextmanager

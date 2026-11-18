@@ -58,16 +58,17 @@ async def recognize(monkeypatch, source, candidate, *, partial=True, question_ty
 
 
 def rubric_definition(problem, form):
+    maximum = problem["max_score"]
     if form == "explanation":
         steps = [
             {"id": "trace", "criterion": "Trace the multiplication before the addition", "total_pts": 6},
             {"id": "stdout", "criterion": "Report the actual printed output", "total_pts": 4, "code_output": True},
         ]
     else:
-        steps = [{"id": "stdout", "criterion": "Identify the actual printed output", "total_pts": 10}]
+        steps = [{"id": "stdout", "criterion": "Identify the actual printed output", "total_pts": maximum}]
     return RubricDefinition(part_rubric={
-        "id": "q1", "label": "1", "stem": problem["stem"], "total_pts": 10,
-        "parts": [{"id": "p1", "total_pts": 10, "steps": steps, "alternative": {"deduct_per_error": 1}}],
+        "id": "q1", "label": "1", "stem": problem["stem"], "total_pts": maximum,
+        "parts": [{"id": "p1", "total_pts": maximum, "steps": steps, "alternative": {"deduct_per_error": 1}}],
     })
 
 
@@ -188,7 +189,7 @@ def start(owner, task, *, request_id="stdout-first", retry_scope="full_batch"):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("form,answers,expected", [
     ("choice", ["答案：B", "A"], [10, 0]),
-    ("blank", ["`7`", "6"], [10, 0]),
+    ("blank", ["`7`", "6"], [1.24, 0]),
     ("explanation", ["Output: 7\nMultiplication gives 6.", "Output: 6\nMultiplication gives 6.", "Output: 7"],
      [10, 6, 4]),
 ])
@@ -196,6 +197,7 @@ async def test_question_preparation_to_saved_grades(monkeypatch, form, answers, 
     stem, candidate = source_question(form)
     questions = await recognize(monkeypatch, stem, candidate)
     extracted = questions["q1"]
+    extracted["max_score"] = expected[0]
     assert ArtifactProblemV1.model_validate(extracted).model_dump()["code_output"] == extracted["code_output"]
     problem = await generate_problem(monkeypatch, questions, form)
     owner, task, provider = task_with_problem(problem, answers)
@@ -213,7 +215,7 @@ async def test_question_preparation_to_saved_grades(monkeypatch, form, answers, 
                   key=lambda row: identities[row.student_id].display_student_id)
     assert [row.ai_score for row in rows] == expected
     assert scored.await_count == (len(answers) if form == "explanation" else 0)
-    assert sum(step["score"] for step in rows[0].ai_steps) == 10
+    assert sum(step["score"] for step in rows[0].ai_steps) == expected[0]
     if form == "explanation":
         assert {step["item_id"]: step["score"] for step in rows[1].ai_steps} == {"trace": 6, "stdout": 0}
     dispatched.assert_awaited_once()
