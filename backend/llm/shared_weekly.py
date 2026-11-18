@@ -5,15 +5,20 @@ Only the three managed OpenAI presets enter here. BYOK and Demo keep their paths
 """
 import asyncio
 import time
+from contextlib import nullcontext
 
 from backend.config import settings
 from backend.llm.providers import (
     LLMResponse, _request_definitely_rejected,
     _wait_provider_local, _is_overload_failure, _safe_finish_reason,
 )
-from backend.llm.request_timeouts import current_response_scope
+from backend.llm.request_timeouts import (
+    current_response_scope, provider_local_step, response_timeout_scope,
+)
+from backend.progress.recognition_activity import report_provider_state
 from backend.services.model_quota import ModelQuotaError
 from backend.services.shared_weekly_budget import PRICES, reserve, finish
+from backend.services.submission_work_budget import wait_for_admission
 
 
 def response_input(messages):
@@ -46,16 +51,19 @@ def response_input(messages):
     return items
 
 
-async def _reserve_when_available(owner, model, inputs, maximum):
-    deadline = time.monotonic() + settings.llm_timeout
+async def _reserve_when_available(provider, owner, inputs, maximum):
+    waiting = False
     while True:
         try:
-            return reserve(owner, model, inputs, max_output_tokens=maximum)
+            return reserve(owner, provider.model, inputs, max_output_tokens=maximum)
         except ModelQuotaError as exc:
-            if str(exc) != "shared_pool_budget_pending" or time.monotonic() >= deadline:
+            if str(exc) != "shared_pool_budget_pending":
                 raise
             # Other in-flight responses release unused reservations. A pending
             # hold must not be presented as an already-spent weekly allowance.
+            if not waiting:
+                await provider_local_step(report_provider_state(provider, "queued"), best_effort=True)
+                waiting = True
             await asyncio.sleep(0.1)
 
 
@@ -66,12 +74,29 @@ async def invoke_weekly(provider, owner, messages, *, max_output_tokens=None):
     maximum = 128000 if max_output_tokens is None else max_output_tokens
     payload = {"model": provider.model, "input": response_input(messages)}
     chat = await _wait_provider_local(provider._get_client())
-    scope = current_response_scope()
-    client = chat.root_async_client.with_options(max_retries=0, timeout=scope.seconds if scope else settings.llm_timeout)
+
+    # A single model lease covers this logical call, but token counting and
+    # generation are separate upstream responses. Neither times the balance wait.
+    existing_scope = current_response_scope()
+    generation_scope = (
+        nullcontext(existing_scope) if existing_scope is not None else
+        response_timeout_scope(settings.llm_timeout, response_only=True)
+    )
+    with generation_scope as scope:
+        client = chat.root_async_client.with_options(max_retries=0, timeout=scope.seconds)
+        return await _invoke_metered(provider, owner, messages, payload, client, maximum, scope.seconds)
+
+
+async def _invoke_metered(provider, owner, messages, payload, client, maximum, seconds):
     await provider._endpoint_breaker().before_call()
     async with provider._call_capacity(messages):
-        count = await _wait_provider_local(client.responses.input_tokens.count(**payload))
-        charge_id, maximum = await _wait_provider_local(_reserve_when_available(owner, provider.model, count.input_tokens, maximum))
+        # Counting must not authorize a paid recognition request or consume
+        # its attempt budget. Only generation uses the enclosing scope's hooks.
+        with response_timeout_scope(seconds, response_only=True):
+            count = await provider._invoke_response(lambda: client.responses.input_tokens.count(**payload))
+        charge_id, maximum = await wait_for_admission(
+            _reserve_when_available(provider, owner, count.input_tokens, maximum),
+        )
         submitted = False
         response_id = None
         started = time.perf_counter()
