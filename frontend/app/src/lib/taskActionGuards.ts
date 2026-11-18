@@ -1578,9 +1578,12 @@ function uncertainProviderCauseCopy(failure: ProviderFailure, locale: Locale) {
   ) ? status : null;
   const pages = safeFailurePages(failure.pages);
   const pageHint = pages.length ? tx(locale, `失败位置：PDF 第 ${pages.join("、")} 页。`, `Affected PDF pages: ${pages.join(", ")}. `) : "";
+  const detail = httpStatus === 503
+    ? tx(locale, "模型服务商暂时无法处理请求（HTTP 503）。请稍后重试。", "The model provider is temporarily unable to handle requests (HTTP 503). Please try again shortly.")
+    : tx(locale, copy[2], copy[3]) + (httpStatus ? ` (HTTP ${httpStatus})` : "") + tx(locale, "。", ".");
   return {
     title: tx(locale, copy[0], copy[1]),
-    description: pageHint + tx(locale, copy[2], copy[3]) + (httpStatus ? ` (HTTP ${httpStatus})` : "") + tx(locale, "。", "."),
+    description: pageHint + detail,
     httpStatus,
   };
 }

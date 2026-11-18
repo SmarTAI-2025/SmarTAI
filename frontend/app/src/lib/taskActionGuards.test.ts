@@ -396,6 +396,7 @@ describe("background task failure guidance", () => {
     });
     expect(info.title).toBe(locale === "zh-CN" ? "模型服务暂时不可用" : "The model service is temporarily unavailable");
     expect(info.description).toContain("HTTP 503");
+    expect(info.description).toContain(locale === "zh-CN" ? "请稍后重试" : "Please try again shortly");
     expect(info.description).toContain(locale === "zh-CN" ? "重试可能再次消耗额度" : "Retrying may use additional quota");
     expect(info.description).toContain(locale === "zh-CN" ? "计费尚无法确认" : "billing status is unknown");
     expect(info.technicalDetails.map((item) => item.value)).toContain("503");

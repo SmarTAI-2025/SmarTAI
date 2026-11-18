@@ -17,10 +17,12 @@ from backend.domain.errors import LeaseLost, RecognitionError
 from backend.llm import providers
 from backend.llm.providers import ProviderRequestError
 from backend.llm.request_timeouts import current_response_scope
+from backend.progress.recognition_activity import public_progress
+from backend.progress.tracker import ProgressReporter
 from backend.recognition.budget import RecognitionBudget, validate_budget_timing
 from backend.recognition.cache_identity import final_cache_identity
 from backend.recognition.durable_records import RecognitionRunCheckpointV1, authorize_dispatch
-from backend.recognition.engine import EngineReadInputV1
+from backend.recognition.engine import EngineReadInputV1, EngineRepairInputV1
 from backend.recognition.models import RecognitionPolicyV1
 from backend.recognition.runtime import RecognitionCapacity, run_initial_read
 from backend.services import recognition_runs
@@ -255,6 +257,32 @@ async def test_sent_timeout_stops_later_pages_and_pending_never_replays(tmp_path
     assert first.operation_usage.total_calls == 1 and first.operation_usage.output_tokens is None
     assert (await run(service, request, data, engine)).safe_error_code == "provider_submit_uncertain"
     assert engine.sends == [("recognize", 1)]
+
+
+@pytest.mark.asyncio
+async def test_repair_provider_503_reaches_public_progress_without_replay(tmp_path):
+    service, request, data, engine = new_runner(tmp_path, pdf=True, pages=2, initial=["literal 1 + 1 = 3"])
+    request = request.model_copy(update={"purpose": "submissions"})
+    service.progress = ProgressReporter("fixture")
+
+    async def respond(_scope, unit):
+        if isinstance(unit, EngineRepairInputV1):
+            if unit.page_number == 2:
+                raise RecognitionError("provider_upstream_unavailable", submission_may_exist=True,
+                                       upstream_status_code=503)
+            return await engine.engine.repair(unit)
+        return await engine.engine.recognize(unit)
+
+    engine.response = respond
+    result = await run(service, request, data, engine)
+    assert result.status == "needs_review"
+    assert result.assembly.document.coverage.processed_pages == [1, 2]
+    snapshot = (await service.progress.snapshot()).model_dump(mode="json")
+    assert public_progress(snapshot)["provider_failures"] == [
+        {"code": "provider_upstream_unavailable", "http_status": 503, "pages": [2]},
+    ]
+    assert (await run(service, request, None, engine)).status == "needs_review"
+    assert engine.sends.count(("repair", 2)) == 1
 
 
 @pytest.mark.asyncio

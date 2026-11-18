@@ -631,7 +631,13 @@ export function FrontierLiveDemoPage() {
           ) : error ? (
             <RecoverableActionState locale={locale} className="mt-5"
               info={{
-                ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined }),
+                ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, {
+                  locale,
+                  taskId: taskId ?? undefined,
+                  jobId: snapshot?.grading_job_id ?? undefined,
+                  phase: snapshot?.progress?.current_step ?? undefined,
+                  providerFailures: snapshot?.progress?.provider_failures,
+                }),
               }}
               primaryAction={{ label: tx(locale, "重试失败项", "Retry failed items"), onClick: () => void retryFailedItems(), busy }}
             />
