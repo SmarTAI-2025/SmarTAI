@@ -66,3 +66,76 @@ for (const width of [1280, 390]) {
     await page.screenshot({ path: testInfo.outputPath("structured-rubric-saved.png"), fullPage: true });
   });
 }
+
+for (const width of [1280, 390]) {
+  test(`programming scoring saves test points apart from code and input rules (${width}px)`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const errors: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => { if (message.type() === "error") errors.push(message.text()); });
+    await page.addInitScript(() => {
+      localStorage.setItem("smartai_token", "synthetic-rubric-token");
+      localStorage.setItem("smartai_locale", "zh-CN");
+    });
+    const question = { q_id: "q1", number: "1", type: "编程题", max_score: 10,
+      stem: "实现平方函数。输入为整数。", criterion: "通过测试的比例乘以 6 分，代码正确得 4 分。",
+      reference_answer: "计算输入的平方。", review_status: "needs_review",
+      programming_scoring: { test_points: null as number | null, input_rules: "", code_criterion: "" } };
+    question.programming_scoring.code_criterion = question.criterion;
+    const task = { task_id: "programming-scoring", name: "Programming scoring", status: "problems_ready", workflow_revision: 1,
+      problem_data: { q1: question }, student_data: {}, problem_count: 1, student_count: 0,
+      created_at: 1, updated_at: 1, kb_docs: {} };
+    let saves = 0;
+    await page.route(`${backend}/**`, async route => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: {
+        "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
+      const json = (value: unknown) => route.fulfill({ json: value });
+      if (path === "/auth/me") return json({ id: "teacher", username: "Teacher", role: "teacher", is_active: true });
+      if (path === "/auth/activity") return json({ token: "synthetic-rubric-token" });
+      if (path === "/tasks/programming-scoring/problems/q1" && request.method() === "PUT") {
+        const patch = request.postDataJSON();
+        expect(patch).toMatchObject({
+          criterion: "代码注释得 4 分。", max_score: 10, expected_workflow_revision: 1,
+          programming_scoring: { test_points: 6, input_rules: "x >= 0." },
+        });
+        saves++;
+        question.criterion = patch.criterion;
+        question.programming_scoring = { ...patch.programming_scoring, code_criterion: patch.criterion };
+        task.workflow_revision++;
+        return json({ status: "ok", problem: question, workflow_revision: task.workflow_revision });
+      }
+      if (path === "/tasks/programming-scoring") return json(task);
+      if (path.endsWith("/source-files")) return json({ task_id: task.task_id, workflow_revision: 1,
+        problem_source: null, submission_sources: {} });
+      return json([]);
+    });
+    await page.goto("/tasks/programming-scoring/questions/q1/content");
+    await expect(page).toHaveURL(/questions\/q1\/content$/);
+    expect(await page.title()).not.toBe("");
+    const card = page.locator('[data-question-id="q1"]');
+    await expect(card).toBeVisible();
+    const edit = card.getByRole("button", { name: "修改第 1 题满分与评分标准" });
+    await edit.click();
+    const code = card.getByRole("textbox", { name: "第 1 题评分标准" });
+    const testPoints = card.getByRole("spinbutton", { name: /测试配分/ });
+    const inputRules = card.getByRole("textbox", { name: /额外输入限制/ });
+    const save = card.getByRole("button", { name: "保存", exact: true });
+    await code.fill("代码注释得 4 分。");
+    await save.click();
+    await expect(card.getByRole("alert")).toContainText("请填写测试配分");
+    expect(saves).toBe(0);
+    await testPoints.fill("6");
+    await inputRules.fill("x >= 0.");
+    await page.screenshot({ path: testInfo.outputPath("programming-scoring-fields.png"), fullPage: true });
+    await save.click();
+    await expect(code).toHaveCount(0);
+    expect(saves).toBe(1);
+    await edit.click();
+    await expect(testPoints).toHaveValue("6");
+    await expect(code).toHaveValue("代码注释得 4 分。");
+    await expect(inputRules).toHaveValue("x >= 0.");
+    await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}

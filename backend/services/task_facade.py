@@ -1067,16 +1067,22 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             structure_source="legacy_single_question",
             review_status="needs_review",
         ).model_dump()
-    rubric_summary = summarize_rubric_points(
-        question.criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
-    ).model_dump()
     from backend.services.part_rubric import alternative_text
     from backend.services.rubric_display import rubric_display, alternative_display, show_alternative, alternative_cap_issue
     from backend.services.math_grading_context import problem_from_question
     from backend.services.rubric_drafts import saved_draft
-    if math_plan is None and presentation.get("rubric_draft"):
+    programming = is_programming_question_type(question.type)
+    verified = None
+    if (programming or math_plan is None) and presentation.get("rubric_draft"):
         verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
-        math_plan = verified.plan if verified else None
+        if math_plan is None and verified:
+            math_plan = verified.plan
+    rubric_draft = presentation.get("rubric_draft")
+    if programming and verified is None:
+        rubric_draft = None  # A stale or invalid contract is projected as a review issue below.
+    rubric_summary = summarize_rubric_points(
+        question.criterion or "", max_score, structure, rubric_draft=rubric_draft,
+    ).model_dump()
     alternatives = []
     display_plan = (presentation.get("rubric_draft") or {}).get("display_plan")
     cap_issues = alternative_cap_issue(question.q_id, math_plan.part_rubric) if math_plan and math_plan.part_rubric else []
@@ -1096,6 +1102,21 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         from backend.services.rubric_drafts import pending_alternatives
         alternatives = [{"id": key, "label": rule["label"], "text": rule.get("binding_text", rule["text"])}
                         for key, rule in pending_alternatives(presentation["alternative_rules"], structure).items()]
+    programming_fields = {}
+    programming_criterion = None
+    if programming:
+        from backend.services.programming_rubric import programming_scoring_for_review, test_award_review_issue
+
+        programming_fields["programming_scoring"] = programming_scoring_for_review(question, verified)
+        if issue := test_award_review_issue(question, verified, effective_issues):
+            effective_issues.append(issue)
+        if verified and verified.programming_scoring is not None:
+            points = verified.programming_scoring.test_points
+            programming_criterion = question.criterion
+            if points:
+                test_rule = (f"测试占 {points:g} 分，按有效样例的通过比例计分。" if feedback_language == "zh"
+                             else f"Tests are worth {points:g} points, scored in proportion to valid cases passed.")
+                programming_criterion = f"{test_rule}\n\n{question.criterion}"
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.
     cases = question.test_cases
@@ -1121,7 +1142,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ),
         "question_structure": structure,
         "alternative_rules": alternatives,
-        **({"effective_criterion": rubric_display(math_plan.part_rubric, question.stem, feedback_language,
+        **programming_fields,
+        **({"effective_criterion": programming_criterion if programming_criterion is not None else rubric_display(
+                                                 math_plan.part_rubric, question.stem, feedback_language,
                                                  display_plan=display_plan, expected_truth=math_plan.expected_truth_by_part,
                                                  semantic_policy_checks=(presentation.get("rubric_draft") or {}).get("semantic_policy_checks", ())),
             "rubric_version": math_plan.part_rubric.rubric_version}
@@ -5209,6 +5232,11 @@ def _question_review_blockers(questions) -> list[str]:
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
+                or (is_programming_question_type(question.type) and any(
+                    issue.get("status") == "open" and issue.get("severity") == "blocking"
+                    and (issue.get("details") or {}).get("reason") in {
+                        "programming_test_award_unset", "required_programming_tests_missing",
+                    } for issue in problem["preparation_issues"]))
                 or (uses_math_grading(question.type) and saved_draft(problem_from_question(question)) is None)
                 or any(question_issue_blocks_progress(issue, presentation)
                        for issue in review_issues if issue.get("code") != "manual_completion_required")):
@@ -5714,7 +5742,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
     now = time.time()
     substantive = bool({
         "number", "type", "stem", "criterion", "max_score", "reference_answer",
-        "solution_code", "test_cases", "alternative_rule_edits",
+        "solution_code", "test_cases", "alternative_rule_edits", "programming_scoring",
     }.intersection(patch))
     with session_scope() as session:
         workflow_row = workflow_repository.lock_workflow_revision(
@@ -5765,15 +5793,41 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation, patch.get("type", question.type))
         candidate_type = normalize_question_type(patch.get("type", question.type))
+        from backend.services.programming_rubric import (
+            compile_programming_scoring, has_saved_scoring_contract, test_award_review_issue,
+        )
+        from backend.services.rubric_drafts import ProgrammingScoringPolicy
+
+        programming = is_programming_question_type(candidate_type)
+        prior_programming_draft = saved_draft(problem_from_question(question)) if programming else None
         programming_draft = None
-        if (is_programming_question_type(candidate_type)
+        programming_policy = None
+        if "programming_scoring" in patch:
+            if not programming:
+                raise ValidationError("Test allocation is only available for programming questions.",
+                                      code="invalid_programming_test_award")
+            try:
+                programming_policy = ProgrammingScoringPolicy.model_validate(patch["programming_scoring"])
+            except ValueError as exc:
+                raise ValidationError("Select the test points and provide the separate input rules.",
+                                      code="invalid_programming_test_award") from exc
+        elif programming and (
+            ("criterion" in patch and (patch["criterion"] != question.criterion or prior_programming_draft is None))
+            or patch.get("max_score", question.max_score) != question.max_score
+        ):
+            raise ValidationError("Save the test allocation with the code rubric.", code="programming_test_award_required")
+        if (programming and programming_policy is None
                 and candidate_type == normalize_question_type(question.type)
                 and all(patch.get(key, getattr(question, key)) == getattr(question, key)
                         for key in ("stem", "criterion", "max_score"))
                 and not patch.get("alternative_rule_edits")):
-            # Confirmation and reference-answer edits do not change the frozen
-            # test/code budgets. Verify the old binding before retaining it.
-            programming_draft = saved_draft(problem_from_question(question))
+            # Confirmations and reference-answer edits retain only an existing
+            # verified rule. They do not infer a missing test allocation.
+            programming_draft = prior_programming_draft
+        if programming and programming_draft is None and has_saved_scoring_contract(presentation):
+            presentation["programming_scoring_required"] = True
+        elif not programming:
+            presentation.pop("programming_scoring_required", None)
         if candidate_type and not uses_math_grading(candidate_type) and programming_draft is None:
             for key in ("rubric_draft", "alternative_rules", "rubric_schema_version"):
                 presentation.pop(key, None)
@@ -5945,11 +5999,31 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                                   previous=previous_problem, allow_pending=changed_rule)
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+        if programming_policy is not None:
+            try:
+                programming_draft = compile_programming_scoring(
+                    problem_from_question(question), programming_policy,
+                    previous=prior_programming_draft.plan if prior_programming_draft else None,
+                )
+            except ValueError as exc:
+                raise ValidationError(
+                    "Enter the test points separately and write a code rubric for the remaining points.",
+                    code="invalid_programming_test_award",
+                ) from exc
         if programming_draft is not None:
             presentation["rubric_draft"] = retarget_draft(
                 programming_draft, problem_from_question(question),
             ).model_dump(mode="json")
             question.source = {**source, "presentation": presentation}
+        if programming_policy is not None:
+            if saved_draft(problem_from_question(question)) is None:
+                raise ValidationError("The test allocation could not be bound to this rubric.",
+                                      code="invalid_programming_test_award")
+            if presentation.pop("programming_scoring_required", None):
+                question.source = {**source, "presentation": presentation}
+        if (patch.get("review_status") == "confirmed" and programming
+                and test_award_review_issue(question, programming_draft)):
+            raise ValidationError("Fix the failed recognition or required material before confirming.", code="question_review_blocked")
         if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
             candidate = problem_from_question(question)
             prior = saved_draft(prior_problem, allow_incomplete_alternative=True)

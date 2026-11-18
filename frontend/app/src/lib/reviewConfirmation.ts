@@ -77,6 +77,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.details?.rubric_review_draft) return locale === "zh-CN"
     ? "已保留已识别评分项，请核对分值和适用条件后保存。"
     : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.";
+  if (issue.details?.reason === "programming_test_award_unset") return locale === "zh-CN"
+    ? "请在评分标准中保存测试配分。填 0 表示测试不单独计分。"
+    : "Save the test points in the rubric. Enter 0 for no separate test award.";
   if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
     ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
   if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"

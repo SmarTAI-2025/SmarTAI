@@ -208,7 +208,8 @@ async def test_conflict_does_not_stop_later_questions_and_survives_manual_handof
         task_facade.update_problem(**args, patch={"type": "编程题"})
         task_facade.update_problem(**args, patch={"stem": "输入一个整数，输出它的平方。"})
         task_facade.update_problem(**args, patch={"reference_answer": "读取输入并输出其平方。"})
-        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。"})
+        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。",
+            "programming_scoring": {"test_points": 0, "input_rules": ""}})
         result = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
         assert result["problem"]["review_status"] == "confirmed"
         from backend.services.math_grading_context import problem_from_question
@@ -287,7 +288,8 @@ def test_changing_grading_engine_retires_only_math_review(monkeypatch, kind):
         expected_version=before.version, source={"presentation": presentation})
     monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *_: pytest.fail("A programming edit must not compile a math rubric"))
     updated = task_facade.update_problem(**args, patch={"type": kind, "stem": "输入一个整数，输出其平方。",
-        "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。"})
+        "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。",
+        "programming_scoring": {"test_points": 0, "input_rules": ""}})
     assert not any(i["status"] == "open" and i["severity"] == "blocking" for i in updated["problem"]["preparation_issues"])
     confirmed = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
     assert confirmed["problem"]["review_status"] == "confirmed"
@@ -307,7 +309,8 @@ def test_new_programming_checks_survive_retiring_a_math_error():
         expected_version=before.version, source={"presentation": presentation})
     with pytest.raises(ValidationError) as failure:
         task_facade.update_problem(**args, patch={"type": "编程题", "stem": "输入一个整数，输出其平方。",
-            "criterion": "程序输出正确得满分。", "test_cases": [
+            "criterion": "程序输出正确得满分。", "programming_scoring": {"test_points": 0, "input_rules": ""},
+            "test_cases": [
                 {"input": "2", "expected_output": "4"}, {"input": "2", "expected_output": "5"}]})
     assert failure.value.code == "invalid_programming_test_cases"
     after = assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
