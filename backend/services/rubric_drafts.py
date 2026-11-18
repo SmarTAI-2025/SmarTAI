@@ -30,7 +30,10 @@ class WrittenRubricDefinition(BaseModel):
     # Parse it after accepting the rubric so malformed presentation cannot fail
     # otherwise valid reference/rubric generation.
     display_plan: object | None = Field(default=None, exclude_if=lambda v: v is None)
-    expected_truth_by_part: dict[str, StrictBool] = Field(default_factory=dict, strict=True, exclude_if=lambda v: not v)
+    expected_truth_by_part: dict[str, StrictBool] = Field(
+        default_factory=dict, strict=True, exclude_if=lambda v: not v,
+        description="Only for decision-only true/false questions. Omit for all other questions.",
+    )
 
 
 class _WrittenProposal(RootModel[dict]):
@@ -129,6 +132,16 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
         # These fields belong to the one question, never to the definition
         # wrapper. Accept misplaced metadata only if no values compete.
         definition = dict(definition)
+        if "expected_truth_by_part" in definition:
+            from backend.models import is_programming_question_type
+            from backend.services.true_false_answers import is_decision_only
+
+            if is_programming_question_type(source.get("type")) or not is_decision_only(
+                source.get("stem") or "", source.get("criterion") or "",
+            ):
+                # A truth key has no scoring authority for this source.
+                # Discard it before type validation, including malformed keys.
+                definition.pop("expected_truth_by_part")
         for key in PartRubric.model_fields.keys() & definition.keys():
             value = definition.pop(key)
             if key in proposal and proposal[key] != value:
@@ -368,13 +381,16 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
             if len(mapped) == len(truth_key):
                 truth_key = mapped
         decision_only = is_decision_only(context["stem"], rules.teacher_rubric or "")
-        if truth_key and (not decision_only or set(truth_key) != {part.id for part in rules.parts}
-                          or not all(len(part.steps) == 1 for part in rules.parts)):
-            raise RubricAllocationError(
-                f"Return one decision step per part and one boolean per part ID. Required IDs: "
-                f"{[p.id for p in rules.parts]}; received {list(truth_key)}."
-            )
         if truth_key:
+            if not decision_only:
+                raise RubricAllocationError("Omit expected_truth_by_part unless the question asks only for true/false judgments.")
+            if set(truth_key) != {part.id for part in rules.parts}:
+                raise RubricAllocationError(
+                    f"Return one boolean per part ID in expected_truth_by_part. Required IDs: "
+                    f"{[p.id for p in rules.parts]}; received {list(truth_key)}."
+                )
+            if any(len(part.steps) != 1 for part in rules.parts):
+                raise RubricAllocationError("A decision-only truth key requires exactly one funded judgment step per part.")
             explicit_key = reference_decisions(problem.get("reference_answer") or "", [p.label for p in rules.parts]) if all(p.label for p in rules.parts) else None
             if explicit_key and any(explicit_key[p.label] != truth_key[p.id] for p in rules.parts):
                 raise RubricAllocationError("The truth key contradicts the labelled verdicts in the adopted reference answer.")
