@@ -215,7 +215,7 @@ export function QuestionPreparationOverviewPage() {
 }
 
 function questionQueueReasons(problem: ProblemInfo, locale: string, severity: "blocking" | "advisory") {
-  return questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale), true)
+  return questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale), { splitMissingFields: true })
     .filter(note => note.severity === severity).map(note => note.label).join(locale === "zh-CN" ? "；" : " · ");
 }
 

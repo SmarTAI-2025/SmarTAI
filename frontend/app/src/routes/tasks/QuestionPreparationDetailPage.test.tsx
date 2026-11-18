@@ -352,6 +352,25 @@ it("edits type beside number through the existing versioned field save, includin
 });
 
 describe("QuestionPreparationDetailPage navigation", () => {
+  it.each([
+    ["zh-CN", "替代方法规则由 AI 补充，请按需修改原标准。"],
+    ["en-US", "AI added scoring rules for alternative correct methods. Review them and make any needed changes."],
+  ])("shows which scoring rule AI added on the question detail page (%s)", async (locale, message) => {
+    testState.locale = locale;
+    taskData.problem_data.Q2.preparation_issues = [{
+      issue_id: "alternative-scoring", q_id: "Q2", code: "math_rubric_advisory",
+      field: "rubric", severity: "warning", status: "open",
+      details: { reason: "teacher_rule_interpretation", message },
+    }];
+
+    await renderPage("/tasks/task-1/questions/Q2/content");
+
+    const card = within(document.querySelector<HTMLElement>('[data-question-id="Q2"]')!);
+    expect(card.getByText(message)).toBeVisible();
+    expect(card.queryByText(/请核对教师评分规则的解读|Check how the teacher’s scoring rule was interpreted/)).not.toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
   it("shows exact missing fields once and keeps an unknown type unselected", async () => {
     taskData.problem_data.Q2.type = "";
     taskData.problem_data.Q2.criterion = "";

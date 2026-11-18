@@ -206,7 +206,8 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
 }
 
 /** Detail copy derives missing fields from the current row, not stale failure markers. */
-export function questionReviewNotes(problem: ProblemInfo, locale: string, fallbackLabel: (code: string) => string, splitMissingFields = false) {
+export function questionReviewNotes(problem: ProblemInfo, locale: string, fallbackLabel: (code: string) => string,
+  { splitMissingFields = false, view = "overview" }: { splitMissingFields?: boolean; view?: "overview" | "detail" } = {}) {
   const issues = questionReviewIssues(problem);
   const missing = [
     [!problem.number?.trim(), "题号", "question number"],
@@ -224,8 +225,15 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
       || (issue.field === "answer" && answerMissing))))
     .filter(issue => !((names.length || answerMissing) && (issue.code === "manual_completion_required"
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
-    .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
-      severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
+    .map(issue => {
+      const rubricMessage = view === "detail" && issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation"
+        ? issue.details.message : undefined;
+      return {
+        label: typeof rubricMessage === "string" && rubricMessage.trim()
+          ? rubricMessage : recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
+        severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const,
+      };
+    });
   if (splitMissingFields) {
     const labels = locale === "zh-CN" ? {
       "题号": "请补齐题号。", "题型": "请选择题型。",
@@ -254,7 +262,7 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
 export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
   if (!problems.length) return [{ label: locale === "zh-CN" ? "请先建立题目行并填写内容" : "Create question rows and enter their content first", href: `/tasks/${taskId}/questions#question-count` }];
   return problems.flatMap(problem => questionReviewNotes(problem, locale,
-    code => questionIssueCodeLabel(code, locale), true)
+    code => questionIssueCodeLabel(code, locale), { splitMissingFields: true })
     .filter(note => note.severity === "blocking").map(note => ({
       label: `${locale === "zh-CN" ? `第 ${problem.number || problem.q_id} 题` : `Question ${problem.number || problem.q_id}`} · ${note.label}`,
       href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,

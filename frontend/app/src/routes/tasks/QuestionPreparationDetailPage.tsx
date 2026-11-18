@@ -451,7 +451,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   onConfirm: (problem: ProblemInfo) => void;
 }) {
   const programming = isProgrammingProblem(problem);
-  const risks = questionReviewNotes(problem, locale, code => riskShortLabel(code, locale));
+  const risks = questionReviewNotes(problem, locale, code => riskShortLabel(code, locale), { view: "detail" });
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
       <header className="flex flex-col gap-3 border-b px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
