@@ -60,6 +60,7 @@ from backend.db.models import (
     UserRecord,
     TagRecord,
 )
+from backend.db.execution_admission import WORKLOAD_TYPES
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
@@ -147,7 +148,7 @@ SYSTEM_COURSE_NAME = "SmarTAI Workspace"
 _SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 _OPERATION_PUBLICATION_TTL_SECONDS = 60
-_OPERATION_RUNTIME_TTL_SECONDS = 2 * 60 * 60
+_MATERIAL_PLAN_REVIEW_TTL_SECONDS = 2 * 60 * 60
 logger = logging.getLogger(__name__)
 
 _QUESTION_PREPARATION_RETRY_FROZEN_FIELDS = (
@@ -1293,7 +1294,7 @@ def _operation_is_retryable(operation, *, now: float | None = None) -> bool:
             return False
         return True
     if (
-        operation.operation_type == "question_preparation"
+        operation.operation_type in WORKLOAD_TYPES
         and operation.status in {"pending", "running"}
     ):
         # Published work is reclaimed by the durable worker through its lease,
@@ -1496,7 +1497,7 @@ def activate_workflow_operation_atomic(
     replacement_file_ids: tuple[str, ...] = (),
     replacement_keep_file_ids: tuple[str, ...] = (),
 ) -> int:
-    """Publish a fully persisted operation to the durable worker queue."""
+    """Publish a persisted operation. The first worker claim sets its deadline."""
     validated_payload = workflow_repository._validate_json_object(
         operation_payload,
         field="payload",
@@ -1523,7 +1524,7 @@ def activate_workflow_operation_atomic(
             changes={
                 "status": "pending", "payload": validated_payload,
                 "error_code": None,
-                "expires_at": now + _OPERATION_RUNTIME_TTL_SECONDS,
+                "expires_at": None,
             },
         )
         claimed = session.execute(
@@ -1987,7 +1988,7 @@ def publish_checkpointed_operation_atomic(
             operation.terminal_summary = None
             operation.error_code = None
             operation.completed_at = None
-            operation.expires_at = now + _OPERATION_RUNTIME_TTL_SECONDS
+            operation.expires_at = None
             operation.lease_owner = None
             operation.lease_token = None
             operation.lease_expires_at = None
@@ -4139,7 +4140,11 @@ def apply_question_patches_atomic(
             expected_statuses=(required_operation_status,),
             expected_lease_token=expected_lease_token,
         )
-        if operation.expires_at is not None and operation.expires_at <= now:
+        if (
+            expected_lease_token is None
+            and operation.expires_at is not None
+            and operation.expires_at <= now
+        ):
             raise InvalidTransition("The workflow job expired.", code="stale_revision")
 
         workflow = session.scalar(
@@ -4338,7 +4343,11 @@ def complete_planning_operation_atomic(
             expected_statuses=("running",),
             expected_lease_token=expected_lease_token,
         )
-        if operation.expires_at is not None and operation.expires_at <= now:
+        if (
+            expected_lease_token is None
+            and operation.expires_at is not None
+            and operation.expires_at <= now
+        ):
             _raise_stale_revision()
         workflow = session.scalar(
             select(workflow_repository.AssignmentWorkflowRecord)
@@ -4365,6 +4374,8 @@ def complete_planning_operation_atomic(
             workflow.presentation_status = "problems_ready"
         workflow.updated_at = now
         operation.status = final_status
+        if final_status == "ready":
+            operation.expires_at = now + _MATERIAL_PLAN_REVIEW_TTL_SECONDS
         operation.payload = validated_payload
         operation.progress = validated_progress
         operation.error_code = None

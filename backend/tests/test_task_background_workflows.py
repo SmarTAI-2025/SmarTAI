@@ -853,7 +853,8 @@ def test_retry_attempt_rejects_every_stale_operation_update():
     assert completed.progress == {"worker": "new", "completed_steps": 1}
 
 
-def test_expired_running_operation_retry_advances_attempt():
+@pytest.mark.parametrize("status", ["pending", "running"])
+def test_legacy_runtime_expiry_cannot_restart_a_published_operation(status):
     owner_id, task_id = _seed_task()
     input_hash = uuid.uuid4().hex
     expired, created = workflow_repository.create_operation(
@@ -864,7 +865,7 @@ def test_expired_running_operation_retry_advances_attempt():
     assert created is True
     workflow_repository.update_operation(
         expired.id, owner_id=owner_id, expected_attempt=expired.attempt,
-        status="running", expires_at=time.time() - 1,
+        status=status, expires_at=time.time() - 1,
     )
     workflow_repository.update_workflow(
         task_id, owner_id=owner_id,
@@ -877,23 +878,65 @@ def test_expired_running_operation_retry_advances_attempt():
         operation_type="submission_recognition",
         input_hash=input_hash,
     )
-    assert active is None
+    assert active is not None and active.id == expired.id
 
     retried, retry_created = workflow_repository.create_operation(
         assignment_id=task_id, owner_id=owner_id,
         operation_type="submission_recognition", input_hash=input_hash,
         expires_at=time.time() + 60,
     )
-    assert retry_created is True
+    assert retry_created is False
     assert retried.id == expired.id
-    assert retried.attempt == expired.attempt + 1
-    assert retried.status == "pending"
-    with pytest.raises(VersionConflict) as stale:
-        workflow_repository.update_operation(
-            expired.id, owner_id=owner_id, expected_attempt=expired.attempt,
-            status="error", error_code="old_worker_failed",
+    assert retried.attempt == expired.attempt
+    assert retried.status == status
+
+
+@pytest.mark.parametrize("operation_type", ["material_import", "ai_completion"])
+def test_leased_auxiliary_completion_survives_legacy_queue_expiry(operation_type):
+    owner_id, task_id = _seed_task(with_question=True)
+    past_expiry = time.time() - 1
+    job, _ = workflow_repository.create_operation(
+        assignment_id=task_id, owner_id=owner_id,
+        operation_type=operation_type, input_hash=uuid.uuid4().hex,
+        expires_at=past_expiry,
+    )
+    workflow_repository.update_workflow(
+        task_id, owner_id=owner_id, bump_revision=False,
+        active_operation=operation_type, active_job_id=job.id,
+    )
+    lease = workflow_repository.claim_operation(
+        job.id, owner_id=owner_id, worker_id="test-worker", lease_seconds=60,
+    )
+    assert lease.checkpoint["execution_deadline"]["started_at"] > past_expiry
+
+    if operation_type == "material_import":
+        task_facade.complete_planning_operation_atomic(
+            task_id=task_id, owner_id=owner_id, expected_workflow_revision=0,
+            operation_id=job.id, expected_operation_attempt=job.attempt,
+            expected_lease_token=lease.lease_token, payload={}, progress={},
         )
-    assert stale.value.code == "stale_operation_attempt"
+        ready = workflow_repository.get_operation(job.id, owner_id=owner_id)
+        assert ready.status == "ready"
+        assert ready.expires_at == ready.completed_at + 2 * 60 * 60
+        workflow_repository.update_operation(
+            job.id, owner_id=owner_id, expected_attempt=job.attempt, expires_at=past_expiry,
+        )
+        with pytest.raises(InvalidTransition, match="expired"):
+            task_facade.apply_question_patches_atomic(
+                task_id=task_id, owner_id=owner_id, expected_workflow_revision=0,
+                operation_id=job.id, expected_operation_attempt=job.attempt,
+                required_operation_status="ready", final_operation_status="applied",
+                patches=[], operation_payload={},
+            )
+        return
+
+    task_facade.apply_question_patches_atomic(
+        task_id=task_id, owner_id=owner_id, expected_workflow_revision=0,
+        operation_id=job.id, expected_operation_attempt=job.attempt,
+        expected_lease_token=lease.lease_token, required_operation_status="running",
+        final_operation_status="done", patches=[], operation_payload={},
+    )
+    assert workflow_repository.get_operation(job.id, owner_id=owner_id).status == "done"
 
 
 def test_exact_facade_retry_consumes_only_its_prior_claim_revision():
@@ -908,6 +951,7 @@ def test_exact_facade_retry_consumes_only_its_prior_claim_revision():
     first_operation = workflow_repository.get_operation(
         first["job_id"], owner_id=owner_id
     )
+    assert first_operation.expires_at is None
     assert first["workflow_revision"] == 1
     assert task_facade._fail_operation(
         task_id, owner_id, first_operation.id, first_operation.attempt,
