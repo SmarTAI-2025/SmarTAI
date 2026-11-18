@@ -2533,13 +2533,21 @@ async def generate_missing_question_materials(
     expected_targets = {row["target_id"]: row for row in target_rows}
 
     def retain_review(item):
-        if review_feedback is None or not isinstance(item, dict):
+        if review_feedback is None:
             return
-        target = expected_targets.get(item.get("target_id"))
+        if isinstance(item, AICompletionCandidateOutput):
+            # This proposal is deliberately excluded from candidate serialization.
+            target_id = item.target_id
+            proposal = item.rubric_definition.model_dump(mode="json") if item.rubric_definition else None
+        elif isinstance(item, dict):
+            target_id, proposal = item.get("target_id"), item.get("rubric_definition")
+        else:
+            return
+        target = expected_targets.get(target_id)
         if not target or target["target"] != "criterion":
             return
         from backend.services.rubric_review import review_extraction
-        extraction = review_extraction(item.get("rubric_definition"),
+        extraction = review_extraction(proposal,
             {**problems_data[target["q_id"]], "q_id": target["q_id"]})
         if extraction:
             review_feedback[target["target_id"]] = extraction
@@ -2833,7 +2841,7 @@ async def generate_missing_question_materials(
                 if not allow_partial:
                     raise
                 parsed.candidates.remove(candidate)
-                retain_review(candidate.model_dump(mode="json"))
+                retain_review(candidate)
                 if repair_feedback is not None:
                     repair_feedback[candidate.target_id] = "The teacher policy could not be verified; review its scope."
         if audited_pending:
@@ -2861,7 +2869,7 @@ async def generate_missing_question_materials(
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
-            retain_review(candidate.model_dump(mode="json"))
+            retain_review(candidate)
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue
@@ -2949,7 +2957,7 @@ async def generate_missing_question_materials(
                     candidate.rubric_draft = None
                 elif allow_partial:
                     parsed.candidates.remove(candidate)
-                    retain_review(candidate.model_dump(mode="json"))
+                    retain_review(candidate)
                     if repair_feedback is not None:
                         repair_feedback[candidate.target_id] = str(exc)
                 else:

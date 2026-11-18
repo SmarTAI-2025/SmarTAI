@@ -43,8 +43,8 @@ def initial(rules=None, *, reference=True):
     return json.dumps({"candidates": candidates})
 
 
-async def generate(provider, *, reference=True, existing_reference="", **kwargs):
-    row = dict(number="1", type="推理题", stem=STEM, max_score=10, reference_answer=existing_reference)
+async def generate(provider, *, reference=True, existing_reference="", stem=STEM, question_type="推理题", **kwargs):
+    row = dict(number="1", type=question_type, stem=stem, max_score=10, reference_answer=existing_reference)
     targets = [dict(q_id="q1", target=key, target_id=f"q1:{key}")
                for key in (["criterion", "reference_answer"] if reference else ["criterion"])]
     return await generate_missing_question_materials(_rows([row]), targets, 1, provider,
@@ -86,12 +86,39 @@ async def test_one_generation_one_audit_freezes_concrete_steps(reference, existi
 @pytest.mark.asyncio
 async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling():
     issue = "square: the reference uses an invalid exponent identity"
-    feedback = {}
+    feedback, review = {}, {}
     provider = Provider([initial(), audit("inconsistent", issue)])
-    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
     assert [c.target for c in candidates] == ["reference_answer"]
     assert issue in feedback["q1:criterion"]
+    extraction = review["q1:criterion"]
+    assert extraction["status"] == "needs_review"
+    assert any(field["path"] == "part_rubric.parts[0].steps[1].criterion" and field["value"] == POINTS[1][2]
+               for field in extraction["fields"])
     assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_explicit_show_that_still_audits_a_question_classified_as_concept():
+    stem = r"For $x$ an element in $G$ show that $x$ and $x^{-1}$ have the same order."
+    proposal = {
+        "part_rubric": {
+            "total_pts": 10, "parts": [{
+                "id": "p1", "total_pts": 10, "alternative": {"deduct_per_error": 2},
+                "steps": [
+                    {"id": "finite", "criterion": "Show finite orders coincide.", "total_pts": 5},
+                    {"id": "infinite", "criterion": "Show infinite orders coincide.", "total_pts": 5},
+                ],
+            }],
+        },
+    }
+    response = json.dumps({"candidates": [{"target_id": "q1:criterion", "rubric_definition": proposal}]})
+    provider = Provider([response, audit("inconsistent", "Finite case needs both implications.",
+                                        bundled_steps=["finite"])])
+    rejected = await generate(provider, reference=False, stem=stem, question_type="概念题", allow_partial=True)
+    assert rejected == [] and len(provider.calls) == 2
+    assert not proof.use_proof_steps({"stem": "What is the order of an element?", "type": "概念题"})
+    assert not proof.use_proof_steps({"stem": stem, "type": "概念题", "criterion": "Use the teacher's rubric."})
 
 
 @pytest.mark.asyncio
