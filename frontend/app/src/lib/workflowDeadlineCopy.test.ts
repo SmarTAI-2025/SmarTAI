@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { recognitionEventText } from "@/components/tasks/RecognitionActivity";
 import { backgroundErrorTitle, classifyRecoverableError } from "./taskActionGuards";
+import { workflowTimeoutNote } from "./workflowTimeouts";
 
 const workflows = [
   ["question_preparation", 41],
@@ -37,4 +38,10 @@ describe.each(["zh-CN", "en-US"] as const)("workflow deadline messages (%s)", lo
       expect(text).not.toMatch(/正在等待已发出请求完成|finishing sent requests|time_limit_reached/);
     }
   });
+});
+
+it("formats a one-minute configured limit and omits unknown values", () => {
+  const code = "knowledge_wall_time_limit_reached";
+  expect(workflowTimeoutNote(code, "en-US", { ...limits, knowledge_ingestion: 1 })).toBe(" (current limit is 1 minute)");
+  expect(workflowTimeoutNote(code, "en-US", undefined)).toBe("");
 });

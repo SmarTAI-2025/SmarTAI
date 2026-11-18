@@ -18,5 +18,7 @@ export function workflowTimeoutNote(
   const minutes = kind && limits?.[kind];
   if (typeof minutes !== "number" || !Number.isInteger(minutes) || minutes <= 0) return "";
   const formatted = minutes.toLocaleString(locale);
-  return locale === "zh-CN" ? `（当前配置为 ${formatted} 分钟）` : ` (current limit is ${formatted} minutes)`;
+  return locale === "zh-CN"
+    ? `（当前配置为 ${formatted} 分钟）`
+    : ` (current limit is ${formatted} ${minutes === 1 ? "minute" : "minutes"})`;
 }
