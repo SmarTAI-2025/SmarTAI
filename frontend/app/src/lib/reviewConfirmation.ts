@@ -1,6 +1,6 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
-import { formatSubmissionFlag, hasQuestionType, questionIssueCodeLabel } from "./reviewLabels";
+import { formatSubmissionFlag, hasQuestionType, incompleteSubmissionLabel, questionIssueCodeLabel } from "./reviewLabels";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -331,7 +331,8 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
   return [...sourceIssues, ...identities, ...answers];
 }
 
-export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false): Array<{ label: string; severity: "blocking" | "advisory" }> {
+export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false,
+  presentation: "queue" | "detail" = "detail"): Array<{ label: string; severity: "blocking" | "advisory" }> {
   const saved = answer?.review_status === "confirmed" || answer?.review_status === "edited";
   if (!answer || (saved && !answerReviewNextBlocked(answer))) return [];
   const confidence = confidenceValue(answer.recognition_confidence);
@@ -347,11 +348,15 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete"]);
   const specificFailure = flags.some(flag => flag.startsWith("recognition_invalid_fields:")
     || ["no_matching_answer", "parse_failed", "recognition_matching_review", "answer_assignment_conflict", "recognition_paused", "recognition_incomplete"].includes(flag));
-  const visibleFlags = flags.filter(flag => !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
+  const visibleFlags = flags.filter(flag => !(flag === "recognition_uncertain" && flags.includes("recognition_boundary_uncertain"))
+    && !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
     && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
     && !(flag === "parse_failed" && flags.some(item => item.startsWith("recognition_invalid_fields:"))));
   return [
     ...(!saved && confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
-    ...[...new Set(visibleFlags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
+    ...[...new Set(visibleFlags)].map(flag => ({
+      label: flag === "recognition_incomplete" ? incompleteSubmissionLabel(answer.flag ?? [], locale, presentation) : formatSubmissionFlag(flag, locale),
+      severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const,
+    })),
   ].filter(note => !saved || note.severity === "blocking");
 }

@@ -201,9 +201,9 @@ def matches_source_opening(candidate: tuple[str, str | None], content: str, quot
 
 
 def answer_boundaries_on_read_pages(pages, problems, coverage):
-    """Return closed questions and (source prefix, heading subpart) pairs needing evidence."""
+    """Find closed answers, pending openings, and answers with only a possible page gap."""
     if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
-        return set(), {}
+        return set(), {}, set()
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
@@ -212,9 +212,11 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
     read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
-    closed, openings = set(), {}
+    closed, openings, boundary_reviews = set(), {}, set()
+    failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
-        if not unit.complete and unit.closure != "unverified_opening":
+        touches_failed_page = unit.adjacent_gap_page in failed_pages
+        if not (unit.complete or unit.closure == "unverified_opening" or touches_failed_page):
             continue
         q_id = resolve_question_match(unit.number, unit.text, problems)
         if not q_id:
@@ -236,13 +238,17 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
         ):
             part = inline
             title = title[inline.end():].lstrip()
-        if re.fullmatch(r"\([^()]*\)|（[^（）]*）", title):
+        annotation = re.match(r"\([^()]*\)|（[^（）]*）", title)
+        if annotation and annotation.end() == len(title):
             continue
         opening_text = title + unit.text[heading.end("title"):]
         prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
-            openings[q_id] = (prefix, part.group("label") if part else None)
-    return closed, openings
+            if unit.closure == "unverified_opening":
+                openings[q_id] = (prefix, part.group("label") if part else None)
+            if touches_failed_page and not annotation:
+                boundary_reviews.add(q_id)
+    return closed, openings, boundary_reviews
 
 
 def merge_source_answer_units(results, source, problems):

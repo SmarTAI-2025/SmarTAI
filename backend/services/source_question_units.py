@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 # Bare numbered lines are often solution steps. These are deliberately not
@@ -47,6 +47,7 @@ class SourceQuestionUnit:
     pages: tuple[int, ...]
     complete: bool
     closure: str
+    adjacent_gap_page: int | None = None
 
 
 def source_question_units(pages: dict[int, str], *, source_complete=False,
@@ -110,17 +111,21 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
                 # opening, regardless of how many other labels preceded it.
                 closure = "unverified_opening"
             body = text[match.start():end].strip()
+            unit_pages = tuple(page for page, start, stop in offsets if stop > match.start() and start < end)
+            adjacent_gap_page = None
+            if check_opening and closure == "open" and following is None and group[0] == 1:
+                adjacent_gap_page = group[-1] + 1
+            elif closure == "unverified_opening" and index == 0 and unit_pages[0] == group[0]:
+                adjacent_gap_page = group[0] - 1
             records.append(SourceQuestionUnit(number, body,
-                tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
-                closure in {"next_heading", "source_end"}, closure))
+                unit_pages, closure in {"next_heading", "source_end"}, closure, adjacent_gap_page))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:
         return records
     counts = Counter(number_key(unit.number) for unit in records)
-    return [SourceQuestionUnit(unit.number, unit.text, unit.pages,
-        unit.complete and counts[number_key(unit.number)] == 1,
-        unit.closure if counts[number_key(unit.number)] == 1 else "repeated_heading") for unit in records]
+    return [unit if counts[number_key(unit.number)] == 1 else
+            replace(unit, complete=False, closure="repeated_heading", adjacent_gap_page=None) for unit in records]
 
 
 @dataclass(frozen=True)

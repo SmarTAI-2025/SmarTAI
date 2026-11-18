@@ -38,6 +38,8 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
     answer_assignment_conflict: ["同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the assignment"],
     recognition_matching_review: ["请对照原件核对作答归属与原文，修正后保存", "Check the question assignment and transcription against the original, then save corrections"],
     recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
+    recognition_uncertain: ["识别结果需对照原件核对", "Check transcription against the original"],
+    recognition_boundary_uncertain: ["作答可能未识别完整，请对照原文件核对", "This answer may be incomplete. Check it against the original."],
     external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
     authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
     ocr_only_structure_requires_teacher_review: ["题号匹配需教师核对", "Question matching needs teacher review"],
@@ -45,13 +47,26 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
     recognition_manual_pending: ["等待人工补齐", "Awaiting manual completion"],
     recognition_metadata_review: ["识别元信息待核对确认", "Confirm the recognition metadata"],
     recognition_paused: ["已暂停，尚未完成识别", "Paused before recognition completed"],
-    recognition_incomplete: ["尚未完成识别", "Recognition incomplete"],
+    recognition_incomplete: ["作答识别不完整，请对照原文件补全", "Answer transcription is incomplete. Complete it using the original."],
     manual_blank_confirmed: ["教师已确认未作答", "Teacher confirmed no answer"],
     parse_failed: ["作答解析失败，请修正", "Answer parsing failed; correct"],
     no_matching_answer: ["未识别到对应作答，请对照原件修正", "No matching answer recognized; correct against the source"],
   };
   const label = labels[flag];
   return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
+}
+
+export function incompleteSubmissionLabel(flags: string[], locale: string, presentation: "queue" | "detail"): string {
+  const pages = [...new Set(flags.flatMap(flag =>
+    flag.match(/^recognition_failed_pages:(\d+(?:,\d+)*)$/)?.[1].split(",") ?? []))];
+  const zh = locale === "zh-CN";
+  if (!pages.length) return presentation === "detail" ? formatSubmissionFlag("recognition_incomplete", locale)
+    : zh ? "作答识别不完整" : "Incomplete answer transcription";
+  const failure = zh ? `第 ${pages.join("、")} 页识别失败`
+    : `Recognition failed on ${pages.length === 1 ? "page" : "pages"} ${pages.join(", ")}`;
+  if (presentation === "queue") return failure;
+  return zh ? `${failure}，作答内容缺失，请对照原文件补全。`
+    : `${failure}. Answer content is missing. Complete it using the original.`;
 }
 
 export function questionIssueCodeLabel(code: string, locale: string) {

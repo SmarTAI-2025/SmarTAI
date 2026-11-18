@@ -120,6 +120,7 @@ from backend.services.question_structure import (
     validate_rubric_points,
 )
 from backend.services.submission_source_pipeline import (
+    BOUNDARY_REVIEW_FLAG,
     PreparedSubmissionSource,
     attach_submission_recognition,
     failure_phase_for_code,
@@ -3513,7 +3514,8 @@ async def run_task_submission_parsing(
                     saved = retry_results.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
                     if saved is not None and saved.student is not None:
                         good_ids = {answer["q_id"] for answer in saved.student.get("stu_ans", [])
-                                    if "content" in answer and not _answer_recognition_failures(answer.get("flag"))}
+                                    if "content" in answer and not _answer_recognition_failures(answer.get("flag"))
+                                    and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}
                         targets = [q.q_id for q in questions if q.q_id not in good_ids]
                         # Global missing-page evidence cannot prove which answer
                         # is complete when there are no per-question boundaries.
@@ -3778,12 +3780,13 @@ async def run_task_submission_parsing(
                 requested = coverage.get("requested_pages") or []
                 await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
                     complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
-                closed, openings = answer_boundaries_on_read_pages(
+                closed, openings, boundary_reviews = answer_boundaries_on_read_pages(
                     page_texts.get(source.source_id, {}), problem_data, coverage)
                 invalid = boundary_invalidations.get(source.source_id, set())
-                if closed or openings:
+                if closed or openings or boundary_reviews:
                     source = replace(source, closed_question_ids=frozenset(closed - invalid),
-                        opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid})
+                        opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid},
+                        boundary_review_ids=frozenset(boundary_reviews - invalid))
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their
@@ -3807,7 +3810,8 @@ async def run_task_submission_parsing(
                 previous = partials.get(source.source_id)
                 verified = (set(dispatched) | {answer["q_id"] for answer in
                     (previous.student.get("stu_ans", []) if previous else [])
-                    if not _answer_recognition_failures(answer.get("flag"))}) - invalid
+                    if not _answer_recognition_failures(answer.get("flag"))
+                    and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}) - invalid
                 result = attach_submission_recognition([result], [source], verified_question_ids=verified)[0]
                 # Count a source once after all of its units and repairs finish,
                 # including failed outcomes; a saved page alone is not a file.
@@ -5102,7 +5106,8 @@ def grading_readiness(
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
-                                              if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
+                                              if BOUNDARY_REVIEW_FLAG in (answer.flag or [])
+                                              or confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
                     if _answer_recognition_failures(answer.flag) and not (
                         answer_reviews.get(answer.id) == "confirmed"

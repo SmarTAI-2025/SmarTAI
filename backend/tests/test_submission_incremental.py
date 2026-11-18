@@ -382,8 +382,8 @@ async def test_response_arriving_after_stop_cannot_write_a_source_structure(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("blank_heading", [False, True])
-async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_handoff(monkeypatch, blank_heading):
+@pytest.mark.parametrize(("blank_heading", "missing_answer"), [(False, True), (True, True), (True, False)])
+async def test_pdf_page_gap_advises_at_page_boundaries_and_blocks_missing_work(monkeypatch, blank_heading, missing_answer):
     from backend.tests.test_recognition_agent import pdf
 
     owner, task = _seed_task()
@@ -391,10 +391,10 @@ async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_han
     for index, number in enumerate(numbers, 1):
         add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
             number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
-    pages = {1: "1.1.5: Complete\n1.1.7 Some unclear marks\n1.1.20 An opening fragment",
+    pages = {1: "1.1.5: Complete\n1.1.7 Some unclear marks\n1.1.20 Text visible before the gap",
              3: "1.1.29 A complete final answer"}
     if blank_heading:
-        pages[3] += "\n1.1.31"
+        pages[3] += "\n1.1.31" if missing_answer else "\n1.1.31 The other full answer"
     calls = []
 
     async def read(**kwargs):
@@ -410,9 +410,11 @@ async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_han
         calls.append([question["q_id"] for question in questions])
         return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
             dict(q_id=q["q_id"], number=q["number"], type="concept",
-                 content=content, flag=["unclear_text"] if q["q_id"] == "q2" else [])
-            for q, content in zip(questions, ("Complete", "Some unclear marks", "An opening fragment",
-                                              "A complete final answer", ""))
+                 content=content, flag={"q2": ["unclear_text"], "q4": ["recognition_uncertain"]}.get(q["q_id"], []),
+                 recognition_confidence={"q3": 1, "q4": .95}.get(q["q_id"]),
+                 **({"source_opening": content} if q["q_id"] == "q5" and content else {}))
+            for q, content in zip(questions, ("Complete", "Some unclear marks", "Text visible before the gap",
+                                              "A complete final answer", "" if missing_answer else "The other full answer"))
         ])))
 
     registry = _registry(monkeypatch, invoke)
@@ -430,9 +432,18 @@ async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_han
     assert calls == [["q1", "q2", "q3", "q4", "q5"]]
     assert not answers["q1"]["flag"]
     assert answers["q2"]["flag"] == ["unclear_text"]
-    assert answers["q3"]["content"] == "An opening fragment" and not answers["q5"]["content"]
-    for q_id in ("q3", "q4", "q5"):
-        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers[q_id]["flag"])
+    assert answers["q3"]["content"] == "Text visible before the gap"
+    assert answers["q3"]["flag"] == ["recognition_boundary_uncertain"]
+    assert answers["q4"]["flag"] == ["recognition_uncertain", "recognition_boundary_uncertain"]
+    if missing_answer:
+        assert not answers["q5"]["content"]
+        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["q5"]["flag"])
+    else:
+        assert answers["q5"]["content"] == "The other full answer" and not answers["q5"]["flag"]
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert readiness["ready"] is not missing_answer
+    assert ("submission_recognition_blocked" in readiness["blocking_issues"]) == missing_answer
+    assert "submission_recognition_needs_review" in readiness["warnings"]
 
 
 @pytest.mark.asyncio
@@ -442,6 +453,8 @@ async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_han
     ("1.1.29 （续上页）", True),
     ("1.1.29 （续上页）", False),
     ("Question 1.1.29: (continued)", True),
+    ("Question 1.1.29: (continued) Proof fragment", False),
+    ("1.1.29 (a) （续） Proof fragment", True),
     ("Question 1.1.29: Proof ending", False),
 ])
 async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
@@ -472,7 +485,8 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
 
     async def invoke(messages):
         return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
-            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["number"]], flag=[],
+            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["number"]],
+                 flag=["recognition_failed"] if continued_heading.endswith("Proof ending") and q["q_id"] == "q3" else [],
                  **({"source_opening": contents["1.1.31"]} if q["number"] == "1.1.31" else {}))
             for q in _questions(messages)
         ])))
@@ -491,8 +505,8 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
     after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     answers = {a["q_id"]: a for a in after["student_data"]["S1"]["stu_ans"]}
     assert answers["q3"]["content"] == "Proof ending only"
-    for q_id in ("q2", "q3"):
-        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers[q_id]["flag"])
+    assert answers["q2"]["flag"] == ["recognition_boundary_uncertain"]
+    assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["q3"]["flag"])
     assert not answers["q1"]["flag"]
     if next_answer:
         assert not answers["q4"]["flag"]

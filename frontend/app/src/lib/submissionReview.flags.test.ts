@@ -1,7 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
+import { answerReviewNextBlocked } from "./reviewConfirmation";
 
 describe("OCR review labels", () => {
+  it("shows a page-boundary doubt as one optional review message", () => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .95,
+      flag: ["recognition_uncertain", "recognition_boundary_uncertain"] };
+    expect(answerReviewAttention(answer)).toBe("advisory");
+    expect(answerReviewNextBlocked(answer)).toBe(false);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([
+      { label: "作答可能未识别完整，请对照原文件核对", severity: "advisory" },
+    ]);
+    expect(answerReviewNotes({ ...answer, review_status: "confirmed" }, "zh-CN")).toEqual([]);
+  });
+
+  it("shows the failed page in the queue and tells teachers what to complete in the answer detail", () => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Partial text",
+      flag: ["recognition_failed", "recognition_failed_pages:2", "recognition_manual_pending", "recognition_incomplete"] };
+    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewNotes(answer, "zh-CN", true, "queue")).toEqual([{ label: "第 2 页识别失败", severity: "blocking" }]);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([
+      { label: "第 2 页识别失败，作答内容缺失，请对照原文件补全。", severity: "blocking" },
+    ]);
+    expect(answerReviewNotes(answer, "en-US")[0].label).toContain("Answer content is missing");
+  });
   it.each(["edited", "confirmed"] as const)("clears yellow advice after %s while retaining an unresolved red issue", review_status => {
     const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .2,
       flag: ["authorship_uncertain"], review_status };

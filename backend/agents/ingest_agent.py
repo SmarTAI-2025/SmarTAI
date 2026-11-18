@@ -831,6 +831,9 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
             if q_id in openings and isinstance(quote, str) and len(quote) <= SOURCE_OPENING_QUOTE_LIMIT and not invalid_fields:
                 if matches_source_opening(openings[q_id], answer["content"], quote):
                     opening_hashes[q_id] = hashlib.sha256(answer["content"].encode()).hexdigest()
+                elif quote.strip() and q_id in getattr(source, "boundary_review_ids", ()):
+                    # A contradicted opening claim is more than a page-edge doubt.
+                    answer["flag"].append("recognition_failed")
     missing = known_question_ids - set(answers)
     for q_id in missing:
         answers[q_id] = dict(q_id=q_id, number="", type="", content="", flag=["recognition_manual_pending"])
