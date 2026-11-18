@@ -154,14 +154,14 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
     - `number`: The question number as a STRING (e.g. "1", "2.3", "III.").
     - `stem`: The complete question stem content, including all text, formulas, and code blocks.
 
-3. **Problem Classification**: Determine the most appropriate classification (`type`) for each problem. **Use the specific Chinese terms below for the `type` field**:
-    - **概念题**: Tests scientific meanings, concepts, distinctions, conditions or explanations.
-    - **计算题**: Requires numerical or symbolic calculation to verify accurately.
-    - **编程题**: Contains code snippets or requires writing code.
-    - **推理题**: Tests premises, inference, cases and conclusions, including mathematical proofs and general logic puzzles.
-    - **其他**: None of the above; explicitly uses the concept-grading strategy.
+3. **Problem Classification**: Classify what the student primarily has to demonstrate. **Use the specific Chinese terms below for the `type` field**:
+    - **推理题**: Prove, derive, or justify a conclusion from assumptions, evidence, or cases. Includes proofs about definitions, logic puzzles (e.g. four statements with exactly one false), analyzing an algorithm's time complexity, and tracing the output of given code for a given input.
+    - **计算题**: Perform numerical or symbolic calculations to obtain a result, such as evaluating an integral, solving an equation, or finding eigenvalues. Supporting calculations within a proof do not make it a calculation question.
+    - **编程题**: Write, complete, or fix an implementation as the requested answer. A code snippet supplied for analysis does not by itself make the question a programming question.
+    - **概念题**: Recall facts or definitions, or demonstrate understanding by describing, comparing, or explaining material across any subject, including humanities questions that ask for a longer written explanation. If the task asks the student to derive or prove a conclusion, use 推理题 even when the conclusion concerns a familiar concept.
+    - **其他**: The task is sufficiently clear and none of the above applies. Leave the type empty if the source is too incomplete to classify.
 
-    Classify by the reasoning being graded, never by response form. Options, blanks and short answers are not separate types. Integral choices and eigenvalue blanks are 计算题; potential-concept multiple choices are 概念题; truth-teller puzzles and matrix proofs are 推理题. Preserve source labels such as 证明题 or 简答题 in the original stem verbatim.
+    Multiple choice, fill-in-the-blank and short answer are response formats. The same format can assess any of the above types. An integral with multiple-choice numerical results is 计算题, a blank asking which statement must be false is 推理题, and a blank asking for a recalled definition is 概念题. Preserve source labels such as 证明题 or 简答题 in the original stem verbatim.
     **Sub-questions (子问)**: A question containing sub-questions such as "(1) ... (2) ... (3) ..." or "(a) ... (b) ..." must be emitted as ONE single problem whose `stem` keeps the shared conditions and every sub-question in source order. A sub-question never receives its own q_id, score row, answer row, or progress unit. For example, major question 1 containing (a) and (b) is exactly q1; the next major question 2 is q2. Never emit only "(a)" or "(1)" as a separate problem row.
     **Numbering rule**: Dot-separated identifiers such as `1.1`, `1.2`, and `2.3.4` are normally complete major-question numbers. A suffix such as `1.1(a)` or `1.1(2)` is a sub-question marker inside major question `1.1`.
     **Fragment at the start of the text**: If the very first line of the provided text starts in the MIDDLE of a question (no question number on the first line because its beginning was cut off), still emit that fragment as a problem row with `number` set to the empty string "" — do not guess or invent a number, and do not invent the missing opening text.
@@ -2496,7 +2496,7 @@ async def generate_missing_question_materials(
                     "The RESPONSE is an object with a candidates array. Example of the two different targets: "
                     '{"candidates":[{"target_id":"q1:reference_answer","text_value":"...worked answer..."},'
                     '{"target_id":"q1:criterion","rubric_definition":{"part_rubric":{"total_pts":10,'
-                    '"parts":[{"id":"p1","label":null,"stem":null,"total_pts":10,"steps":'
+                    '"parts":[{"id":"p1","label":null,"total_pts":10,"steps":'
                     '[{"id":"s1","criterion":"...mathematical goal...","total_pts":10}],'
                     '"alternative":{"deduct_per_error":1}}]}}}]}. '
                     "Return only requested entries. Use the source maximum, actual independent goals and "
@@ -2513,7 +2513,7 @@ async def generate_missing_question_materials(
                         uses_math_grading(problems_data[row["q_id"]].get("type") or "")
                         for row in target_rows if row["target_id"] in part_targets) else "")
                     + "\nUse WrittenRubricDefinition for these targets: "
-                    + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Copy rubric_question identity and source fields; "
+                    + ", ".join(sorted(part_targets | interpret_with_answer)) + ". On a reference-only target with an existing teacher rubric, attach its interpretation to the same candidate. Preserve rubric_question part IDs and labels; the server binds source text and provenance. "
                     "fill parts in the same order; supply a stable ID and total_pts per part. "
                     "Return one separate candidate per requested target. Never attach a rubric to a reference "
                     "when a criterion candidate was also requested." + "\n" + _GENERATED_MATERIAL_GUIDANCE)
@@ -2525,11 +2525,8 @@ async def generate_missing_question_materials(
         if any(len(entry["rubric_question"]["parts"]) > 1 for entry in problem_context if entry.get("rubric_question")):
             guidance += (" Give unweighted parallel instances of the same task and response form equal budgets. "
                          "Use parallel_part_budgets verbatim when present; distinct deliverables may differ.")
-        schema = WrittenRubricDefinition.model_json_schema()
-        # These three fields are bound to the source in source_bound_candidate.
-        # Asking for them in output made long questions spend tokens copying input.
-        rule_schema = schema["$defs"]["PartRubric"]
-        rule_schema["required"] = [k for k in rule_schema["required"] if k not in {"id", "label", "stem"}]
+        from backend.services.rubric_drafts import written_proposal_schema
+        schema = written_proposal_schema()
         if len(problem_context) == 1:
             count = len(problem_context[0]["rubric_question"]["parts"])
             schema["$defs"]["PartRubric"]["properties"]["parts"].update(minItems=count, maxItems=count)
@@ -2546,7 +2543,8 @@ async def generate_missing_question_materials(
             "its budget times passed/valid tests, rounded once; no follow-through on this item. "
             "Other code criteria must assess independent stated requirements, avoiding duplicate "
             "deductions for the same functional defect or invented style requirements. "
-            "Use test_suite only on programming questions. A reference may be a Python function "
+            "Use test_suite only on programming questions. Omit expected_truth_by_part for programming questions; "
+            "test pass/fail is not a true/false answer key. A reference may be a Python function "
             "with literal JSON arguments, or a complete Python/C/C++ stdin program. Do not invent "
             "an input adapter for an ambiguous/incomplete teacher reference."
         )
@@ -2561,13 +2559,21 @@ async def generate_missing_question_materials(
     expected_targets = {row["target_id"]: row for row in target_rows}
 
     def retain_review(item):
-        if review_feedback is None or not isinstance(item, dict):
+        if review_feedback is None:
             return
-        target = expected_targets.get(item.get("target_id"))
+        if isinstance(item, AICompletionCandidateOutput):
+            # This proposal is deliberately excluded from candidate serialization.
+            target_id = item.target_id
+            proposal = item.rubric_definition.model_dump(mode="json") if item.rubric_definition else None
+        elif isinstance(item, dict):
+            target_id, proposal = item.get("target_id"), item.get("rubric_definition")
+        else:
+            return
+        target = expected_targets.get(target_id)
         if not target or target["target"] != "criterion":
             return
         from backend.services.rubric_review import review_extraction
-        extraction = review_extraction(item.get("rubric_definition"),
+        extraction = review_extraction(proposal,
             {**problems_data[target["q_id"]], "q_id": target["q_id"]})
         if extraction:
             review_feedback[target["target_id"]] = extraction
@@ -2698,7 +2704,7 @@ async def generate_missing_question_materials(
                     raise StructuredOutputInvalidError("A new programming rubric needs one aggregate test_suite step and separate code criteria; other types cannot use test_suite.")
                 from backend.services.true_false_answers import is_decision_only
                 source = problems_data[candidate.q_id]
-                if (is_decision_only(source.get("stem") or "", source.get("criterion") or "") and
+                if (not programming and is_decision_only(source.get("stem") or "", source.get("criterion") or "") and
                         all(len(part.steps) == 1 for part in candidate.rubric_definition.part_rubric.parts)
                         and not candidate.rubric_definition.expected_truth_by_part):
                     error = StructuredOutputInvalidError("Missing objective answer key.")
@@ -2861,7 +2867,7 @@ async def generate_missing_question_materials(
                 if not allow_partial:
                     raise
                 parsed.candidates.remove(candidate)
-                retain_review(candidate.model_dump(mode="json"))
+                retain_review(candidate)
                 if repair_feedback is not None:
                     repair_feedback[candidate.target_id] = "The teacher policy could not be verified; review its scope."
         if audited_pending:
@@ -2889,7 +2895,7 @@ async def generate_missing_question_materials(
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
-            retain_review(candidate.model_dump(mode="json"))
+            retain_review(candidate)
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue
@@ -2977,7 +2983,7 @@ async def generate_missing_question_materials(
                     candidate.rubric_draft = None
                 elif allow_partial:
                     parsed.candidates.remove(candidate)
-                    retain_review(candidate.model_dump(mode="json"))
+                    retain_review(candidate)
                     if repair_feedback is not None:
                         repair_feedback[candidate.target_id] = str(exc)
                 else:

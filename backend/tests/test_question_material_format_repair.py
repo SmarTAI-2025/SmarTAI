@@ -53,6 +53,50 @@ async def test_deterministically_repairable_json_uses_no_extra_model_call():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extra_key,test_points", [({"p1": True}, 2), ({"p1": "passed"}, 2), ({"p1": True}, 3)])
+async def test_programming_rubric_ignores_inapplicable_truth_key(extra_key, test_points):
+    problem = {
+        "number": "Q4", "type": "编程题", "max_score": 10,
+        "stem": "Implement stable_softmax(xs). Return [] on empty input and avoid overflow.",
+        "criterion": "",
+    }
+    target = {"target_id": "q1:criterion", "q_id": "q1", "target": "criterion"}
+    definition = {
+        "expected_truth_by_part": extra_key,
+        "part_rubric": {
+            "total_pts": 10,
+            "parts": [{
+                "id": "p1", "label": None, "total_pts": 10,
+                "steps": [
+                    {"id": "code", "criterion": "Subtract the largest input before exponentiating.", "total_pts": 8},
+                    {"id": "tests", "criterion": "Pass the functional tests.", "total_pts": test_points, "test_suite": True},
+                ],
+                "alternative": {"deduct_per_error": 1},
+            }],
+        },
+    }
+    provider = Provider([json.dumps({"candidates": [{**target, "rubric_definition": definition}]})])
+
+    feedback = {}
+    result = await generate_missing_question_materials(
+        {"q1": problem}, [target], 10, provider, allow_partial=True, repair_feedback=feedback,
+    )
+    assert len(provider.calls) == 1
+    if test_points == 3:
+        assert not result
+        assert "step budgets total 11.0, required 10" in feedback["q1:criterion"]
+        return
+
+    (rubric,) = result
+    plan = rubric.rubric_draft["plan"]
+    assert not plan.get("expected_truth_by_part")
+    steps = plan["part_rubric"]["parts"][0]["steps"]
+    assert [(step["id"], step["total_pts"], step.get("test_suite", False)) for step in steps] == [
+        ("code", 8, False), ("tests", 2, True),
+    ]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("allow_partial", [False, True])
 @pytest.mark.parametrize("command", ["underbrace", "underline", "uparrow", "underset"])
 async def test_underescaped_u_tex_is_recovered_in_one_generation(allow_partial, command):

@@ -1,4 +1,3 @@
-import { RubricReviewErrorDetails } from "@/components/tasks/RubricReviewDetails";
 import { questionSaveError } from "@/lib/questionSaveError";
 import { questionIssueCodeLabel as issueCodeLabel } from "@/lib/reviewLabels";
 import { getTaskDestination } from "@/lib/taskFlow";
@@ -151,7 +150,6 @@ export function QuestionPreparationOverviewPage() {
         {failure ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-4 text-sm">
         <p>{tx(locale, `已确认 ${failure.completed} 道题；请核对第 ${failure.problem.number || "—"} 题。`, `${failure.completed} questions confirmed. Review question ${failure.problem.number || "—"}.`)}</p>
         <p className="mt-1">{questionSaveError(failure.error, locale)}</p>
-        <RubricReviewErrorDetails error={failure.error} locale={locale} />
           <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
           <Link to={`/tasks/${taskId}/questions/${encodeURIComponent(failure.problem.q_id)}/content#question-${encodeURIComponent(failure.problem.q_id)}`} className="mt-2 font-semibold text-primary">{tx(locale, "前往该题", "Go to question")}</Link>
         </div> : null}

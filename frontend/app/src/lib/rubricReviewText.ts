@@ -1,6 +1,4 @@
-import { getAPIErrorDetail } from "@/api/client";
 import type { PreparationIssue } from "@/types";
-import { MarkdownMath } from "@/components/ui/MarkdownMath";
 
 type Field = { path: string; value: unknown };
 const labels: Record<string, [string, string]> = {
@@ -13,6 +11,7 @@ const labels: Record<string, [string, string]> = {
   required_conditions: ["给分条件", "Award conditions"], source_quote: ["教师原文", "Teacher wording"],
   answer_refs: ["对应标答内容", "Related reference material"], exclusive_group: ["互斥扣分组", "Exclusive deduction group"],
   nonblank_floor: ["非空作答最低分", "Nonblank answer minimum"], alternative: ["其他正确解法", "Alternative methods"],
+  test_suite: ["测试计分", "Test scoring"],
 };
 const objectLabels: Record<string, [string, string]> = {
   maximum: ["最高分", "Maximum"], minimum: ["最低分", "Minimum"],
@@ -60,6 +59,7 @@ export function rubricReviewRows(issues: PreparationIssue[] = [], locale: string
       const item = index === undefined ? "" : `${kind === "steps" ? (lang === 0 ? "步骤" : "Step") : (lang === 0 ? "扣分项" : "Deduction")} ${Number(index) + 1}`;
       let text = "";
       if (pending) text = lang === 0 ? "待核对" : "Review needed";
+      else if (key === "test_suite" && value === true) text = lang === 0 ? "整组测试按通过比例计分" : "Award the suite budget in proportion to passed tests";
       else if (["total_pts", "follow_through_pts", "deduct_pts", "max_deduction"].includes(key)) text = points(value);
       else if (key === "follow_through_keep" && typeof value === "number") text = `${Math.round(value * 10000) / 100}%`;
       else if (key === "nonblank_floor") text = amount(value, lang === 0 ? "本题满分" : "the question maximum");
@@ -89,25 +89,7 @@ export function rubricReviewRows(issues: PreparationIssue[] = [], locale: string
   });
 }
 
-export function RubricReviewDetails({ issues, locale }: { issues?: PreparationIssue[]; locale: string }) {
-  const rows = rubricReviewRows(issues, locale);
-  if (!rows.length) return null;
-  const zh = locale === "zh-CN";
-  return <aside className="mt-4 rounded-md border border-red-200 bg-red-50/40 p-3 dark:bg-red-950/15" aria-label={zh ? "待核对的评分项" : "Scoring details to review"}>
-    <h4 className="text-sm font-semibold">{zh ? "待核对的评分项" : "Scoring details to review"}</h4>
-    <p className="mt-1 text-xs text-muted-foreground">{zh ? "对照下列提取结果修改评分标准，保存后再确认。" : "Use these extracted details to update the rubric, then save and confirm."}</p>
-    <dl className="mt-3 max-h-80 space-y-3 overflow-y-auto text-sm">
-      {rows.map(row => <div key={row.key}><dt className="text-xs font-medium text-muted-foreground">{row.label}</dt><dd className="mt-1 break-words"><MarkdownMath>{row.value}</MarkdownMath></dd></div>)}
-    </dl>
-  </aside>;
-}
-
-/** A rejected edit stays a draft; expose its parsed values without replacing saved rules. */
-export function RubricReviewErrorDetails({ error, locale }: { error: unknown; locale: string }) {
-  const extraction = object(getAPIErrorDetail(error)?.details)?.rubric_review_draft;
-  if (!extraction) return null;
-  return <RubricReviewDetails locale={locale} issues={[{
-    issue_id: "pending-edit", q_id: "", field: "rubric", code: "generation_failed",
-    severity: "blocking", status: "open", details: { rubric_review_draft: extraction },
-  }]} />;
+/** Review text is editable source material, never a sealed scoring ledger. */
+export function rubricReviewText(issues: PreparationIssue[] | undefined, locale: string): string {
+  return rubricReviewRows(issues, locale).map(row => `${row.label}：${row.value}`).join("\n");
 }

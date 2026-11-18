@@ -274,6 +274,8 @@ beforeEach(() => {
   testState.locale = "zh-CN";
   HTMLElement.prototype.scrollIntoView = vi.fn();
   taskData.problem_data.Q1.type = "reasoning";
+  taskData.problem_data.Q1.criterion = "Rubric one";
+  taskData.problem_data.Q1.preparation_issues = [];
   mutateAsync.mockReset();
   changeModel.mockReset().mockResolvedValue({ question_recognition_provider_id: "retry-model", workflow_revision: 8 });
   taskData.workflow_revision = 7;
@@ -676,7 +678,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await waitFor(() => expect(screen.getByRole("combobox", { name: "题目准备模型" })).toHaveFocus());
   });
 
-  it("shows the usable and missing scoring values when confirmation cannot seal a rubric", async () => {
+  it("keeps saved scoring text when confirmation fails without a second readonly scoring panel", async () => {
     mutateAsync.mockRejectedValueOnce(new APIError(422, "invalid rubric", { error: {
       code: "invalid_structured_rubric", details: { rubric_review_draft: {
         fields: [{ path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
@@ -685,10 +687,37 @@ describe("QuestionPreparationDetailPage navigation", () => {
     } }));
     await renderPage();
     await userEvent.click(screen.getAllByRole("button", { name: "第 1 题 · 待确认" })[0]);
-    const retained = await screen.findByLabelText("待核对的评分项");
-    expect(retained).toHaveTextContent("步骤 1 · 满分3 分");
-    expect(retained).toHaveTextContent("步骤 2 · 满分待核对");
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(screen.queryByLabelText("待核对的评分项")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    expect(screen.getByRole("textbox", { name: "第 1 题评分标准" })).toHaveValue("Rubric one");
     expect(mutateAsync).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows recovered scoring content in the existing field and saves through the original editor", async () => {
+    mutateAsync.mockResolvedValue({ workflow_revision: 8 });
+    taskData.problem_data.Q1.criterion = "";
+    taskData.problem_data.Q1.preparation_issues = [{ issue_id: "pending", field: "rubric", code: "generation_failed",
+      severity: "blocking", status: "open", details: { reason: "invalid_structured_rubric", rubric_review_draft: {
+        fields: [{ path: "part_rubric.parts[0].steps[0].criterion", value: "建立等式" },
+          { path: "part_rubric.parts[0].steps[0].total_pts", value: 3 }],
+        invalid_fields: ["part_rubric.parts[0].steps[1].total_pts"],
+      } } }];
+    await renderPage();
+    expect(screen.queryByLabelText("待核对的评分项")).toBeNull();
+    expect(screen.queryByText("尚未提供评分标准。")).toBeNull();
+    expect(screen.getByText(/评分要求：建立等式/)).toBeVisible();
+    expect(mutateAsync).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
+    const input = screen.getByRole("textbox", { name: "第 1 题评分标准" });
+    expect((input as HTMLTextAreaElement).value).toContain("评分要求：建立等式");
+    expect((input as HTMLTextAreaElement).value).toContain("步骤 2 · 满分：待核对");
+    const corrected = "(a) 建立等式4分；(b) 计算结果6分。";
+    await userEvent.clear(input);
+    await userEvent.type(input, corrected);
+    await userEvent.click(within(input.closest("section")!).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", criterion: corrected, max_score: 10 })));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "第 1 题评分标准" })).toBeNull());
   });
 
   it("opens a failed question outside the current filter directly", async () => {
@@ -846,10 +875,30 @@ it.each([
 });
 
 
+it("saves test points, code criteria and the input domain separately", async () => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 3 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 3 题评分标准" });
+  const section = within(rubric.closest("section")!);
+  fireEvent.change(rubric, { target: { value: "代码注释得 4 分。" } });
+  await userEvent.click(section.getByRole("button", { name: "保存" }));
+  expect(section.getByRole("alert")).toHaveTextContent("请填写测试配分");
+  expect(mutateAsync).not.toHaveBeenCalled();
+
+  fireEvent.change(section.getByRole("spinbutton", { name: /测试配分/ }), { target: { value: "6" } });
+  fireEvent.change(section.getByRole("textbox", { name: /额外输入限制/ }), { target: { value: "n >= 0." } });
+  await userEvent.click(section.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+    qId: "Q3", criterion: "代码注释得 4 分。", max_score: 10,
+    programming_scoring: { test_points: 6, input_rules: "n >= 0." },
+  })));
+});
+
 it.each([
   ["no_provider_configured", "请先在 API 设置中启用模型"],
   ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
   ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
+  ["invalid_programming_test_award", "请在「测试配分」填写测试分"],
   ["provider_auth_failed", "请在 API 设置中更新模型密钥或权限"],
   ["provider_permission_denied", "请在 API 设置中更新模型密钥或权限"],
   ["provider_credentials_unavailable", "请在 API 设置中更新模型密钥或权限"],

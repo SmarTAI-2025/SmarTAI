@@ -50,6 +50,7 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
         flags = answer["flag"]
     save = client.put(path, headers=headers, json={"type":"编程题", "stem":stem,
         "criterion":"Return the sum of the two arguments (10 points).", "review_status":"edited",
+        "programming_scoring": {"test_points": 0, "input_rules": ""},
         "test_cases":[old], "expected_workflow_revision":revision()})
     assert save.status_code == 200, save.text
     edit = {**old, "input":"3、4", "expected_output":"7"}
