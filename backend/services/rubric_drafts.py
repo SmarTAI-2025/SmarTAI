@@ -134,13 +134,10 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
         definition = dict(definition)
         if "expected_truth_by_part" in definition:
             from backend.models import is_programming_question_type
-            from backend.services.true_false_answers import is_decision_only
 
-            if is_programming_question_type(source.get("type")) or not is_decision_only(
-                source.get("stem") or "", source.get("criterion") or "",
-            ):
-                # A truth key has no scoring authority for this source.
-                # Discard it before type validation, including malformed keys.
+            if is_programming_question_type(source.get("type")):
+                # A program's test results use the aggregate test award.
+                # Remove the unrelated judgment key before validating the rubric.
                 definition.pop("expected_truth_by_part")
         for key in PartRubric.model_fields.keys() & definition.keys():
             value = definition.pop(key)
