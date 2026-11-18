@@ -30,6 +30,8 @@ QUALIFIED_QUESTION_HEADING = re.compile(
     r"(?:[ \t]*[:：、][ \t]*|\.(?:[ \t]+|$)|[ \t]+|$)(?P<title>[^\n]*)$"
 )
 
+CONTINUATION_TITLE = re.compile(r"(?i)^[ \t]*[（(][ \t]*(?:续|continued)[ \t]*[）)]")
+
 
 def question_headings(text: str, *, numbered=False, qualified=False):
     matches = list(QUESTION_HEADING.finditer(text))
@@ -53,6 +55,7 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
                           known_numbers: set[str] | None = None,
                           allow_repeated_numbers=False, numbered=False,
                           qualified=False, source_end_page: int | None = None,
+                          check_opening=False,
                           number_key: Callable[[str], str | None] = str) -> list[SourceQuestionUnit]:
     """Identify bounded source text, without inferring content or inventing IDs.
 
@@ -102,10 +105,14 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             next_known = next_key is not None and (known_keys is None or next_key in known_keys)
             final = following is None and ((source_complete and len(groups) == 1)
                                            or group[-1] == source_end_page)
+            # If this run starts after a gap, a continuation label cannot
+            # establish the opening. A visible opening would own the span above.
+            missing_opening = check_opening and group[0] > 1 and CONTINUATION_TITLE.match(match.group("title"))
+            closed = (next_known or final) and not missing_opening
             body = text[match.start():end].strip()
             records.append(SourceQuestionUnit(number, body,
                 tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
-                bool(next_known or final), "next_heading" if next_known else "source_end" if final else "open"))
+                closed, ("next_heading" if next_known else "source_end") if closed else "open"))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:
@@ -124,7 +131,8 @@ class SourcePageGroup:
 
 
 def source_page_groups(pages: dict[int, str], *, source_complete=False, source_end_page=None,
-                       numbered=True, number_key: Callable[[str], str | None] = str) -> list[SourcePageGroup]:
+                       numbered=True, check_opening=False,
+                       number_key: Callable[[str], str | None] = str) -> list[SourcePageGroup]:
     """Batch the questions on a page; retain adjoining continuation pages.
 
     Heading candidates only determine request boundaries, never question IDs
@@ -143,7 +151,7 @@ def source_page_groups(pages: dict[int, str], *, source_complete=False, source_e
         spans[-1].append(number)
     units = [unit for span in spans for unit in source_question_units(
         {number: pages[number] for number in span}, source_complete=span[-1] == end_page,
-        allow_repeated_numbers=True, numbered=numbered, number_key=number_key)]
+        allow_repeated_numbers=True, numbered=numbered, check_opening=check_opening, number_key=number_key)]
     parent = {number: number for number in numbers}
 
     def root(number):

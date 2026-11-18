@@ -30,6 +30,15 @@ def test_independent_complete_question_after_a_gap_can_finish_before_the_source(
     assert [(unit.number, unit.complete) for unit in units] == [("1", False), ("2", True), ("3", False)]
 
 
+def test_continued_answer_can_close_when_its_opening_is_on_contiguous_read_pages():
+    pages = {1: "Question 1: Answer", 3: "Question 2: Opening", 4: "Question 2: （续）\nEnding"}
+    units = source_question_units(pages, check_opening=True, source_end_page=4)
+    assert [(unit.number, unit.pages, unit.complete) for unit in units] == [
+        ("1", (1,), False), ("2", (3, 4), True),
+    ]
+    assert source_page_groups(pages, check_opening=True, source_end_page=4)[-1].complete
+
+
 def test_page_groups_keep_two_questions_in_each_request_and_close_after_lookahead():
     pages = {1: "**1.** First question.\n**2.** Second question.",
              2: "3. Third question.\n4. Fourth question."}

@@ -3740,7 +3740,8 @@ async def run_task_submission_parsing(
                     await save_source_state(source_id, stored_file_id,
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
                 for unit in source_page_groups(saved_pages, source_complete=complete,
-                                               source_end_page=end_page, numbered=False, number_key=number_ids.get):
+                                               source_end_page=end_page, numbered=False, check_opening=True,
+                                               number_key=number_ids.get):
                     headings = list(QUESTION_HEADING.finditer(unit.text))
                     if any(match.group("number") not in number_ids for match in headings):
                         # Ambiguous or unknown labels cannot prove an independent

@@ -171,7 +171,7 @@ def split_submission_question_units(source, problems, target_ids=None):
 
 
 def closed_questions_on_read_pages(pages, problems, coverage):
-    """Bound a parsed answer by known headings or the read end of its PDF."""
+    """Verify both boundaries of a parsed answer within successfully read pages."""
     if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
         return set()
     from backend.services.question_matching import question_number_aliases, resolve_question_match
@@ -181,7 +181,7 @@ def closed_questions_on_read_pages(pages, problems, coverage):
     # produced a candidate for an unread page.
     read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
-                                  qualified=True, source_end_page=coverage.get("total_pages"))
+                                  qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
     return {q_id for unit in units if unit.complete
             and (q_id := resolve_question_match(unit.number, unit.text, problems))}
 
