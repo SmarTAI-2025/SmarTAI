@@ -116,7 +116,7 @@ def _base_identity(row):
     return _digest({key: row.get(key) for key in (
         "number", "type", "stem", "criterion", "reference_answer", "max_score",
         "solution_code", "test_cases", "material_provenance",
-    )})
+    )} | ({"code_output": row["code_output"]} if row.get("code_output") else {}))
 
 
 def _missing_targets(row):
@@ -347,6 +347,8 @@ class IncrementalQuestionPreparation:
                 issue["q_id"] = q_id
             row["preparation_issues"] = [normalize_formula_issue(issue) for issue in row["preparation_issues"]]
             for field in ("stem", "criterion", "reference_answer"):
+                if field == "reference_answer" and row.get("code_output"):
+                    continue
                 if not str(row.get(field) or "").strip() and not any(
                     issue.get("field") == _issue_field(field) and issue.get("code") == "generation_failed"
                     for issue in row["preparation_issues"]

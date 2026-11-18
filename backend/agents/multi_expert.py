@@ -159,8 +159,44 @@ async def run_multi_expert(**kwargs) -> Correction:
             await review_partial_score(correction, state=state, problem=kwargs["problem"], answer=kwargs["answer"],
                                        student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
             return correction
+    from backend.domain.code_output import code_output_data
+
+    problem = kwargs["problem"]
     with math_review_scope():
-        return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=kwargs["problem"])
+        if code_output_data(problem):
+            return await _grade_code_output(**kwargs)
+        return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=problem)
+
+
+async def _grade_code_output(**kwargs):
+    from backend.services.code_output_grading import (
+        CodeOutputUnavailable, observed_output, output_only_correction,
+        output_step, submitted_output, unavailable_output,
+    )
+    from backend.services.math_grading_context import scoring_plan
+    from backend.services.programming_runs import programming_run
+    from backend.tools.code_interpreter import compare_stdout
+
+    problem, answer = kwargs["problem"], kwargs["answer"]
+    language = kwargs.get("language", "en")
+    try:
+        with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
+            source, stdout = await observed_output(state, problem, kwargs.get("reporter"))
+        if source.form == "choice" and sum(compare_stdout(stdout, option) for option in source.choices.values()) != 1:
+            raise CodeOutputUnavailable()
+        if not answer.content.strip() and answer.flag:
+            raise CodeOutputUnavailable()
+        if not answer.content.strip():
+            return output_only_correction(problem, False, language)
+        value = submitted_output(answer.content, source)
+        correct = value is not None and compare_stdout(stdout, value)
+        if source.form != "explanation":
+            return output_only_correction(problem, correct, language)
+        plan = scoring_plan(problem, kwargs.get("grading_setup"))
+        with output_step(plan, answer, correct=correct, language=language):
+            return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=problem)
+    except CodeOutputUnavailable:
+        return unavailable_output(problem, language)
 
 
 def _project_programming_result(correction: Correction, language: str) -> Correction:

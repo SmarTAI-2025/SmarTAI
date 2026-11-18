@@ -20,6 +20,7 @@ from backend.tools.structured_llm import (
     StructuredOutputBoundsError, StructuredOutputInvalidError, structured_llm_call,
 )
 from backend.services.math_source_evidence import match_source_quote
+from backend.domain.code_output import code_output_data
 from backend.services.part_rubric import PartRubric
 from backend.services.teacher_point_allocations import TeacherPolicyCheck
 from backend.services.math_strictness import Adjustment, strictness_policy
@@ -216,6 +217,7 @@ def _question_input(problem: Any) -> dict[str, Any]:
            ("q_id", "number", "type", "stem", "criterion", "reference_answer")},
         "max_score": maximum,
         "criterion_source": criterion_source,
+        **({"code_output": descriptor} if (descriptor := code_output_data(problem)) else {}),
         **({"rubric_generation_preferences": row.get("rubric_generation_preferences") or presentation["rubric_generation_preferences"]}
            if row.get("rubric_generation_preferences") or presentation.get("rubric_generation_preferences") else {}),
         **({"alternative_rules": presentation["alternative_rules"]}

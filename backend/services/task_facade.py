@@ -2640,6 +2640,7 @@ def _replace_draft_questions(
                     ),
                     "question_structure": structure.model_dump(),
                     "rubric_point_summary": rubric_summary.model_dump(),
+                    **({"code_output": raw["code_output"]} if raw.get("code_output") else {}),
                     "solution_code": raw.get("solution_code"),
                     "recognition_confidence": raw.get("recognition_confidence"),
                     "material_provenance": raw.get("material_provenance", {}),
@@ -5387,7 +5388,10 @@ def start_task_grading(
     from backend.services.math_grading_context import (
         MATH_GRADING_ENGINE_VERSION, problem_from_question, uses_math_grading,
     )
-    math_qids = {question.q_id for question in questions if uses_math_grading(question.type)}
+    from backend.domain.code_output import code_output_data, code_output_form
+    output_qids = {question.q_id for question in questions if code_output_data(question)}
+    math_qids = {question.q_id for question in questions if uses_math_grading(question.type)
+                 and (question.q_id not in output_qids or code_output_form(question) == "explanation")}
     if math_qids:
         from backend.services.math_rubric_plan import math_rubric_fingerprint
         input_manifest["math_grading_engine_version"] = MATH_GRADING_ENGINE_VERSION
@@ -5397,8 +5401,8 @@ def start_task_grading(
         }
     from backend.models import is_programming_question_type
     from backend.services.programming_runs import VERSION as programming_version, artifacts_for_retry, runtime_identity
-    programming_qids = {q.q_id for q in questions if is_programming_question_type(q.type)}
-    if programming_qids:
+    sandbox_qids = output_qids | {q.q_id for q in questions if is_programming_question_type(q.type)}
+    if sandbox_qids:
         input_manifest["programming_grading_version"] = programming_version
         input_manifest["programming_runtime"] = runtime_identity()
     fingerprint_manifest = deepcopy(input_manifest)
@@ -5435,7 +5439,8 @@ def start_task_grading(
         def content_questions(items):
             keys = ("id", "q_id", "number", "type", "stem", "criterion", "max_score", "reference_answer", "test_cases")
             return [{**{key: q.get(key) for key in keys},
-                     "solution_code": (q.get("source") or {}).get("presentation", {}).get("solution_code")}
+                     "solution_code": (q.get("source") or {}).get("presentation", {}).get("solution_code"),
+                     **({"code_output": descriptor} if (descriptor := code_output_data(q)) else {})}
                     for q in items]
         stable_keys = ("submission_revision_ids", "knowledge_document_ids", "knowledge_content_versions")
         if (previous.setup != workflow.grading_setup
@@ -5448,7 +5453,7 @@ def start_task_grading(
         # missing-plan mathematical results are rerun in this new run.
         plans = saved_math_plans(latest.id, questions=questions) if math_qids else {}
         compatible_programming = old.get("programming_grading_version") == programming_version
-        if programming_qids and compatible_programming:
+        if sandbox_qids and compatible_programming:
             if old.get("programming_runtime") != input_manifest["programming_runtime"]:
                 raise VersionConflict("Programming runtime changed; start a new run.", code="grading_inputs_changed")
             # Retain the class's accepted test basis even when a provider
@@ -5460,7 +5465,7 @@ def start_task_grading(
         reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
-                    and (result.q_id not in programming_qids or compatible_programming or result.teacher_review)
+                    and (result.q_id not in sandbox_qids or compatible_programming or result.teacher_review)
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
@@ -5475,9 +5480,9 @@ def start_task_grading(
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
             if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
-        if programming_qids and not compatible_programming:
+        if sandbox_qids and not compatible_programming:
             input_manifest["reused_experts"] = [item for item in input_manifest["reused_experts"]
-                                                  if item.get("q_id") not in programming_qids]
+                                                  if item.get("q_id") not in sandbox_qids]
         if math_qids:
             from backend.services.math_grading_context import expert_matches_plan
             input_manifest["reused_experts"] = [

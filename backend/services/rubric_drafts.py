@@ -322,6 +322,10 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
         follow_through_strictness = (previous_rules.follow_through_strictness if previous_rules and previous_rules.follow_through_strictness is not None else
                                 context.get("rubric_generation_preferences", {}).get("follow_through_strictness"))
     if definition.part_rubric is not None:
+        from backend.domain.code_output import code_output_form
+        output_steps = [step for part in definition.part_rubric.parts for step in part.steps if step.code_output]
+        if output_steps and (len(output_steps) != 1 or code_output_form(problem) != "explanation"):
+            raise RubricAllocationError("Only a given-program explanation can mark one independent code_output step.")
         from backend.models import is_programming_question_type
         if (not is_programming_question_type(problem.get("type")) and any(
                 step.test_suite for part in definition.part_rubric.parts for step in part.steps)):
@@ -1028,6 +1032,10 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
 
     previous_rules = previous.plan.part_rubric if previous else None
     request = dict(context)
+    from backend.domain.code_output import RUBRIC_INSTRUCTION, code_output_form
+    if form := code_output_form(problem):
+        request["code_output_form"] = form
+        request["code_output_instruction"] = RUBRIC_INSTRUCTION
     binding_source = context
     if binding_source["criterion_source"] != "ai":
         request["teacher_ordinary_rules"] = ordinary_criterion(binding_source["criterion"]).strip("。；; \n")

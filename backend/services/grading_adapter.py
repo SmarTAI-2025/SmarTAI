@@ -33,7 +33,7 @@ from backend.skills.base import (
 
 
 # Synthesis methods that prove no expert produced a publishable score.
-_HARD_FAILURE_METHODS = frozenset({"all_failed", "quota_exhausted"})
+_HARD_FAILURE_METHODS = frozenset({"all_failed", "quota_exhausted", "code_output_unavailable"})
 
 
 def _stable_review_reasons(*groups: list[str] | tuple[str, ...]) -> list[str]:
@@ -151,8 +151,10 @@ def correction_to_result(
     needs_review = hard_failure or soft_review
     if invalid_scale:
         primary_reasons = ["invalid_score_scale"]
-    elif hard_failure and review_reasons and any(e.programming_evidence for e in correction.expert_results):
-        primary_reasons = []  # Keep the actual programming failure (e.g. a bad mapping or runner).
+    elif hard_failure and (method == "code_output_unavailable" or (
+        review_reasons and any(e.programming_evidence for e in correction.expert_results)
+    )):
+        primary_reasons = []  # Keep the actual execution failure instead of attributing it to the model.
     elif hard_failure:
         primary_reasons = [
             "grading_paused" if method == "paused" else "quota_exhausted" if method == "quota_exhausted" else "llm_failed"

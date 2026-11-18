@@ -220,7 +220,10 @@ async def prepare_math_plans(problem_store, registry, *, grading_setup=None, rep
             except ValidationError:
                 # Invalid question rows keep the existing grading input failure path.
                 continue
-            if not uses_math_grading(problem.type):
+            from backend.domain.code_output import code_output_data, code_output_form
+            if not uses_math_grading(problem.type) or (
+                code_output_data(problem) and code_output_form(problem) != "explanation"
+            ):
                 continue
             plan = get_math_plan(problem)
             if plan is None and checkpoints is not None:

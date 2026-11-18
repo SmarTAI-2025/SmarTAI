@@ -285,3 +285,30 @@ async def test_pre_fix_wrong_language_validation_cannot_survive_recovery(monkeyp
     assert cases and not reason and state.read(old_key, runs.PREPARED)
     key, cases, reason = await runs._prepare(state, problem, None, None, run_sandbox, None)
     assert key != old_key and not cases and reason == "programming_reference_conflict"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("language,program", [
+    ("python", "n = int(input())\nprint(n * 2 + 1)\n"),
+    ("c", '#include <stdio.h>\nint main(void) { int n; if (scanf("%d", &n) == 1) printf("%d\\n", n * 2 + 1); }\n'),
+    ("cpp", "#include <iostream>\nint main() { int n; if (std::cin >> n) std::cout << n * 2 + 1 << '\\n'; }\n"),
+])
+async def test_given_code_output_uses_existing_oci_runtime(language, program):
+    from backend.agents.multi_expert import run_multi_expert
+    from backend.domain.code_output import bind_code_output
+    from backend.services.programming_runs import QUESTION_OUTPUT
+
+    stem = f"What does the given program print?\n```{language}\n{program}```\nInput: 3"
+    descriptor = bind_code_output({"form": "blank", "language": language, "code": program,
+                                  "stdin": "3", "input_quote": "Input: 3"}, stem=stem, document=stem)
+    problem = ProblemInfo(q_id="q1", number="1", type="推理题", stem=stem, code_output=descriptor,
+                          criterion="Give the actual output.", max_score=10)
+    with programming_run(None, None) as state:
+        for submitted, expected in [("7", 10), ("6", 0)]:
+            answer = StudentAnswerInfo(q_id="q1", number="1", type="推理题", content=submitted)
+            result = await run_multi_expert(problem=problem, answer=answer, registry=None, student_id="fixture")
+            assert result.synthesis_method == "code_output_verified"
+            assert result.score == expected
+        observed, = [record["value"] for record in state.records.values() if record["kind"] == QUESTION_OUTPUT]
+        assert observed["stdout"] == "7\n"
+        assert observed["isolation_mode"] == "oci_container"
