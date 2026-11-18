@@ -831,6 +831,7 @@ it.each([
   ["no_provider_configured", "请先在 API 设置中启用模型"],
   ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
   ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
+  ["invalid_programming_test_award", "测试占 6 分，按通过比例算。代码正确得 4 分。"],
   ["provider_auth_failed", "请在 API 设置中更新模型密钥或权限"],
   ["provider_permission_denied", "请在 API 设置中更新模型密钥或权限"],
   ["provider_credentials_unavailable", "请在 API 设置中更新模型密钥或权限"],

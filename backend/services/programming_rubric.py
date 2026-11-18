@@ -104,14 +104,18 @@ def settle_test_award(output, rows, run, language):
     output.score = float(sum((Decimal(str(step.score)) for step in output.steps), Decimal(0)))
 
 
-_TEST = r"(?:整组)?(?:测试(?:样例|用例|得分|结果)?|样例|用例)|(?:all )?(?:tests?|test suite|test cases|test results|functional tests|functional test results)"
-_POINTS = r"\d+(?:\.\d+)?\s*(?:分|points?|marks?)"
+_TEST = r"(?:整组)?(?:(?:单元|功能)?测试(?:样例|用例|项|部分|得分|分|结果)?|样例|用例)|(?:all )?(?:test suite|test cases|test results|functional tests|functional test results|tests?)\b(?!-)"
+_POINTS = r"\d+(?:\.\d+)?\s*(?:分(?!钟)|points?\b|marks?\b)"
+_TEST_BUDGET_LABEL = rf"(?:{_TEST})\s*(?:占(?:总分)?|计|为|满分|[:：]|(?:are |is )?worth)?\s*"
+_TEST_POINTS_PREFIX = re.compile(rf"{_TEST_BUDGET_LABEL}(?:{_POINTS}|\d+(?:\.\d+)?\s*%)", re.I)
 _TEST_AWARD = re.compile(
-    rf"(?:(?:{_TEST})\s*(?:占|计|为|[:：]|(?:are |is )?worth)\s*{_POINTS}|"
+    rf"(?:{_TEST_BUDGET_LABEL}{_POINTS}|"
     rf"(?:award\s+)?{_POINTS}\s+for\s+(?:the\s+)?(?:{_TEST}))", re.I,
 )
+_CN_PASS_RATIO = r"按(?:测试(?:用例|样例)?|用例|样例)?通过(?:的)?(?:比例|率)"
+_RATIO_AWARD = re.compile(rf"{_CN_PASS_RATIO}\s*(?:[给得计](?:分(?:为)?)?|算作)\s*{_POINTS}")
 _RATIO = re.compile(
-    r"按(?:测试|用例|样例)?通过(?:的)?(?:比例|率)(?:算|计算|计分|得分|给分|结算)?"
+    rf"{_CN_PASS_RATIO}(?:算|计算|计分|得分|给分|结算)?"
     r"|(?:scored\s+)?(?:in proportion to|proportional to|based on)\s+(?:the\s+)?"
     r"(?:fraction passed|pass rate|proportion of (?:tests|test cases) passed)", re.I,
 )
@@ -129,7 +133,8 @@ _NO_TEST_AWARD = {"不设测试分", "测试不计分", "no points for tests"}
 def _test_award_clauses(clauses):
     """Identify explicit, supported suite rules in source order."""
     normalized = [unicodedata.normalize("NFKC", clause) for clause in clauses]
-    result = {}
+    result = {source: None for source, clause in zip(clauses, normalized, strict=True)
+              if _RATIO_AWARD.fullmatch(clause)}
     for index, (clause, following) in enumerate(zip(normalized, normalized[1:])):
         if ((_TEST_AWARD.fullmatch(clause) and _RATIO.fullmatch(following))
                 or any(clause.endswith(formula) and following == tail for formula, tail in _RENDERED_RATIO)):
@@ -138,7 +143,7 @@ def _test_award_clauses(clauses):
 
 
 def is_test_scoring_clause(clause):
-    return any(pattern.fullmatch(clause) for pattern in (_TEST_AWARD, _RATIO)) or bool(re.fullmatch(_TEST, clause, re.I))
+    return any(pattern.fullmatch(clause) for pattern in (_TEST_AWARD, _RATIO_AWARD, _RATIO)) or bool(re.fullmatch(_TEST, clause, re.I))
 
 
 def _rendered_test_title(clause):
@@ -149,10 +154,20 @@ def _rendered_test_title(clause):
     return None
 
 
+def _mentions_test_points(clause):
+    normalized = unicodedata.normalize("NFKC", clause)
+    return (_TEST_POINTS_PREFIX.match(normalized) is not None
+            or _RATIO_AWARD.match(normalized) is not None
+            or _TEST_AWARD.fullmatch(normalized) is not None)
+
+
 def declares_test_award(criterion):
     from backend.services.math_rubric_plan import _source_clauses
 
-    return bool(_test_award_clauses(_source_clauses(criterion or "")))
+    clauses = _source_clauses(criterion or "")
+    # A stated test budget still needs review when its condition cannot be
+    # represented. A new question must not silently fall back to prose.
+    return any(_mentions_test_points(clause) for clause in clauses) or bool(_test_award_clauses(clauses))
 
 
 def has_test_award(plan):
@@ -180,8 +195,7 @@ def compile_test_award_edit(problem, *, previous=None):
     sources = [quote for quote, _, _ in awards]
     if (len(suite) != 1 or len(set(sources)) != len(sources) or len(sources) < 2
             or not suite.keys() <= set(sources) or floors
-            or any(_TEST_AWARD.fullmatch(unicodedata.normalize("NFKC", quote))
-                   for quote in sources if quote not in suite)
+            or any(_mentions_test_points(quote) for quote in sources if quote not in suite)
             or any(mode != "points" or points <= 0 for _, mode, points in awards)
             or sum((points for _, _, points in awards), Decimal(0)) != total
             or any(clause not in sources and clause not in suite.values()

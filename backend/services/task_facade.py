@@ -5981,8 +5981,11 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                     problem_from_question(question), previous=prior_programming_plan,
                 )
             except ValueError as exc:
-                raise ValidationError("Give one proportional test award and explicit code points that add up to the maximum.",
-                                      code="invalid_structured_rubric") from exc
+                raise ValidationError(
+                    "State test and code points that add up to the maximum. For example: "
+                    "Tests are worth 6 points, proportional to the fraction passed. Correct code: 4 points.",
+                    code="invalid_programming_test_award",
+                ) from exc
         if programming_draft is not None:
             presentation["rubric_draft"] = retarget_draft(
                 programming_draft, problem_from_question(question),

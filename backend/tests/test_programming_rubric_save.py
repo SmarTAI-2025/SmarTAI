@@ -15,17 +15,20 @@ from backend.tests.test_programming_reference_review import frozen_problem, grad
 from backend.tests.test_task_background_workflows import _seed_task
 
 
-async def setup_question(*, stale=False):
+async def setup_question(*, stale=False, funded=True):
     row = source()
     row["reference_answer"] = "Return the square of the input integer."
     row = _rows([row])["q1"]
-    cases = await resolve_generated_outputs(row, inputs())
-    problem = frozen_problem(row, [case.model_dump(mode="json") for case in cases])
-    if stale:
-        problem._math_rubric_source["presentation"]["rubric_draft"]["content_fingerprint"] = "0" * 64
+    if funded:
+        cases = await resolve_generated_outputs(row, inputs())
+        problem = frozen_problem(row, [case.model_dump(mode="json") for case in cases])
+        row = problem._math_rubric_source["presentation"]
+        if stale:
+            row["rubric_draft"]["content_fingerprint"] = "0" * 64
+    else:
+        row["criterion"] = "代码正确得 10 分。"
     owner, task = _seed_task()
-    task_facade._replace_draft_questions(task, owner,
-        {"q1": problem._math_rubric_source["presentation"]}, "prepared.json")
+    task_facade._replace_draft_questions(task, owner, {"q1": row}, "prepared.json")
     client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
     return owner, task, client, f"/tasks/{task}/problems/q1"
 
@@ -100,13 +103,16 @@ async def test_reference_edit_does_not_revalidate_an_already_stale_draft():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("points, template", [
-    (6, "测试占 {tests:g} 分，按通过比例算。算法正确得 {code:g} 分。"),
-    (7.5, "测试样例占 {tests:g} 分，按测试通过率计分。代码正确得 {code:g} 分。"),
-    (6, "Tests are worth {tests:g} points, proportional to the fraction passed. Correct algorithm: {code:g} points."),
+@pytest.mark.parametrize("points, template, funded", [
+    (6, "测试占 {tests:g} 分，按通过比例算。算法正确得 {code:g} 分。", True),
+    (7.5, "测试样例占 {tests:g} 分，按测试通过率计分。代码正确得 {code:g} 分。", True),
+    (6, "Tests are worth {tests:g} points, proportional to the fraction passed. Correct algorithm: {code:g} points.", True),
+    (6, "按测试通过比例给 {tests:g} 分，代码正确得 {code:g} 分。", False),
+    (6, "按测试通过比例给 {tests:g} 分，代码正确得 {code:g} 分。", True),
+    (6, "测试占 {tests:g} 分，按通过比例算。代码可读性得 {code:g} 分。", False),
 ])
-async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monkeypatch, points, template):
-    owner, task, client, url = await setup_question()
+async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monkeypatch, points, template, funded):
+    owner, task, client, url = await setup_question(funded=funded)
     before = saved_problem(owner, task)
     code_points = 10 - points
     criterion = template.format(tests=points, code=code_points)
@@ -126,7 +132,8 @@ async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monk
     questions = assignment_repository.list_questions(task, teacher_id=owner)
     assert task_facade._question_review_blockers(questions) == ["question_review_blocked"]
 
-    repaired = client.put(url, json={"test_cases": [case.model_dump(mode="json") for case in before.test_cases]})
+    cases = before.test_cases or await resolve_generated_outputs(source(), inputs())
+    repaired = client.put(url, json={"test_cases": [case.model_dump(mode="json") for case in cases]})
     assert repaired.status_code == 200, repaired.text
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
     after = saved_problem(owner, task)
@@ -147,6 +154,7 @@ async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monk
         StudentAnswerInfo(q_id="q1", number="1", type="编程题",
                           content="def square(x): return x*x if x < 7 else -1"))
     assert vote.error_kind is None, vote.comment
+    assert len(provider.calls) == 1  # Only grading, even when PR348 is present.
     assert vote.programming_evidence.generated_tests.passed == 7
     assert vote.steps[0].score == pytest.approx(points * .7)
     assert vote.score == pytest.approx(code_points + points * .7)
@@ -167,7 +175,7 @@ async def test_unrepresentable_edit_preserves_previous_rubric_and_revision(crite
     revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
     response = client.put(url, json={"criterion": criterion, "expected_workflow_revision": revision})
     assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] == "invalid_structured_rubric"
+    assert response.json()["error"]["code"] == "invalid_programming_test_award"
     after = saved_problem(owner, task)
     assert after.criterion == before.criterion and saved_draft(after) == saved_draft(before)
     assert workflow_repository.get_workflow(task, owner_id=owner).workflow_revision == revision
@@ -215,3 +223,23 @@ async def test_explicitly_removing_test_points_releases_the_confirmation_gate():
     assert response.status_code == 200, response.text
     assert saved_draft(saved_problem(owner, task)) is None
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("criterion", [
+    "测试占 6 分，全部通过才给分。代码正确得 4 分。",
+    "测试占 6 分。代码正确得 4 分。",
+    "按测试通过比例给 6 分但须全部通过，代码正确得 4 分。",
+    "测试项满分 6 分，仅全过得分。代码正确得 4 分。",
+    "单元测试占总分 60%，仅全过得分。代码正确得 4 分。",
+])
+async def test_uncompilable_test_budget_on_fresh_question_is_rejected(criterion):
+    owner, task, client, url = await setup_question(funded=False)
+    before = saved_problem(owner, task)
+    revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
+    response = client.put(url, json={"criterion": criterion, "expected_workflow_revision": revision})
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == "invalid_programming_test_award"
+    assert "Tests are worth 6 points" in response.json()["error"]["message"]
+    assert saved_problem(owner, task).criterion == before.criterion
+    assert workflow_repository.get_workflow(task, owner_id=owner).workflow_revision == revision
