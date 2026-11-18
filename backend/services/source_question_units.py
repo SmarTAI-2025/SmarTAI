@@ -27,10 +27,8 @@ NUMBERED_QUESTION_HEADING = re.compile(
 # Single integers and ordinary decimals are not section-qualified labels.
 QUALIFIED_QUESTION_HEADING = re.compile(
     r"(?m)^[ \t]*(?P<number>\d+(?:\.\d+){2,})"
-    r"(?:[ \t]*[:：、][ \t]*|\.(?:[ \t]+|$)|[ \t]+|$)(?P<title>[^\n]*)$"
+    r"(?:[ \t]*[:：、][ \t]*|\.(?:[ \t]+|$)|[ \t]+|(?=[（(])|$)(?P<title>[^\n]*)$"
 )
-
-CONTINUATION_TITLE = re.compile(r"(?i)^[ \t]*[（(][ \t]*(?:续|continued)[ \t]*[）)]")
 
 
 def question_headings(text: str, *, numbered=False, qualified=False):
@@ -95,7 +93,8 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             previous = (key, page)
         for index, match in enumerate(matches):
             number = match.group("number")
-            if known_keys is not None and number_key(number) not in known_keys:
+            key = number_key(number)
+            if known_keys is not None and key not in known_keys:
                 continue
             following = matches[index + 1] if index + 1 < len(matches) else None
             end = following.start() if following else len(text)
@@ -105,10 +104,15 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             next_known = next_key is not None and (known_keys is None or next_key in known_keys)
             final = following is None and ((source_complete and len(groups) == 1)
                                            or group[-1] == source_end_page)
-            # If this run starts after a gap, a continuation label cannot
-            # establish the opening. A visible opening would own the span above.
-            missing_opening = check_opening and group[0] > 1 and CONTINUATION_TITLE.match(match.group("title"))
-            closed = (next_known or final) and not missing_opening
+            # After a gap, the first heading could repeat the number of a
+            # cut-off answer. Require a transition from a different known
+            # question within the same run of read pages to prove an opening.
+            previous_key = number_key(matches[index - 1].group("number")) if index else None
+            has_opening = (not check_opening or group[0] == 1 or (
+                previous_key is not None and previous_key != key
+                and (known_keys is None or previous_key in known_keys)
+            ))
+            closed = has_opening and (next_known or final)
             body = text[match.start():end].strip()
             records.append(SourceQuestionUnit(number, body,
                 tuple(page for page, start, stop in offsets if stop > match.start() and start < end),

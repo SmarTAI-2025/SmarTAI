@@ -428,19 +428,21 @@ async def test_pdf_page_gap_blocks_only_open_or_missing_answers_after_manual_han
     after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     answers = {a["q_id"]: a for a in after["student_data"]["S1"]["stu_ans"]}
     assert calls == [["q1", "q2", "q3", "q4", "q5"]]
-    assert not answers["q1"]["flag"] and not answers["q4"]["flag"]
+    assert not answers["q1"]["flag"]
     assert answers["q2"]["flag"] == ["unclear_text"]
     assert answers["q3"]["content"] == "An opening fragment" and not answers["q5"]["content"]
-    for q_id in ("q3", "q5"):
+    for q_id in ("q3", "q4", "q5"):
         assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers[q_id]["flag"])
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("continued_heading", "next_answer"), [
     ("1.1.29（续）", True),
-    ("1.1.29 （续）", True),
-    ("1.1.29 （续）", False),
-    ("Question 1.1.29: (continued)", False),
+    ("1.1.29（续上页）", True),
+    ("1.1.29 （续上页）", True),
+    ("1.1.29 （续上页）", False),
+    ("Question 1.1.29: (continued)", True),
+    ("Question 1.1.29: Proof ending", False),
 ])
 async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
     monkeypatch, continued_heading, next_answer,
