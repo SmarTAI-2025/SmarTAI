@@ -2,11 +2,14 @@
 from backend.tests.rubric_fixtures import add_reviewed_question
 
 import asyncio
+import io
+import zipfile
 from types import SimpleNamespace
 
 import pytest
 
 from backend.db import assignment_repository, workflow_repository
+from backend.domain.errors import RecognitionError
 from backend.services import task_facade
 from backend.services.submission_manual_review import continue_manually
 from backend.services.task_execution import stop_task_run
@@ -23,6 +26,48 @@ def _numbered_task():
     add_reviewed_question(task, teacher_id=owner, q_id="q1", order_index=0,
         number="1", type="concept", stem="A question", criterion="Award 10 points", max_score=10)
     return owner, task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stem", ["全体_2026001234_测试学生_3093", "a" * 170])
+async def test_failed_pdf_handoff_uses_filename_for_both_identity_fields(monkeypatch, stem):
+    owner, task = _numbered_task()
+    registry = _registry(monkeypatch, _response)
+    name = f"{stem}.PDF"
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w") as archive:
+        archive.writestr(f"first/{name}", pdf(["First scan"]))
+        archive.writestr(f"second/{name}", pdf(["Second scan"]))
+        archive.writestr("S002_Example.txt", "Text submission")
+
+    async def read(**_kwargs):
+        raise RecognitionError("image_recognition_unconfirmed")
+
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="submissions.zip", content=body.getvalue(), content_type="application/zip", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == "error"
+    flagged = {row["file_name"] for row in before["submission_sources"] if row["requires_identity_review"]}
+    assert flagged == {f"first/{name}", f"second/{name}"}
+    assert all(row["status"] == "failed" for row in before["submission_sources"])
+
+    await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+        expected_revision=before["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner)
+    label = f"{stem[:156]}.PDF"
+    students = {student["source_filename"]: student for student in after["student_data"].values()}
+    first, second = students[f"first/{name}"], students[f"second/{name}"]
+    assert first["stu_id"] == first["stu_name"] == second["stu_name"] == label
+    assert second["stu_id"] == f"{label[:151]}-{second['source_id'][-8:]}"
+    for student in (first, second):
+        assert student["identity_status"] == "needs_review"
+        assert student["stu_ans"][0]["content"] == ""
+        assert "recognition_manual_pending" in student["stu_ans"][0]["flag"]
+    assert students["S002_Example.txt"]["stu_id"] == "S002"
+    assert students["S002_Example.txt"]["stu_name"] == "Example"
+    registry.provider.ainvoke.assert_not_awaited()
 
 
 @pytest.mark.asyncio

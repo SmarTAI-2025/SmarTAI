@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import type { Locale } from "@/i18n/messages";
+import { messages, type Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
 import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "@/types";
@@ -168,6 +168,9 @@ function SourceOutcomeRow({ source, locale, requiredOnly }: { source: Submission
             </span>
           </div>
           <p className="mt-1 text-xs font-semibold text-foreground">{copy.title}</p>
+          {source.requires_identity_review ? (
+            <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">{messages[locale].submissionReviewQueueIdentity}</p>
+          ) : null}
           <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{copy.description}</p>
           {copy.nextStep ? (
             <p className="mt-1 text-[11px] font-medium leading-5 text-foreground">

@@ -54,6 +54,20 @@ class PreparedSubmissionSource:
     whole_source: bool = True
 
 
+def failed_pdf_without_identity(result: source_outcome_repository.WorkflowSourceResult) -> bool:
+    outcome = result.outcome
+    return (
+        result.source.content_type == "application/pdf"
+        and result.source.original_name.lower().endswith(".pdf")
+        and outcome is not None
+        and outcome.status == "parse_failed"
+        and outcome.failure_phase in {"ocr", "recognition", "structured_parse"}
+        and outcome.stable_error_code != "operation_cancelled"
+        and outcome.student_candidate is None
+        and outcome.matched_answer_count == 0
+    )
+
+
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
     """Keep reading uncertainty separate from student identity and correctness."""
     by_source = {source.source_id: source.recognition for source in sources if source.recognition}
