@@ -1,6 +1,7 @@
 """Settle an explicitly frozen aggregate test award without another model call."""
 from decimal import Decimal, ROUND_HALF_UP
 
+from backend.models import ScoreAward
 from backend.services.rubric_drafts import saved_draft
 from backend.tools.structured_llm import StructuredOutputInvalidError
 
@@ -73,9 +74,35 @@ def distinct_scoring_cases(problem, originals, cases):
 
 
 def suite_award(maximum, report):
+    return float(_suite_points(maximum, report.passed_count, report.total_count))
+
+
+def _suite_points(maximum, passed, total):
     budget = Decimal(str(maximum))
-    return float(min(budget, (budget * report.passed_count / report.total_count).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP)))
+    return min(budget, (budget * passed / total).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _suite_case_awards(maximum, run, language):
+    from backend.skills.programming_evidence import _failure_reason, _STUDENT_FAILURES
+
+    report = run.report
+    positions = (getattr(run, "domain_review", None) or {}).get("positions")
+    subtotal, passed = Decimal(0), 0
+    awards, failed = [], []
+    for index, result in enumerate(report.results):
+        number = positions[index] if positions else index + 1
+        label = f"样例 {number}" if language == "zh" else f"Case {number}"
+        passed += int(result.passed)
+        points = _suite_points(maximum, passed, report.total_count)
+        if not result.passed:
+            reason = _STUDENT_FAILURES[_failure_reason(result)][0 if language == "zh" else 1]
+            label = f"{label}（{reason}）" if language == "zh" else f"{label} ({reason})"
+            failed.append(label)
+        # Allocate display rounding cumulatively so the case awards match the suite subtotal.
+        awards.append(ScoreAward(item_id=f"case-{number}", desc=label,
+                                 points=float(points - subtotal), is_correct=result.passed))
+        subtotal = points
+    return awards, failed
 
 
 def settle_test_award(output, rows, run, language):
@@ -89,6 +116,7 @@ def settle_test_award(output, rows, run, language):
         if award.max_points != step.total_pts:
             raise StructuredOutputInvalidError("Preserve each frozen programming item budget.")
         award.part_id, award.item_id = part.id, step.id
+        award.awards = award.deductions = None
         if step.test_suite:
             award.score = suite_award(step.total_pts, run.report)
             award.is_correct = award.score == step.total_pts
@@ -96,5 +124,9 @@ def settle_test_award(output, rows, run, language):
             award.desc = (f"测试通过 {run.report.passed_count}/{run.report.total_count}，本项得 {award.score:g}/{step.total_pts:g} 分。"
                           if language == "zh" else
                           f"Tests passed {run.report.passed_count}/{run.report.total_count}; awarded {award.score:g}/{step.total_pts:g} points.")
+            award.awards, failed = _suite_case_awards(step.total_pts, run, language)
+            if failed:
+                award.desc += (" 失败样例：" + "、".join(failed) if language == "zh"
+                               else " Failed cases: " + ", ".join(failed) + ".")
     output.steps = [awards[index] for index in sorted(awards)]
     output.score = float(sum((Decimal(str(step.score)) for step in output.steps), Decimal(0)))

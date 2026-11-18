@@ -25,7 +25,9 @@ from backend.models import ProblemInfo, StudentAnswerInfo, TestCase, is_programm
 from pydantic import ValidationError
 from backend.services.grading_checkpoints import CheckpointWriteError, current_checkpoints
 from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
-from backend.services.programming_submission_mapping import C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, has_markup_fence
+from backend.services.programming_submission_mapping import (
+    C_FAMILY_FLAG, NATIVE_LANGUAGES, PYTHON_FLAG, SOURCE_LANGUAGE_FLAGS, has_markup_fence,
+)
 from backend.services.programming_test_contract import has_function_only_contract, native_standard_supported
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
@@ -183,10 +185,17 @@ def programming_run(registry, grading_setup):
         _current.reset(token)
 
 
-def _source(content):
+def _source(content, *, question_number=None):
     # Remove only a single enclosing markup fence. A source file, including
     # leading indentation or comments containing backticks, stays byte-for-byte.
-    fenced = re.fullmatch(r"\s*```(python|py|c\+\+|cpp|c|java)?[^\S\n]*\r?\n(.*?)^[ \t]*```\s*", content,
+    candidate = content
+    if question_number:
+        from backend.services.teacher_score_constraints import normalize_question_number
+        heading, _, body = content.lstrip().partition("\n")
+        label = re.sub(r"\s*[-–—:：]\s*(?:programming(?: question)?|编程题)\s*$", "", heading, flags=re.I)
+        if normalize_question_number(label) == normalize_question_number(question_number):
+            candidate = body
+    fenced = re.fullmatch(r"\s*```(python|py|c\+\+|cpp|c|java)?[^\S\n]*\r?\n(.*?)^[ \t]*```\s*", candidate,
                           flags=re.DOTALL | re.MULTILINE | re.IGNORECASE)
     language, source = fenced.groups() if fenced else (None, content)
     if has_markup_fence(source, python=(language or "python").lower() in {"python", "py"}):
@@ -556,7 +565,7 @@ async def evidence_for_answer(*, problem: ProblemInfo, answer: StudentAnswerInfo
     from backend.skills.programming import _detect_language
     state = _current.get() or ProgrammingRun(provider)
     try:
-        code = _source(answer.content)
+        code = _source(answer.content, question_number=problem.number if not set(answer.flag) & SOURCE_LANGUAGE_FLAGS else None)
     except ValueError:
         return ProgrammingEvidence("unavailable", answer.content, [], reason="programming_mapping_invalid")
     if "recognition_manual_pending" in answer.flag:
