@@ -51,6 +51,9 @@ _UNSUPPORTED = re.compile(
 _SCORING_ONLY = re.compile(
     r"(?:award )?correctness(?: and (?:method|readability))?|correct results|exact output|readability|numerical stability|"
     r"(?:结果|算法)?正确(?:性)?|preserve whitespace|accept equivalent implementations|"
+    r"(?:算法|代码|实现)正确(?:性)?\s*(?:得|占|计)\s*\d+(?:\.\d+)?\s*分|"
+    r"correct (?:algorithm|code|implementation)(?: in the submitted source)?"
+    r"(?:\s*:\s*\d+(?:\.\d+)?\s*points?)?|"
     r"(?:award\s+)?\d+(?:\.\d+)?(?: points)? for (?:the correct (?:sum|solution)|"
     r"satisfying the question|reading input|all correct outputs)|"
     r"(?:award\s+)?correctness according to the teacher's rule|"
@@ -334,7 +337,7 @@ def _value_constraint(part, values, names, stdin):
 
 def input_domain(problem, case):
     """Return 'allowed', 'outside', or 'unknown' for a supplemental case only."""
-    from backend.services.programming_rubric import domain_criterion
+    from backend.services.programming_rubric import domain_criterion, is_test_scoring_clause
     stem = problem.stem or ""
     criterion = domain_criterion(problem)
     if len(stem) + len(criterion or "") > 16384:
@@ -482,7 +485,8 @@ def input_domain(problem, case):
             tested.update(values)
             continue
         if rubric:
-            unknown |= _SCORING_ONLY.fullmatch(part) is None
+            scoring = re.sub(r"^-\s*\[\d+(?:\.\d+)?\s*(?:分|points?)\]\s*", "", part, flags=re.I)
+            unknown |= _SCORING_ONLY.fullmatch(scoring) is None and not is_test_scoring_clause(scoring)
             continue
         if _output_only(part):
             continue

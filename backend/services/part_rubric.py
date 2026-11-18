@@ -1003,6 +1003,12 @@ def validate_generated_step_granularity(rules):
         )
 
 
+TEST_SUITE_FORMULA = {
+    "zh": "（本项得分 = 本项满分 × 通过数 ÷ 有效测试数；整组测试计一项）",
+    "en": " (award = available points × passed / valid tests; the entire suite is one item)",
+}
+
+
 def render_parts(rubric, language="zh", *, full_policy=False):
     zh = language == "zh"
     unit = "分" if zh else " points"
@@ -1024,7 +1030,7 @@ def render_parts(rubric, language="zh", *, full_policy=False):
         for step in part.steps:
             entry = f"- {prefix}[{step.total_pts:g}{unit}] {step.criterion}"
             if step.test_suite:
-                entry += "（本项得分 = 本项满分 × 通过数 ÷ 有效测试数；整组测试计一项）" if zh else " (award = available points × passed / valid tests; the entire suite is one item)"
+                entry += TEST_SUITE_FORMULA["zh" if zh else "en"]
             if step.required_conditions:
                 entry += "（" + "；".join(step.required_conditions) + "）" if zh else " (" + "; ".join(step.required_conditions) + ")"
             if full_policy and not step.test_suite:
