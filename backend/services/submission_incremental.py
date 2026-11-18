@@ -5,8 +5,9 @@ import hashlib
 import re
 from dataclasses import replace
 
-from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 from backend.services.programming_submission_mapping import native_source
+from backend.services.question_structure import _PURE_LABEL_RE
+from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 
 
 def merge_parse_repair(previous, current, question_ids, *, problems):
@@ -186,8 +187,21 @@ def split_submission_question_units(source, problems, target_ids=None):
 SOURCE_OPENING_QUOTE_LIMIT = 320
 
 
+def matches_source_opening(candidate: tuple[str, str | None], content: str, quote: str) -> bool:
+    """Compare the opening text, allowing an optional matching subpart label."""
+    source_prefix, part_label = candidate
+    content = " ".join(content.split())
+    quote = " ".join(quote.split())
+    if part_label:
+        label = re.escape(part_label[1:-1])
+        matching_label = re.compile(rf"^[（(]{label}[）)]\s*", re.IGNORECASE)
+        content = matching_label.sub("", content, count=1)
+        quote = matching_label.sub("", quote, count=1)
+    return bool(quote and source_prefix.startswith(quote) and content.startswith(quote))
+
+
 def answer_boundaries_on_read_pages(pages, problems, coverage):
-    """Return closed questions and source prefixes needing opening evidence."""
+    """Return closed questions and (source prefix, heading subpart) pairs needing evidence."""
     if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
         return set(), {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
@@ -209,13 +223,16 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
             closed.add(q_id)
             continue
         heading = question_headings(unit.text, qualified=True)[0]
-        # An annotation attached to the heading can delimit the preceding
-        # answer, but its following text alone cannot certify an opening.
-        if re.fullmatch(r"\([^()]*\)|（[^（）]*）", heading.group("title").strip()):
+        # A continuation annotation can delimit the preceding answer.
+        # A standard subpart label still allows separate opening evidence.
+        title = heading.group("title").strip()
+        part = _PURE_LABEL_RE.fullmatch(title)
+        if not part and re.fullmatch(r"\([^()]*\)|（[^（）]*）", title):
             continue
-        prefix = " ".join(unit.text[heading.start("title"):].split())[:SOURCE_OPENING_QUOTE_LIMIT]
+        start = heading.end("title") if part else heading.start("title")
+        prefix = " ".join(unit.text[start:].split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
-            openings[q_id] = prefix
+            openings[q_id] = (prefix, part.group("label") if part else None)
     return closed, openings
 
 

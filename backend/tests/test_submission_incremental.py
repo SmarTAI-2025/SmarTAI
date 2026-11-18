@@ -499,16 +499,20 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence"), [
-    (True, False, "valid"),
-    (True, True, "valid"),
-    (True, True, "missing"),
-    (True, False, "unbound"),
-    (True, False, "missing_from_transcription"),
-    (False, False, "missing"),
+@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence", "part_label"), [
+    (True, False, "valid", ""),
+    (True, True, "valid", ""),
+    (True, True, "missing", ""),
+    (True, False, "unbound", ""),
+    (True, False, "missing_from_transcription", ""),
+    (False, False, "missing", ""),
+    (True, False, "valid", "(a)"),
+    (True, True, "labelled", "(a)"),
+    (True, False, "label_only", "(a)"),
+    (True, False, "wrong_label", "(a)"),
 ])
 async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
-    monkeypatch, unread, continuation_first, opening_evidence,
+    monkeypatch, unread, continuation_first, opening_evidence, part_label,
 ):
     import fitz
 
@@ -520,9 +524,14 @@ async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
     body = "Pair every element with its inverse. One nonidentity element must be self-inverse."
     full_answer = f"{opening} {body}"
     saved_answer = body if opening_evidence == "missing_from_transcription" else full_answer
+    if opening_evidence in {"labelled", "label_only", "wrong_label"}:
+        saved_answer = f"{part_label}\n{saved_answer}"
+    quotes = {"unbound": "An invented opening.", "labelled": f"{part_label} {opening}",
+              "label_only": part_label, "wrong_label": f"(b) {opening}"}
     proof_tail = "By the identity already established, the direct product is abelian."
     partial = f"1.1.29（续）\n{proof_tail}"
-    full = f"1.1.31\n{full_answer}"
+    heading = f"1.1.31 {part_label}".rstrip()
+    full = f"{heading}\n{full_answer}"
     pages = {1: "Name: Student One\nStudent ID: S1", 2: "1.1.29\nThe full direct-product proof."}
     pages[3] = "\n".join((partial, full) if continuation_first else (full, partial)) if unread else full
     with fitz.open() as document:
@@ -555,7 +564,7 @@ async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
                 # The explicit continuation heading must not certify this tail.
                 answer["source_opening"] = proof_tail
             elif number == "1.1.31" and opening_evidence != "missing":
-                answer["source_opening"] = "An invented opening." if opening_evidence == "unbound" else opening
+                answer["source_opening"] = quotes.get(opening_evidence, opening)
             answers.append(answer)
         return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=answers)))
 
@@ -573,7 +582,7 @@ async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
     after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     answers = {answer["number"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
     assert answers["1.1.31"]["content"] == saved_answer
-    assert bool(answers["1.1.31"]["flag"]) == (unread and opening_evidence != "valid")
+    assert bool(answers["1.1.31"]["flag"]) == (unread and opening_evidence not in {"valid", "labelled"})
     if unread:
         assert answers["1.1.29"]["content"] == proof_tail
         assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["1.1.29"]["flag"])

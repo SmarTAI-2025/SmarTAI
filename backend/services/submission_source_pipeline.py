@@ -53,7 +53,7 @@ class PreparedSubmissionSource:
     recognition: dict | None = None
     whole_source: bool = True
     closed_question_ids: frozenset[str] = frozenset()
-    opening_candidates: dict[str, str] | None = None
+    opening_candidates: dict[str, tuple[str, str | None]] | None = None
 
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
