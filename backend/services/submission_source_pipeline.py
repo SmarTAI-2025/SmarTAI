@@ -53,6 +53,7 @@ class PreparedSubmissionSource:
     recognition: dict | None = None
     whole_source: bool = True
     closed_question_ids: frozenset[str] = frozenset()
+    opening_candidates: dict[str, str] | None = None
 
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
@@ -66,10 +67,18 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
             continue
         summary = source.recognition
         closed = getattr(source, "closed_question_ids", ())
-        verified = set(verified_question_ids) | {
-            answer["q_id"] for answer in result.student.get("stu_ans", [])
-            if answer["q_id"] in closed and answer.get("content", "").strip()
-        }
+        candidates = getattr(source, "opening_candidates", None) or {}
+        openings = (result.student.get("recognition") or {}).get("source_opening_hashes", {})
+        verified = set(verified_question_ids)
+        for answer in result.student.get("stu_ans", []):
+            q_id, content = answer["q_id"], answer.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            if q_id in closed or (
+                q_id in candidates and q_id in openings
+                and openings[q_id] == hashlib.sha256(content.encode()).hexdigest()
+            ):
+                verified.add(q_id)
         student = {**result.student, "recognition": {**result.student.get("recognition", {}), **summary,
             **({"complete_question_ids": sorted(verified)} if verified else {})}}
         # File assessments stay in source diagnostics. Each parsed answer owns

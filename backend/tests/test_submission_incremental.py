@@ -472,7 +472,8 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
 
     async def invoke(messages):
         return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
-            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["number"]], flag=[])
+            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["number"]], flag=[],
+                 **({"source_opening": contents["1.1.31"]} if q["number"] == "1.1.31" else {}))
             for q in _questions(messages)
         ])))
 
@@ -495,6 +496,90 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
     assert not answers["q1"]["flag"]
     if next_answer:
         assert not answers["q4"]["flag"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence"), [
+    (True, False, "valid"),
+    (True, True, "valid"),
+    (True, True, "missing"),
+    (True, False, "unbound"),
+    (True, False, "missing_from_transcription"),
+    (False, False, "missing"),
+])
+async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
+    monkeypatch, unread, continuation_first, opening_evidence,
+):
+    import fitz
+
+    owner, task = _seed_task()
+    for index, number in enumerate(("1.1.29", "1.1.31"), 1):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    opening = "Let G be a finite group of even order."
+    body = "Pair every element with its inverse. One nonidentity element must be self-inverse."
+    full_answer = f"{opening} {body}"
+    saved_answer = body if opening_evidence == "missing_from_transcription" else full_answer
+    proof_tail = "By the identity already established, the direct product is abelian."
+    partial = f"1.1.29（续）\n{proof_tail}"
+    full = f"1.1.31\n{full_answer}"
+    pages = {1: "Name: Student One\nStudent ID: S1", 2: "1.1.29\nThe full direct-product proof."}
+    pages[3] = "\n".join((partial, full) if continuation_first else (full, partial)) if unread else full
+    with fitz.open() as document:
+        for page_text in pages.values():
+            page = document.new_page(width=900, height=350)
+            assert page.insert_textbox(fitz.Rect(20, 20, 880, 320), page_text, fontname="china-s", fontsize=10) > 0
+        pdf_bytes = document.tobytes()
+    calls = []
+
+    async def read(**kwargs):
+        with fitz.open(stream=kwargs["content"], filetype="pdf") as document:
+            assert document.page_count == 3 and "1.1.29" in document[1].get_text()
+            seen = {index: page.get_text().strip() for index, page in enumerate(document, 1) if not unread or index != 2}
+        await kwargs["on_pages"]([dict(page_number=page, text=value) for page, value in seen.items()])
+        coverage = {"processed_pages": list(seen), "failed_pages": [2] if unread else [],
+                    "unprocessed_pages": [], "total_pages": 3}
+        return SimpleNamespace(text="\n\n".join(seen.values()), recognition={
+            "error_code": "image_recognition_unconfirmed" if unread else None,
+            "coverage": coverage, "page_diagnostics": coverage,
+        })
+
+    async def invoke(messages):
+        calls.append(messages[0].content)
+        answers = []
+        for question in _questions(messages):
+            number = question["number"]
+            content = (proof_tail if unread else "The full direct-product proof.") if number == "1.1.29" else saved_answer
+            answer = dict(q_id=question["q_id"], number=number, type="concept", content=content, flag=[])
+            if number == "1.1.29" and unread:
+                # The explicit continuation heading must not certify this tail.
+                answer["source_opening"] = proof_tail
+            elif number == "1.1.31" and opening_evidence != "missing":
+                answer["source_opening"] = "An invented opening." if opening_evidence == "unbound" else opening
+            answers.append(answer)
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=answers)))
+
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.pdf", content=pdf_bytes, content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    task_state = task_facade.get_task(task_id=task, owner_id=owner)
+    if unread:
+        assert task_state["status"] == "error"
+        assert task_state["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+        await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                                expected_revision=task_state["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {answer["number"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
+    assert answers["1.1.31"]["content"] == saved_answer
+    assert bool(answers["1.1.31"]["flag"]) == (unread and opening_evidence != "valid")
+    if unread:
+        assert answers["1.1.29"]["content"] == proof_tail
+        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["1.1.29"]["flag"])
+    else:
+        assert not answers["1.1.29"]["flag"]
+    assert len(calls) == 1 and ("source_opening" in calls[0]) == unread
 
 
 @pytest.mark.asyncio

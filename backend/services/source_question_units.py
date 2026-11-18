@@ -104,19 +104,15 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             next_known = next_key is not None and (known_keys is None or next_key in known_keys)
             final = following is None and ((source_complete and len(groups) == 1)
                                            or group[-1] == source_end_page)
-            # After a gap, the first heading could repeat the number of a
-            # cut-off answer. Require a transition from a different known
-            # question within the same run of read pages to prove an opening.
-            previous_key = number_key(matches[index - 1].group("number")) if index else None
-            has_opening = (not check_opening or group[0] == 1 or (
-                previous_key is not None and previous_key != key
-                and (known_keys is None or previous_key in known_keys)
-            ))
-            closed = has_opening and (next_known or final)
+            closure = "next_heading" if next_known else "source_end" if final else "open"
+            if check_opening and group[0] > 1 and closure != "open":
+                # A label delimits text. After a gap it cannot certify a new
+                # opening, regardless of how many other labels preceded it.
+                closure = "unverified_opening"
             body = text[match.start():end].strip()
             records.append(SourceQuestionUnit(number, body,
                 tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
-                closed, ("next_heading" if next_known else "source_end") if closed else "open"))
+                closure in {"next_heading", "source_end"}, closure))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:

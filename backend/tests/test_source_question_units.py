@@ -30,20 +30,22 @@ def test_independent_complete_question_after_a_gap_can_finish_before_the_source(
     assert [(unit.number, unit.complete) for unit in units] == [("1", False), ("2", True), ("3", False)]
 
 
-def test_continued_answer_can_close_when_its_opening_is_on_contiguous_read_pages():
+def test_later_cross_page_answer_keeps_its_whole_visible_span_without_inferred_opening():
     pages = {1: "Question 1: Answer", 3: "Question 2: Earlier fragment",
              4: "Question 3: Opening", 5: "Question 3: （续）\nEnding"}
     units = source_question_units(pages, check_opening=True, source_end_page=5)
-    assert [(unit.number, unit.pages, unit.complete) for unit in units] == [
-        ("1", (1,), False), ("2", (3,), False), ("3", (4, 5), True),
+    assert [(unit.number, unit.pages, unit.closure) for unit in units] == [
+        ("1", (1,), "open"), ("2", (3,), "unverified_opening"), ("3", (4, 5), "unverified_opening"),
     ]
-    assert source_page_groups(pages, check_opening=True, source_end_page=5)[-1].complete
+    assert not source_page_groups(pages, check_opening=True, source_end_page=5)[-1].complete
 
 
-def test_unknown_heading_after_a_gap_does_not_prove_an_answer_starts_there():
+def test_known_and_unknown_headings_after_a_gap_do_not_prove_an_answer_starts_there():
     pages = {1: "Question 1: Answer", 3: "Question 99: Unrecognized label\nQuestion 2: Fragment\nQuestion 3: Full"}
     units = source_question_units(pages, check_opening=True, known_numbers={"1", "2", "3"}, source_end_page=3)
-    assert [(unit.number, unit.complete) for unit in units] == [("1", False), ("2", False), ("3", True)]
+    assert [(unit.number, unit.closure) for unit in units] == [
+        ("1", "open"), ("2", "unverified_opening"), ("3", "unverified_opening"),
+    ]
 
 
 def test_page_groups_keep_two_questions_in_each_request_and_close_after_lookahead():

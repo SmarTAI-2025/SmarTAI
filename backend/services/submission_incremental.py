@@ -1,8 +1,11 @@
 """Conservative answer boundaries and composition of independently saved units."""
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import replace
-from backend.services.source_question_units import QUESTION_HEADING, source_question_units
+
+from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 from backend.services.programming_submission_mapping import native_source
 
 
@@ -39,6 +42,8 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
     answers = {answer["q_id"]: dict(answer) for answer in student.get("stu_ans", [])}
     old_repairs = set((student.get("recognition") or {}).get("repair_question_ids", []))
     new_repairs = set((current.student.get("recognition") or {}).get("repair_question_ids", []))
+    openings = (student.get("recognition") or {}).get("source_opening_hashes", {})
+    incoming_openings = (current.student.get("recognition") or {}).get("source_opening_hashes", {})
     repair_fields = {q_id: invalid_fields(answer, old_repairs) for q_id, answer in answers.items()}
     model_reviews = set((student.get("recognition") or {}).get("model_review_question_ids", [])) & set(answers)
     incoming_reviews = set((current.student.get("recognition") or {}).get("model_review_question_ids", []))
@@ -91,6 +96,14 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
         "missing_question_ids": [q_id for q_id in question_ids if q_id not in answers],
         "identity_invalid_fields": sorted(identity_invalid),
         "model_review_question_ids": sorted(model_reviews & set(question_ids))}
+    if openings or incoming_openings:
+        # Only carry evidence for the exact transcription retained by repair.
+        student["recognition"]["source_opening_hashes"] = {
+            q_id: digest for q_id, answer in answers.items()
+            if q_id in question_ids and (q_id in openings or q_id in incoming_openings)
+            and (digest := hashlib.sha256(answer["content"].encode()).hexdigest())
+                in (openings.get(q_id), incoming_openings.get(q_id))
+        }
     # A repaired type does not validate the old answer content that we kept.
     # Matching review is independent of format retries: do not send more model
     # calls solely to clear this review marker.
@@ -170,10 +183,13 @@ def split_submission_question_units(source, problems, target_ids=None):
     return units or [(source, targets)]
 
 
-def closed_questions_on_read_pages(pages, problems, coverage):
-    """Verify both boundaries of a parsed answer within successfully read pages."""
+SOURCE_OPENING_QUOTE_LIMIT = 320
+
+
+def answer_boundaries_on_read_pages(pages, problems, coverage):
+    """Return closed questions and source prefixes needing opening evidence."""
     if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
-        return set()
+        return set(), {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
@@ -182,8 +198,25 @@ def closed_questions_on_read_pages(pages, problems, coverage):
     read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
-    return {q_id for unit in units if unit.complete
-            and (q_id := resolve_question_match(unit.number, unit.text, problems))}
+    closed, openings = set(), {}
+    for unit in units:
+        if not unit.complete and unit.closure != "unverified_opening":
+            continue
+        q_id = resolve_question_match(unit.number, unit.text, problems)
+        if not q_id:
+            continue
+        if unit.complete:
+            closed.add(q_id)
+            continue
+        heading = question_headings(unit.text, qualified=True)[0]
+        # An annotation attached to the heading can delimit the preceding
+        # answer, but its following text alone cannot certify an opening.
+        if re.fullmatch(r"\([^()]*\)|（[^（）]*）", heading.group("title").strip()):
+            continue
+        prefix = " ".join(unit.text[heading.start("title"):].split())[:SOURCE_OPENING_QUOTE_LIMIT]
+        if prefix:
+            openings[q_id] = prefix
+    return closed, openings
 
 
 def merge_source_answer_units(results, source, problems):
@@ -193,9 +226,11 @@ def merge_source_answer_units(results, source, problems):
         return results[0]
     first = students[0]
     student = {**first.student}
-    answers, model_reviews = {}, set()
+    answers, model_reviews, openings = {}, set(), {}
     for result in students:
-        unit_reviews = set((result.student.get("recognition") or {}).get("model_review_question_ids", []))
+        recognition = result.student.get("recognition") or {}
+        unit_reviews = set(recognition.get("model_review_question_ids", []))
+        openings.update(recognition.get("source_opening_hashes", {}))
         for answer in result.student.get("stu_ans", []):
             q_id = answer["q_id"]
             answers[q_id] = answer
@@ -205,6 +240,8 @@ def merge_source_answer_units(results, source, problems):
     student["stu_ans"] = [answers[q_id] for q_id in problems if q_id in answers]
     student["recognition"] = {**student.get("recognition", {}),
         "model_review_question_ids": sorted(model_reviews & set(problems))}
+    if openings:
+        student["recognition"]["source_opening_hashes"] = openings
     student.update(source_id=source.source_id, stored_file_id=source.stored_file_id,
                    source_filename=source.filename)
     failures = [result for result in results if result.status in {"parse_failed", "no_matching_answer"}]
