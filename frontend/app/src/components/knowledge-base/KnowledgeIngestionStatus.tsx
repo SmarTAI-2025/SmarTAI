@@ -8,7 +8,7 @@ import { listStageProviders } from "@/api/experts";
 import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
 import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
-import { workflowTimeoutNote } from "@/lib/workflowTimeouts";
+import { isWorkflowTimeout, workflowTimeoutNote } from "@/lib/workflowTimeouts";
 
 interface Coverage {
   summary: KnowledgeIngestionSummary;
@@ -72,7 +72,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [frontier, active, documentId, summary?.id, poll]);
   const effectiveStatus = summary?.status ?? status;
-  const limits = useWorkflowTimeouts();
+  const limits = useWorkflowTimeouts(isWorkflowTimeout(summary?.error_code));
   const label = summary?.error_code === "knowledge_wall_time_limit_reached" ? (zh ? "已超时，已完成内容保留" : "Timed out; completed content retained") : paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
     : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
     : effectiveStatus === "failed" ? (zh ? "处理未完成" : "Incomplete")

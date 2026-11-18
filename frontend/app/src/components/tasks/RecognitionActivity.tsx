@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { JobProgress, ProgressEvent, RecognitionRequestState } from "@/types/progress";
 import type { Locale } from "@/i18n/messages";
 import type { WorkflowTimeoutMinutes } from "@/types/health";
-import { workflowTimeoutNote } from "@/lib/workflowTimeouts";
+import { isWorkflowTimeout, workflowTimeoutNote } from "@/lib/workflowTimeouts";
 import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
 
 export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean, preparation = false, limits?: WorkflowTimeoutMinutes): string {
@@ -84,7 +84,7 @@ export function RecognitionRequestStatus({ progress, locale, stale = false }: { 
 
 /** Uses the existing bounded, durable progress messages; no new polling API. */
 export function RecognitionActivity({ progress, locale, incomplete = false, fill = false, summary }: { progress: JobProgress | null; locale: Locale; incomplete?: boolean; fill?: boolean; summary?: ReactNode }) {
-  const limits = useWorkflowTimeouts();
+  const limits = useWorkflowTimeouts(progress?.messages?.some((event) => isWorkflowTimeout(event.message)) ?? false);
   const list = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const zh = locale === "zh-CN";

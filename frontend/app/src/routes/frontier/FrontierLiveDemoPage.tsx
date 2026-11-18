@@ -49,6 +49,7 @@ import { PdfDocumentPreview } from "@/components/tasks/PdfDocumentPreview";
 import { recognitionEventText } from "@/components/tasks/RecognitionActivity";
 import type { WorkflowTimeoutMinutes } from "@/types/health";
 import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
+import { isWorkflowTimeout } from "@/lib/workflowTimeouts";
 import { gradingActivityText } from "@/components/tasks/GradingActivity";
 import { buildResultsModel, formatPercent, formatScore, problemLabel } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -94,7 +95,6 @@ function initialSteps(locale: Locale): RunStep[] {
 }
 
 export function FrontierLiveDemoPage() {
-  const limits = useWorkflowTimeouts();
   const { locale, t } = useI18n();
   const navigate = useNavigate();
   const gradingIntent = useGradingIntent();
@@ -102,6 +102,7 @@ export function FrontierLiveDemoPage() {
   const taskIdFromUrl = safeTaskId(searchParams.get("taskId"));
   const [taskId, setTaskId] = useState<string | null>(taskIdFromUrl);
   const [snapshot, setSnapshot] = useState<TaskStateSnapshot | null>(null);
+  const limits = useWorkflowTimeouts(isWorkflowTimeout(snapshot?.progress?.messages?.at(-1)?.message));
   const [steps, setSteps] = useState<RunStep[]>(() => initialSteps(locale));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string | null } | null>(null);

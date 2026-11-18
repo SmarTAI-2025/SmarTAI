@@ -11,6 +11,10 @@ const workflowTimeoutKinds: Readonly<Partial<Record<string, keyof WorkflowTimeou
   knowledge_wall_time_limit_reached: "knowledge_ingestion",
 };
 
+export function isWorkflowTimeout(errorCode: string | null | undefined): boolean {
+  return Boolean(errorCode && Object.hasOwn(workflowTimeoutKinds, errorCode));
+}
+
 export function workflowTimeoutNote(
   errorCode: string | null | undefined, locale: Locale, limits: WorkflowTimeoutMinutes | undefined,
 ): string {

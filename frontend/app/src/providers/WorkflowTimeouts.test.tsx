@@ -10,7 +10,23 @@ import { WorkflowTimeoutsProvider } from "./WorkflowTimeouts";
 vi.mock("@/api/health", () => ({ getHealthStatus: vi.fn() }));
 
 describe("workflow timeout notices", () => {
+  it("leaves the health query idle for regular recovery messages", () => {
+    vi.mocked(getHealthStatus).mockClear();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <MemoryRouter>
+          <WorkflowTimeoutsProvider>
+            <RecoverableActionState info={classifyRecoverableError("provider_timeout")} />
+          </WorkflowTimeoutsProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(getHealthStatus).not.toHaveBeenCalled();
+  });
+
   it("shows each configured limit from the public backend response", async () => {
+    vi.mocked(getHealthStatus).mockClear();
     vi.mocked(getHealthStatus).mockResolvedValue({
       status: "healthy", engine: "v2", memory_usage_mb: 1, cpu_percent: 0,
       workflow_timeout_minutes: {

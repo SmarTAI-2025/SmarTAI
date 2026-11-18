@@ -48,7 +48,7 @@ export function RecoverableActionState({
   locale?: Locale;
   className?: string;
 }) {
-  const limits = useWorkflowTimeouts();
+  const limits = useWorkflowTimeouts(Boolean(info.workflowTimeoutCode));
   const stopped = info.technicalDetails.some((item) => item.value === "operation_cancelled");
   // Diagnostic values still drive recovery above; only useful limits appear in the UI.
   const detailLabels = locale === "en-US"
