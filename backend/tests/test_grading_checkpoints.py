@@ -47,7 +47,7 @@ def test_failed_progress_only_counts_required_review_results(case, monkeypatch, 
     if programming:
         red.effective_score = red.ai_score = 8
         red.ai_synthesis_method = "single"
-        red.review_reasons = ["programming_ai_only"]
+        red.review_reasons = ["programming_code_review_only"]
         red.ai_expert_results = []
     monkeypatch.setattr(grades, "list_results_for_run", lambda *args, **kwargs: rows)
     with session_scope() as session:

@@ -33,7 +33,7 @@ it("filters advisory notes and rows before limiting to twenty required responses
 
 it("retains mandatory programming confirmation even when a score exists", () => {
   render(<GradingFailureDiagnostics locale="zh-CN" progress={{ grading_review: [{ student_id: "s1", q_id: "q1",
-    score: 8, max_score: 10, confidence: 1, review_reasons: ["programming_ai_only"], expert_results: [] }] } as unknown as JobProgress} />);
+    score: 8, max_score: 10, confidence: 1, review_reasons: ["programming_code_review_only"], expert_results: [] }] } as unknown as JobProgress} />);
   expect(screen.getByText("有 1 份作答需要关注，其中 0 份缺少有效分数")).toBeVisible();
   expect(screen.getByText(/需处理：/)).toBeVisible();
 });

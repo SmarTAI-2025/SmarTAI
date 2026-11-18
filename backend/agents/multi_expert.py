@@ -199,8 +199,7 @@ def _project_programming_result(correction: Correction, language: str) -> Correc
             correction.comment += "\n" + boundary
     for vote in votes:
         facts = vote.programming_evidence
-        if facts and facts.requires_human_review:
-            reason = programming_evidence_review_reason(facts.model_dump())
+        if facts and facts.requires_human_review and (reason := programming_evidence_review_reason(facts.model_dump())):
             correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
             correction.requires_human_review = True
     return correction

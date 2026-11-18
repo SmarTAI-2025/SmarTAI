@@ -415,10 +415,6 @@ class ProgrammingSkill(GradingSkill):
                     output_model=ProgrammingGradingOutput,
                     validate_output=validate_awards,
                 )
-                confidence = result.confidence
-                if (not evidence.teacher_tests.total and evidence.generated_tests.total >= 3
-                        and evidence.generated_tests.passed == 0):
-                    confidence = min(confidence, 0.5) if confidence is not None else None
                 # A second, freely generated summary can contradict a validated
                 # award and the executed cases. Present the same rubric judgments
                 # in the summary and detail views when the provider supplied them.
@@ -450,7 +446,7 @@ class ProgrammingSkill(GradingSkill):
                     evidence.safe_summary += "\n" + evidence.boundary_note
                 vote = normalize_expert_result(ExpertResult(
                     provider=self.provider.provider_id, score=result.score, max_score=result.max_score,
-                    confidence=confidence, comment=f"{comment}\n\n{evidence.safe_summary}",
+                    confidence=result.confidence, comment=f"{comment}\n\n{evidence.safe_summary}",
                     steps=result.steps, raw_output=raw.content, duration_ms=raw.duration_ms,
                     programming_evidence=evidence, knowledge_citations=kb_tool.citations(chunks),
                 ), problem.max_score)

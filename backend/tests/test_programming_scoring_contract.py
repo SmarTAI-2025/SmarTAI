@@ -175,7 +175,8 @@ async def test_selected_experts_share_one_execution_and_weighted_real_zero(monke
     assert sum(s.score for s in corr.steps) == corr.score
     assert sorted(e.score for e in corr.expert_results) == [0, 8]
     assert len({e.programming_evidence.evidence_id for e in corr.expert_results}) == 1
-    assert corr.requires_human_review and "programming_ai_only" in corr.review_reasons
+    assert "programming_ai_only" not in corr.review_reasons
+    assert all(e.programming_evidence.score_status == "final" for e in corr.expert_results)
     assert ("AI 生成用例通过 0/1" if language == "zh" else "AI-generated tests: passed 0/1") in corr.comment
     execute.assert_awaited_once()
 
@@ -279,11 +280,37 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
         with pytest.raises(ResultNotReleasable):
             grading_runs.release(teacher_id=teacher, run_id=run.id)
         assert not grading_runs.student_results(student_id=student, assignment_id=assignment.id)
-    elif scenario in {"ai_only_confirm", "ai_only_edit", "code_only", "entry_only", "teacher_deduction", "teacher_full", "later_expert", "later_sample"}:
+    elif scenario.startswith("ai_only"):
+        assert public["score"] == ai_score and row.result_status == "graded"
+        assert not row.requires_review and not row.review_reasons
+        assert evidence["score_status"] == "final" and evidence["generated_tests"]["total"] == 1
+        if scenario == "ai_only_edit":
+            from backend.db.models import GradeResultRecord
+
+            # Simulate a result produced before the provenance-only gate was removed.
+            with session_scope() as session:
+                record = session.get(GradeResultRecord, row.id)
+                record.result_status = "needs_review"
+                record.requires_review = record.initial_requires_review = True
+                record.review_reasons = record.initial_review_reasons = ["programming_ai_only"]
+                record.ai_expert_results = [{**row.ai_expert_results[0], "programming_evidence": {
+                    **evidence, "score_status": "provisional", "requires_human_review": True,
+                }}]
+            restored, = grading_repository.list_results_for_run(run.id)
+            assert restored.result_status == "graded" and not restored.review_reasons
+        assert not grading_runs.list_review_queue(assignment_id=assignment.id, teacher_id=teacher)
+        state = task_facade.finalization(**args)
+        assert state["ready_for_confirmation"] and state["required_review_count"] == 0
+        grading_runs.release(teacher_id=teacher, run_id=run.id)
+        task_facade.generate_artifacts(**args, expected_revision=state["workflow_revision"])
+        data, _, _ = task_facade.artifact_bytes(**args, version=1, artifact_id="grades_csv")
+        csv_row, = csv.DictReader(StringIO(data.decode("utf-8-sig")))
+        assert float(csv_row["q1_score"]) == ai_score
+    elif scenario in {"code_only", "entry_only", "teacher_deduction", "teacher_full", "later_expert", "later_sample"}:
         reason = {"code_only": "programming_code_review_only", "entry_only": "programming_interface_only",
                   "teacher_full": "programming_teacher_tests_failed_full_credit",
                   **dict.fromkeys(("teacher_deduction", "later_expert", "later_sample"), "programming_teacher_tests_passed_deduction"),
-                  }.get(scenario, "programming_ai_only")
+                  }[scenario]
         if scenario == "entry_only":
             assert evidence["primary_reason"] == "signature_mismatch" and evidence["teacher_tests"]["total"] == 1
         flagged = row.ai_expert_results[-1]["programming_evidence"]
@@ -315,12 +342,12 @@ async def exercise_review_and_release(monkeypatch, scenario, *, native=False):
         assert_blocked()
         queue = grading_runs.list_review_queue(assignment_id=assignment.id, teacher_id=teacher)
         assert [r.id for r in queue] == [row.id]
-        if scenario == "ai_only_edit":
+        if scenario == "code_only":
             grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=8, confirm=False)
             assert task_facade.finalization(**args)["ready_for_confirmation"]
             grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=ai_score, confirm=False)
             assert_blocked()  # Reverting to the provisional vote restores its original requirement.
-        confirmed = scenario in {"ai_only_confirm", "teacher_deduction", "later_expert"}
+        confirmed = scenario in {"teacher_deduction", "later_expert"}
         resolved = ai_score if confirmed else 8.5
         grading_repository.add_teacher_review(row.id, teacher_id=teacher, new_score=resolved,
                                              new_comment="Teacher decision", confirm=confirmed)
