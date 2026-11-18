@@ -78,6 +78,19 @@ def _truncated_locator_key(row):
     return None
 
 
+def _truncated_submission_read_keys(assembly):
+    batch = assembly.raw.read_batch if assembly is not None else None
+    if batch is None:
+        return []
+    return [
+        record.identity.key for unit, record in zip(batch.units, batch.provenance, strict=True)
+        if (unit.input_mode == "page_image" and unit.output_mapping == "single_region"
+            and record.origin == "dispatch" and record.artifact_id and not unit.submission_may_exist
+            and unit.candidate.finish_reason == "length"
+            and unit.requested_output_tokens == unit.candidate.output_tokens == 4096)
+    ]
+
+
 async def _storage_step(awaitable, *, response_only):
     if not response_only:
         return await awaitable
@@ -399,6 +412,11 @@ class RecognitionRunService:
             truncated_key = _truncated_locator_key(row)
             if request.purpose == "problems" and truncated_key:
                 retry_payload["truncated_locator_key"] = truncated_key
+            if (request.purpose == "submissions" and row.status == "needs_review"
+                    and caps is not None and caps.bounded_output_tokens):
+                restored = await self._restored(row, request, identity, status="needs_review")
+                if keys := _truncated_submission_read_keys(restored.assembly):
+                    retry_payload["truncated_read_keys"] = keys
             row, _ = await _storage_step(run_in_threadpool(
                 self.repository.create_operation, assignment_id=assignment_id, owner_id=authorized_owner_id,
                 operation_type=OPERATION_TYPE, input_hash=retry_hash, retry_existing=False,
@@ -492,6 +510,7 @@ class RecognitionRunService:
                 assembly = await RecognitionAgent(engine, capacity=self.capacity, progress=progress,
                                                    local_reader=local, call_service=calls,
                                                    truncated_locator_key=(row.payload or {}).get("truncated_locator_key"),
+                                                   truncated_read_keys=(row.payload or {}).get("truncated_read_keys", ()),
                                                    repair_admission=repair_admission,
                                                    elapsed_seconds=max(0, self.clock() - checkpoint.started_at)).recognize(
                     request, source_bytes, authorized_owner_id=authorized_owner_id, prompt_version=prompt_version,

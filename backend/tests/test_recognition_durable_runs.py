@@ -238,6 +238,44 @@ async def test_explicit_retry_reuses_successful_pages_without_replaying_on_refre
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("purpose,total_budget,retry_limit", [
+    ("submissions", 32768, 8192),
+    ("submissions", 6000, 6000),
+    ("problems", 32768, 4096),
+])
+async def test_explicit_retry_spends_more_only_on_a_truncated_submission_read(
+    tmp_path, purpose, total_budget, retry_limit,
+):
+    service, req, data, engine = runner(tmp_path, pdf=True, pages=2)
+    req = req.model_copy(update={"purpose": purpose, "policy": RecognitionPolicyV1(
+        force_visual=True, enable_repair=False, max_output_tokens=total_budget,
+    )})
+
+    async def read(unit):
+        engine.reads.append(unit)
+        truncated = unit.page_number == 2 and unit.max_output_tokens == 4096
+        return RecognitionCandidateV1(kind="vision", provider_route_id="selected", input_tokens=10,
+            status="empty" if truncated else "ok", text="" if truncated else f"Q{unit.page_number}. x = -2",
+            output_tokens=4096 if truncated else 2, finish_reason="length" if truncated else "stop")
+
+    engine.recognize = read
+    first = await run(service, req, data, engine)
+    assert first.status == "needs_review"
+    assert first.assembly.document.coverage.failed_pages == [2]
+    assert [unit.max_output_tokens for unit in engine.reads] == [4096, 4096]
+    assert (await run(service, req, data, engine)).operation_id == first.operation_id
+    args = dict(engine=engine, prompt_version="faithful-reader-v1", authorized_owner_id=req.source.owner_id,
+                retry_key="user-retry:1")
+    retried = await service.run(req, data, **args)
+    assert [(unit.page_number, unit.max_output_tokens) for unit in engine.reads] == [
+        (1, 4096), (2, 4096), (2, retry_limit)]
+    assert retried.assembly.raw.read_batch.provenance[0].origin == "cache_hit"
+    assert retried.assembly.document.coverage.failed_pages == ([] if purpose == "submissions" else [2])
+    assert (await service.run(req, data, **args)).operation_id == retried.operation_id
+    assert len(engine.reads) == 3
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("total_budget,retry_limit", [(32768, 16384), (12000, 7903)])
 async def test_manual_retry_increases_only_the_exact_stored_truncated_locator(tmp_path, total_budget, retry_limit):
     from backend.tests.test_recognition_agent import Engine

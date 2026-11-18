@@ -78,6 +78,7 @@ describe("OCR review labels", () => {
   });
   it("distinguishes required review from a claim of low accuracy", () => {
     expect(formatSubmissionFlag("recognition_needs_review", "zh-CN")).toBe("识别结果需对照原件核对");
+    expect(formatSubmissionFlag("recognition_matching_review", "zh-CN")).toBe("请对照学生作答原文件，确认该题对应的题号。");
     expect(formatSubmissionFlag("external_annotation_present", "en-US")).toContain("not student answers");
     expect(formatSubmissionFlag("authorship_uncertain", "zh-CN")).toContain("归属不明");
     expect(formatSubmissionFlag("unfamiliar observation", "zh-CN")).toBe("建议对照原文件核对作答。");
