@@ -99,26 +99,39 @@ async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling()
 
 
 @pytest.mark.asyncio
-async def test_explicit_show_that_still_audits_a_question_classified_as_concept():
-    stem = r"For $x$ an element in $G$ show that $x$ and $x^{-1}$ have the same order."
+@pytest.mark.parametrize("stem,criteria", [
+    (
+        "证明系统的可靠性与完备性有什么区别？请各举一个例子",
+        (
+            "解释可靠性（可推导的结论在语义上有效），并给一个恰当的例子。",
+            "解释完备性（语义上有效的结论均可推导），并给一个恰当的例子。",
+        ),
+    ),
+    (
+        r"For $x$ an element in $G$ show that $x$ and $x^{-1}$ have the same order.",
+        ("Show finite orders coincide.", "Show infinite orders coincide."),
+    ),
+])
+async def test_concept_question_does_not_infer_proof_audit_from_stem(stem, criteria):
     proposal = {
         "part_rubric": {
             "total_pts": 10, "parts": [{
                 "id": "p1", "total_pts": 10, "alternative": {"deduct_per_error": 2},
                 "steps": [
-                    {"id": "finite", "criterion": "Show finite orders coincide.", "total_pts": 5},
-                    {"id": "infinite", "criterion": "Show infinite orders coincide.", "total_pts": 5},
+                    {"id": "s1", "criterion": criteria[0], "total_pts": 5},
+                    {"id": "s2", "criterion": criteria[1], "total_pts": 5},
                 ],
             }],
         },
     }
     response = json.dumps({"candidates": [{"target_id": "q1:criterion", "rubric_definition": proposal}]})
-    provider = Provider([response, audit("inconsistent", "Finite case needs both implications.",
-                                        bundled_steps=["finite"])])
-    rejected = await generate(provider, reference=False, stem=stem, question_type="概念题", allow_partial=True)
-    assert rejected == [] and len(provider.calls) == 2
-    assert not proof.use_proof_steps({"stem": "What is the order of an element?", "type": "概念题"})
-    assert not proof.use_proof_steps({"stem": stem, "type": "概念题", "criterion": "Use the teacher's rubric."})
+    provider = Provider([response, audit("inconsistent", "The proposed rubric has no proof steps.")])
+    candidate, = await generate(provider, reference=False, stem=stem, question_type="概念题", allow_partial=True)
+    assert len(provider.calls) == 1
+    frozen = RubricDraft.model_validate(candidate.rubric_draft)
+    assert [(s.criterion, s.total_pts) for s in frozen.plan.part_rubric.parts[0].steps] == [
+        (criterion, 5) for criterion in criteria
+    ]
 
 
 @pytest.mark.asyncio

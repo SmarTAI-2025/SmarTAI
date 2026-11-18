@@ -5,7 +5,6 @@ reject a proposal, never replace it with generic tiers or change its points.
 """
 
 import json
-import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -41,24 +40,13 @@ class ProofRubricUnverified(ValueError):
     """An unchecked mathematical rubric must not become an accepted candidate."""
 
 
-_PROOF_DIRECTIVE = re.compile(
-    r"^\s*(?:(?:for|let|given|suppose|assume)\b[^.!?]*?\b)?(?:prove|show)\s+that\b|^\s*(?:请)?证明",
-    re.IGNORECASE | re.MULTILINE,
-)
-
-
 def use_proof_steps(row):
-    kind = normalize_question_type(row.get("type") or "")
-    stem = row.get("stem") or ""
-    # An explicit proof instruction still needs the proof audit if recognition
-    # classified the exercise as conceptual. Leave its saved type alone.
-    proof_question = kind == "推理题" or (kind == "概念题" and _PROOF_DIRECTIVE.search(stem))
     return (
-        bool(proof_question)
+        normalize_question_type(row.get("type") or "") == "推理题"
         and not row.get("criterion")
         and not row.get("rubric_draft")
         and not row.get("teacher_subpart_points")
-        and not has_explicit_scoring_policy(stem, row.get("max_score"))
+        and not has_explicit_scoring_policy(row.get("stem", ""), row.get("max_score"))
     )
 
 
