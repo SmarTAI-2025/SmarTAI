@@ -24,7 +24,7 @@ from backend.llm.concurrency import admission_order, ordered_call
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from email.utils import parsedate_to_datetime
-from typing import Type, TypeVar, Optional, List, Dict, Any, Callable
+from typing import Type, TypeVar, Optional, List, Dict, Any, Callable, Literal
 
 from pydantic import BaseModel, ValidationError
 from langchain_core.messages import BaseMessage, SystemMessage, HumanMessage
@@ -74,6 +74,14 @@ class StructuredOutputInvalidError(ValueError):
     """Malformed model output, with no source content in the error message."""
 
     code = "provider_response_invalid"
+
+    def __init__(
+        self, message: str, *,
+        failure_reason: Literal["missing_json", "invalid_json", "schema_mismatch",
+                                "invalid_scoring_evidence", "invalid_response"] = "invalid_response",
+    ):
+        super().__init__(message)
+        self.failure_reason = failure_reason
 
 
 @dataclass
@@ -864,6 +872,12 @@ def _extract_balanced_json(s: str) -> Optional[str]:
     i = 0
     while i < n:
         ch = s[i]
+        if ch in "$\\" and (math_span := _RAW_MATH_SPAN_RE.match(s, i)) and '"' not in math_span[0]:
+            # A leading formula can contain TeX grouping braces or a display
+            # bracket. Keep quote-bearing spans eligible for the normal scan:
+            # two currency signs could otherwise surround part of real JSON.
+            i = math_span.end()
+            continue
         if ch == "{" or ch == "[":
             open_ch = ch
             close_ch = "}" if open_ch == "{" else "]"
@@ -955,7 +969,8 @@ def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool =
     # trailing stray ``}`` the LLM appended after the real object close.
     json_str = _extract_balanced_json(cleaned)
     if json_str is None:
-        raise StructuredOutputInvalidError("The model returned no structured JSON result.")
+        raise StructuredOutputInvalidError("The model returned no structured JSON result.",
+                                           failure_reason="missing_json")
     json_str = _protect_json_math_escapes(_normalize_markdown_json_keys(json_str))
 
     # 3. Try repair attempts in escalating order. Attempt list intentionally
@@ -1009,7 +1024,10 @@ def extract_and_parse_json(raw: str, model: Type[T], *, require_complete: bool =
         raise StructuredOutputBoundsError(
             f"Structured output for {model.__name__} exceeds safe field bounds."
         ) from bounds_error
-    exc = StructuredOutputInvalidError(f"The model result does not match {model.__name__}.")
+    exc = StructuredOutputInvalidError(
+        f"The model result does not match {model.__name__}.",
+        failure_reason="schema_mismatch" if field_errors else "invalid_json",
+    )
     if field_errors:
         schema = model.model_json_schema()
         fields = {
