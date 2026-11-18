@@ -9,6 +9,7 @@ import {
   hasPartialExperts,
   hasUnknownConfidence,
   pendingScoreReview,
+  programmingAdvisoryReasons,
   validExpertResults,
   isCorrectionReviewConfirmed,
   hasSavedCorrectionReview,
@@ -122,7 +123,7 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   }
   const pendingScore = pendingScoreReview(correction);
   if (pendingScore) add(reviewReasonLabel(pendingScore, locale), "blocking");
-  if (correctionReviewReasonIds(correction).includes("programming_extra_boundary")) add(reviewReasonLabel("programming_extra_boundary", locale));
+  for (const reason of programmingAdvisoryReasons(correction)) add(reviewReasonLabel(reason, locale));
   const experts = validExpertResults(correction);
   const multi = new Set((correction.expert_results ?? []).map(expert => expert.provider_id || expert.provider)).size > 1 || hasPartialExperts(correction);
   if (experts.length) {

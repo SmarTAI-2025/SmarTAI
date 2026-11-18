@@ -328,11 +328,16 @@ export function correctionReviewBlocked(correction: Correction): boolean {
 export function correctionReviewAttention(correction: Correction): ReviewAttention {
   if (correctionReviewNextBlocked(correction)) return "blocking";
   return !hasSavedCorrectionReview(correction) && (isLowConfidence(correction) || hasUnknownConfidence(correction) || hasPartialExperts(correction) || hasExpertDisagreement(correction)
-    || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason) || reason === "programming_extra_boundary")) ? "advisory" : "none";
+    || correctionReviewReasonIds(correction).some(reason => MATH_REVIEW_REASONS.includes(reason))
+    || programmingAdvisoryReasons(correction).length > 0) ? "advisory" : "none";
+}
+
+export function programmingAdvisoryReasons(correction: Correction): string[] {
+  return correctionReviewReasonIds(correction).filter(reason => reason === "programming_interface_only" || reason === "programming_extra_boundary");
 }
 
 const programmingReviewReasons = ["programming_partial_evidence_conflict", "programming_teacher_tests_passed_deduction", "programming_teacher_tests_failed_full_credit",
-  "programming_code_review_only", "programming_interface_only"];
+  "programming_code_review_only"];
 
 export function pendingProgrammingReview(correction: Correction): string | undefined {
   const reasons = new Set(correctionReviewReasonIds(correction));
@@ -342,7 +347,6 @@ export function pendingProgrammingReview(correction: Correction): string | undef
     if (evidence.partial_check?.status === "confirmed") reasons.add("programming_partial_evidence_conflict");
     if (evidence.score_review_reason && programmingReviewReasons.includes(evidence.score_review_reason)) reasons.add(evidence.score_review_reason);
     else if (evidence.execution_status !== "executed") reasons.add("programming_code_review_only");
-    else if ((evidence.teacher_tests?.total ?? 0) > 0 && ["target_function_missing", "signature_mismatch"].includes(evidence.primary_reason ?? "")) reasons.add("programming_interface_only");
   }
   const reason = programmingReviewReasons.find((id) => reasons.has(id));
   if (!reason || (validReviewScore(correction.teacher_score, correction.max_score) &&
