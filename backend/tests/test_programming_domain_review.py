@@ -47,9 +47,14 @@ def reviewed(verdict="allowed", positions=range(1, 11), quote="Implement stable_
         reason="Finite numeric vectors, including the required empty and large-value cases.") for i in positions]})
 
 
-def candidates(*, count=10, include_saved=False):
+def candidates(*, count=10, include_saved=False, array_in_input=False):
+    tests = [c.model_dump() for c in cases()[:count]]
+    if array_in_input:
+        # Reproduce the observed wire-format error on tests 5 through 10.
+        for case in tests[4:]:
+            case["input"] = case.pop("function_args")[0]
     rows = [dict(target_id="q1:solution_code", text_value=CODE),
-            dict(target_id="q1:test_cases", test_cases=[c.model_dump() for c in cases()[:count]])]
+            dict(target_id="q1:test_cases", test_cases=tests)]
     if include_saved:
         rows += [dict(target_id="q1:reference_answer", text_value="Subtract the maximum before exponentiating."),
                  dict(target_id="q1:criterion", rubric_definition={"part_rubric": {"total_pts": 10, "parts": [
@@ -59,6 +64,27 @@ def candidates(*, count=10, include_saved=False):
                          {"id": "normalize", "criterion": "Normalize the exponentials", "total_pts": 3},
                          {"id": "tests", "criterion": "Test suite", "total_pts": 2, "test_suite": True}]}]}})]
     return json.dumps({"candidates": rows})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stdin", [False, True])
+async def test_array_recovery_keeps_conflicting_arguments_and_stdin_invalid(stdin):
+    from backend.agents.ingest_agent import generate_missing_question_materials
+
+    row = demo()
+    raw = json.loads(candidates(array_in_input=True))["candidates"][1]
+    if stdin:
+        row["stem"] = "Read integers from stdin and print their sum."
+        raw["test_cases"] = [{"input": [1, 2]}] * 10
+    else:
+        raw["test_cases"][4]["function_args"] = [[2, 3]]
+    provider = Provider([json.dumps({"candidates": [raw]})])
+    feedback = {}
+    result = await generate_missing_question_materials(
+        {"q1": row}, [{"target_id": "q1:test_cases", "q_id": "q1", "target": "test_cases"}],
+        10, provider, allow_partial=True, repair_feedback=feedback,
+    )
+    assert result == [] and "q1:test_cases" in feedback and len(provider.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -190,7 +216,7 @@ async def test_manual_retry_really_requests_only_failed_material_and_keeps_saved
         background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
     next_operation = _claim(owner, retried["job_id"], "retry-programming-domain")
     restored = api._rehydrate_question_preparation_inputs(next_operation)
-    retry_provider = Provider([candidates(), reviewed()])
+    retry_provider = Provider([candidates(array_in_input=True), reviewed()])
     retry = inc.IncrementalQuestionPreparation(operation=next_operation, sources=restored["sources"],
         provider=retry_provider, provider_id=restored["recognition_provider_id"],
         reporter=ProgressReporter(next_operation.operation_id), score_policy=restored["score_policy"],
@@ -201,6 +227,7 @@ async def test_manual_retry_really_requests_only_failed_material_and_keeps_saved
     request = json.loads(retry_provider.calls[0][1].content.split("\n", 1)[1])
     assert {t["target"] for t in request["requested_targets"]} == {"solution_code", "test_cases"}
     assert len(rows["q1"]["test_cases"]) == 10 and not final.checkpoint["incremental_errors"]
+    assert [case["function_args"] for case in rows["q1"]["test_cases"]] == [[xs] for xs in VALUES]
     assert rows["q1"]["test_cases"][4]["expected_return"] == "[0.5, 0.5]"
     assert rows["q1"]["reference_answer"] == original["reference_answer"]
     assert rows["q1"]["criterion"] == original["criterion"]
