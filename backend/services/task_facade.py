@@ -66,6 +66,7 @@ from backend.domain import education
 from backend.domain.grading_review import result_score_review_reason, teacher_resolved_review
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
+from backend.services.question_preparation_diagnostics import current_programming_test_issues
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
@@ -1085,17 +1086,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     effective_issues = [issue for issue in _effective_question_issues(presentation, question.type)
         if (issue.get("details") or {}).get("reason") != "alternative_cap_review"
         or issue.get("issue_id") in current_cap_ids]
-    from backend.services.question_preparation_diagnostics import required_programming_tests_missing, required_programming_tests_issue
-    # This dependency follows the current saved rule and cases, not a stale
-    # warning retained from an earlier attempt or a teacher's previous rule.
-    effective_issues = [issue for issue in effective_issues
-        if (issue.get("details") or {}).get("reason") != "required_programming_tests_missing"]
-    if (required_programming_tests_missing({**presentation, "type": question.type, "test_cases": question.test_cases})
-            and not any(issue.get("field") == "programming_tests" and issue.get("status") == "open"
-                        and issue.get("severity") == "blocking" for issue in effective_issues)):
-        effective_issues = [issue for issue in effective_issues
-            if not (issue.get("field") == "programming_tests" and issue.get("code") == "generation_failed")]
-        effective_issues.append(required_programming_tests_issue(question.q_id))
+    effective_issues = current_programming_test_issues(
+        effective_issues, {**presentation, "type": question.type, "test_cases": question.test_cases}, question.q_id,
+    )
     if math_plan and math_plan.part_rubric:
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh"),
@@ -5866,6 +5859,13 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
+        # A saved or echoed diagnostic cannot decide confirmation after the
+        # rubric or its evidence changes. Match the review page's current view.
+        presentation["preparation_issues"] = current_programming_test_issues(
+            presentation.get("preparation_issues", []),
+            {**presentation, "type": candidate_type, "test_cases": patch.get("test_cases", question.test_cases)},
+            question.q_id,
+        )
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])

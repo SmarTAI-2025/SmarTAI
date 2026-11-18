@@ -8,6 +8,7 @@ from backend.agents import incremental_question_preparation as inc
 from backend.agents.ingest_agent import AICompletionCandidateOutput
 from backend.api import task_preparation as api
 from backend.db import assignment_repository, workflow_repository
+from backend.domain.errors import ValidationError
 from backend.services import task_facade, rubric_drafts
 from backend.services.question_preparation_diagnostics import public_preparation_review, preparation_review, required_programming_tests_issue
 from backend.tests.test_incremental_question_preparation import setup, persisted
@@ -58,6 +59,9 @@ def test_legacy_saved_rows_cannot_bypass_required_tests_by_confirmation(confirme
     task_facade._replace_draft_questions(task, owner, {"q1": row}, "prepared.json")
     question, = assignment_repository.list_questions(task, teacher_id=owner)
     version = question.version
+    with pytest.raises(ValidationError, match="before confirming"):
+        task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+            patch={"review_status": "confirmed"})
     view = task_facade._serialize_problem(question)
     issues = [i for i in view["preparation_issues"] if i["field"] == "programming_tests"]
     assert len(issues) == 1 and issues[0]["severity"] == "blocking"
@@ -72,17 +76,42 @@ def test_legacy_saved_rows_cannot_bypass_required_tests_by_confirmation(confirme
     assert task_facade._question_review_blockers([question]) == []
     assert not [i for i in task_facade._serialize_problem(question)["preparation_issues"]
                 if i["field"] == "programming_tests"]
+    result = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+        patch={"review_status": "confirmed"})
+    assert result["problem"]["review_status"] == "confirmed"
 
 
-def test_replacing_test_allocation_clears_its_obsolete_blocker():
+@pytest.mark.parametrize("confirm_on_save", [False, True])
+def test_replacing_test_allocation_clears_its_obsolete_blocker(confirm_on_save):
     row = inc._rows([source(reference_answer="Return the square.")])["q1"]
     row = frozen_problem(row, [])._math_rubric_source["presentation"]
     row["preparation_issues"] = [required_programming_tests_issue("q1")]
     owner, task = _seed_task()
     task_facade._replace_draft_questions(task, owner, {"q1": row}, "prepared.json")
-    task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
-        patch={"criterion": "Award all 10 points for correct code."})
+    patch = {"criterion": "Award all 10 points for correct code. No points for tests."}
+    if confirm_on_save:
+        patch["review_status"] = "confirmed"
+    task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch=patch)
     question, = assignment_repository.list_questions(task, teacher_id=owner)
     assert task_facade._question_review_blockers([question]) == []
     assert not [i for i in task_facade._serialize_problem(question)["preparation_issues"]
                 if i["field"] == "programming_tests"]
+    result = task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1",
+        patch={"review_status": "confirmed"})
+    assert result["problem"]["review_status"] == "confirmed"
+
+
+def test_replacing_test_allocation_does_not_clear_an_unrelated_blocker():
+    row = inc._rows([source(reference_answer="Return the square.")])["q1"]
+    row = frozen_problem(row, [])._math_rubric_source["presentation"]
+    row["preparation_issues"] = [required_programming_tests_issue("q1"), {
+        "issue_id": "test-conflict", "q_id": "q1", "field": "programming_tests",
+        "code": "invalid_test_case", "details": {"reason": "test_case_output_conflict"},
+        "status": "open", "severity": "blocking",
+    }]
+    owner, task = _seed_task()
+    task_facade._replace_draft_questions(task, owner, {"q1": row}, "prepared.json")
+    with pytest.raises(ValidationError, match="before confirming"):
+        task_facade.update_problem(task_id=task, owner_id=owner, q_id="q1", patch={
+            "criterion": "Award all 10 points for correct code.", "review_status": "confirmed",
+        })

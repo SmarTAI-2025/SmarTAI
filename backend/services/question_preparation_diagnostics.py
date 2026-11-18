@@ -26,6 +26,20 @@ def required_programming_tests_issue(q_id):
             "source_tokens": [], "details": {"reason": "required_programming_tests_missing"}}
 
 
+def current_programming_test_issues(issues, problem, q_id):
+    """Rebuild the derived test dependency without touching source issues."""
+    current = [issue for issue in issues
+               if (issue.get("details") or {}).get("reason") != "required_programming_tests_missing"]
+    if required_programming_tests_missing(problem) and not any(
+        issue.get("field") == "programming_tests" and issue.get("status") == "open"
+        and issue.get("severity") == "blocking" for issue in current
+    ):
+        current = [issue for issue in current
+                   if not (issue.get("field") == "programming_tests" and issue.get("code") == "generation_failed")]
+        current.append(required_programming_tests_issue(q_id))
+    return current
+
+
 def normalize_formula_issue(issue):
     """A transcription disagreement is not evidence of missing source content."""
     if (issue.get("details") or {}).get("reason") != "conflicting_printed_formula":
