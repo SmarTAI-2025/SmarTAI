@@ -519,12 +519,14 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const programming = isProgrammingProblem(problem);
   const originalScore = String(problem.max_score ?? 10);
   const originalCriterion = (programming ? problem.programming_scoring?.code_criterion : undefined) ?? problem.criterion ?? "";
-  const editableCriterion = programming || originalCriterion.trim()
+  const editableCriterion = originalCriterion.trim()
     ? originalCriterion
     : rubricReviewText(problem.preparation_issues, locale);
   const originalInputRules = problem.programming_scoring?.input_rules ?? "";
   const originalTestPoints = problem.programming_scoring?.test_points?.toString() ?? "";
-  const scoringRules = problem.effective_criterion?.trim() || (programming ? problem.criterion ?? "" : editableCriterion);
+  const scoringRules = problem.effective_criterion?.trim()
+    || (programming ? problem.criterion?.trim() : "")
+    || editableCriterion;
   const legacyCriterion = programming && originalCriterion !== problem.criterion ? problem.criterion : null;
   const alternativeGroups = new Map<string, string[]>();
   for (const part of problem.alternative_rules ?? []) {

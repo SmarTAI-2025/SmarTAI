@@ -66,6 +66,7 @@ from backend.domain import education
 from backend.domain.grading_review import result_score_review_reason, teacher_resolved_review
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
+from backend.services.question_preparation_diagnostics import current_programming_test_issues
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
@@ -1091,6 +1092,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     effective_issues = [issue for issue in _effective_question_issues(presentation, question.type)
         if (issue.get("details") or {}).get("reason") != "alternative_cap_review"
         or issue.get("issue_id") in current_cap_ids]
+    effective_issues = current_programming_test_issues(
+        effective_issues, {**presentation, "type": question.type, "test_cases": question.test_cases}, question.q_id,
+    )
     if math_plan and math_plan.part_rubric:
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh"),
@@ -5224,11 +5228,11 @@ def _question_review_blockers(questions) -> list[str]:
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
-        review_issues = _effective_question_issues(presentation, question.type)
+        problem = _serialize_problem(question)
+        review_issues = problem["preparation_issues"]
         if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
                 and _manual_question_fields_missing(question, presentation)):
             issues.append("question_manual_completion_required")
-        problem = _serialize_problem(question)
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
@@ -5909,6 +5913,13 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
+        # A saved or echoed diagnostic cannot decide confirmation after the
+        # rubric or its evidence changes. Match the review page's current view.
+        presentation["preparation_issues"] = current_programming_test_issues(
+            presentation.get("preparation_issues", []),
+            {**presentation, "type": candidate_type, "test_cases": patch.get("test_cases", question.test_cases)},
+            question.q_id,
+        )
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
