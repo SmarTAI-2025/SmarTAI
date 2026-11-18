@@ -6,7 +6,7 @@ import re
 from dataclasses import replace
 
 from backend.services.programming_submission_mapping import native_source
-from backend.services.question_structure import _PURE_LABEL_RE
+from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
 from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 
 
@@ -227,10 +227,19 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
         # A standard subpart label still allows separate opening evidence.
         title = heading.group("title").strip()
         part = _PURE_LABEL_RE.fullmatch(title)
-        if not part and re.fullmatch(r"\([^()]*\)|（[^（）]*）", title):
+        if part:
+            title = ""
+        elif (
+            (inline := _PAREN_LABEL_RE.match(title))
+            and title[inline.end():].startswith((" ", "\t"))
+            and _is_subpart_marker(title, inline)
+        ):
+            part = inline
+            title = title[inline.end():].lstrip()
+        if re.fullmatch(r"\([^()]*\)|（[^（）]*）", title):
             continue
-        start = heading.end("title") if part else heading.start("title")
-        prefix = " ".join(unit.text[start:].split())[:SOURCE_OPENING_QUOTE_LIMIT]
+        opening_text = title + unit.text[heading.end("title"):]
+        prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
             openings[q_id] = (prefix, part.group("label") if part else None)
     return closed, openings

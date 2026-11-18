@@ -499,20 +499,24 @@ async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence", "part_label"), [
-    (True, False, "valid", ""),
-    (True, True, "valid", ""),
-    (True, True, "missing", ""),
-    (True, False, "unbound", ""),
-    (True, False, "missing_from_transcription", ""),
-    (False, False, "missing", ""),
-    (True, False, "valid", "(a)"),
-    (True, True, "labelled", "(a)"),
-    (True, False, "label_only", "(a)"),
-    (True, False, "wrong_label", "(a)"),
+@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence", "part_label", "separator"), [
+    (True, False, "valid", "", "\n"),
+    (True, True, "valid", "", "\n"),
+    (True, True, "missing", "", "\n"),
+    (True, False, "unbound", "", "\n"),
+    (True, False, "missing_from_transcription", "", "\n"),
+    (False, False, "missing", "", "\n"),
+    (True, False, "valid", "(a)", "\n"),
+    (True, True, "labelled", "(a)", "\n"),
+    (True, False, "label_only", "(a)", "\n"),
+    (True, False, "wrong_label", "(a)", "\n"),
+    (True, False, "valid", "(a)", " "),
+    (True, True, "valid", "(a)", " "),
+    (True, False, "label_only", "(a)", " "),
+    (True, True, "wrong_label", "(a)", " "),
 ])
 async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
-    monkeypatch, unread, continuation_first, opening_evidence, part_label,
+    monkeypatch, unread, continuation_first, opening_evidence, part_label, separator,
 ):
     import fitz
 
@@ -531,7 +535,7 @@ async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
     proof_tail = "By the identity already established, the direct product is abelian."
     partial = f"1.1.29（续）\n{proof_tail}"
     heading = f"1.1.31 {part_label}".rstrip()
-    full = f"{heading}\n{full_answer}"
+    full = f"{heading}{separator}{full_answer}"
     pages = {1: "Name: Student One\nStudent ID: S1", 2: "1.1.29\nThe full direct-product proof."}
     pages[3] = "\n".join((partial, full) if continuation_first else (full, partial)) if unread else full
     with fitz.open() as document:
