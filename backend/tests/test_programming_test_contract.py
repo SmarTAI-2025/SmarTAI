@@ -185,6 +185,7 @@ async def test_mounted_editor_persists_derived_fields_and_rolls_back_invalid_bat
     assert [row.passed for row in execution.results] == [True, False]
     # Original browser D02, including a simultaneous otherwise-valid change.
     invalid = client.put(url, json={"criterion":"Must roll back",
+        "programming_scoring": {"test_points": 0, "input_rules": ""},
         "expected_workflow_revision":persisted["workflow_revision"],
         "test_cases":[submitted[0], {"function_name":"fib","function_args":"not-a-list","expected_return":1}]})
     assert invalid.status_code == 422 and invalid.json()["error"]["code"] == "invalid_programming_test_cases"

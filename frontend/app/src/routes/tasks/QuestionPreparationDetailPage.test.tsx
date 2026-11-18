@@ -827,11 +827,30 @@ it.each([
 });
 
 
+it("saves test points, code criteria and the input domain separately", async () => {
+  await renderPage();
+  await userEvent.click(await screen.findByRole("button", { name: "修改第 3 题满分与评分标准" }));
+  const rubric = screen.getByRole("textbox", { name: "第 3 题评分标准" });
+  const section = within(rubric.closest("section")!);
+  fireEvent.change(rubric, { target: { value: "代码注释得 4 分。" } });
+  await userEvent.click(section.getByRole("button", { name: "保存" }));
+  expect(section.getByRole("alert")).toHaveTextContent("请填写测试配分");
+  expect(mutateAsync).not.toHaveBeenCalled();
+
+  fireEvent.change(section.getByRole("spinbutton", { name: /测试配分/ }), { target: { value: "6" } });
+  fireEvent.change(section.getByRole("textbox", { name: /额外输入限制/ }), { target: { value: "n >= 0." } });
+  await userEvent.click(section.getByRole("button", { name: "保存" }));
+  await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+    qId: "Q3", criterion: "代码注释得 4 分。", max_score: 10,
+    programming_scoring: { test_points: 6, input_rules: "n >= 0." },
+  })));
+});
+
 it.each([
   ["no_provider_configured", "请先在 API 设置中启用模型"],
   ["invalid_alternative_rule", "请核对其他解法的上下限与扣分规则"],
   ["invalid_structured_rubric", "请核对评分标准中的分值、条件和对应小问"],
-  ["invalid_programming_test_award", "测试占 6 分，按通过比例算。代码正确得 4 分。"],
+  ["invalid_programming_test_award", "请在「测试配分」填写测试分"],
   ["provider_auth_failed", "请在 API 设置中更新模型密钥或权限"],
   ["provider_permission_denied", "请在 API 设置中更新模型密钥或权限"],
   ["provider_credentials_unavailable", "请在 API 设置中更新模型密钥或权限"],

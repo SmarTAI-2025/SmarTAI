@@ -90,16 +90,6 @@ def test_complete_output_expressions_do_not_narrow_input_domain(output):
     assert input_domain(p, call([-1])) == "allowed"
 
 
-@pytest.mark.parametrize("criterion", ["代码可读性得 4 分。", "Code readability: 4 points."])
-def test_readability_points_do_not_hide_an_independent_input_constraint(criterion):
-    stem = "Implement f(n): n is an integer. Return n."
-    plain = problem(stem, criterion=criterion)
-    bounded = problem(stem, criterion=criterion + " n >= 0.")
-    assert input_domain(plain, call([-1])) == "allowed"
-    assert input_domain(bounded, call([-1])) == "outside"
-    assert input_domain(bounded, call([1])) == "allowed"
-
-
 @pytest.mark.parametrize("criterion", [
     "输入保证大于零。", "输入限于大于零的整数。", "只考虑正整数。",
     "参数的十进制表示须为回文。", "The input is drawn from a teacher-defined subset.",

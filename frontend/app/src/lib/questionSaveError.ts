@@ -30,8 +30,10 @@ export function questionSaveError(error: unknown, locale: string) {
       return tx(locale, "请在 API 设置中核对模型名称和地址，再保存。", "Check the model name and endpoint in API settings, then save again.");
     case "invalid_alternative_rule":
       return tx(locale, "请核对其他解法的上下限与扣分规则；分数须在 0 与该小问满分之间。", "Check the alternative-method limits and deductions. Scores must be between 0 and this part's maximum.");
+    case "programming_test_award_required":
+      return tx(locale, "请先在「测试配分」填写分值。填 0 表示测试不单独计分。", "Fill in Test points first. Enter 0 for no separate test award.");
     case "invalid_programming_test_award":
-      return tx(locale, "请分别写明测试分和代码分，合计等于满分。例如「测试占 6 分，按通过比例算。代码正确得 4 分。」", "State test and code points that add up to the maximum. For example, “Tests are worth 6 points, proportional to the fraction passed. Correct code: 4 points.”");
+      return tx(locale, "请在「测试配分」填写测试分，并在代码评分规则中分配其余分数。", "Enter Test points separately and allocate the remaining points in the code rubric.");
     case "invalid_structured_rubric":
       return tx(locale, "请核对评分标准中的分值、条件和对应小问，再保存。", "Check the points, conditions and matching question parts, then save again.");
     case "rubric_subpart_points_mismatch":

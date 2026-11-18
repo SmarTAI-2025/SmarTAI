@@ -51,13 +51,8 @@ _UNSUPPORTED = re.compile(
 _SCORING_ONLY = re.compile(
     r"(?:award )?correctness(?: and (?:method|readability))?|correct results|exact output|readability|numerical stability|"
     r"(?:结果|算法)?正确(?:性)?|preserve whitespace|accept equivalent implementations|"
-    r"(?:算法|代码|实现)正确(?:性)?\s*(?:得|占|计)\s*\d+(?:\.\d+)?\s*分|"
-    r"(?:代码|实现)(?:的)?(?:可读性|可维护性|清晰度|风格)\s*(?:得|占|计|[:：])\s*\d+(?:\.\d+)?\s*分|"
-    r"(?:(?:code|source)\s+)?(?:readability|maintainability|clarity|style)\s*:\s*\d+(?:\.\d+)?\s*points?|"
-    r"correct (?:algorithm|code|implementation)(?: in the submitted source)?"
-    r"(?:\s*:\s*\d+(?:\.\d+)?\s*points?)?|"
     r"(?:award\s+)?\d+(?:\.\d+)?(?: points)? for (?:the correct (?:sum|solution)|"
-    r"satisfying the question|reading input|all correct outputs|(?:code |source )?readability)|"
+    r"satisfying the question|reading input|all correct outputs)|"
     r"(?:award\s+)?correctness according to the teacher's rule|"
     r"all teacher examples correct earns full credit|"
     r"(?:所有|全部)?(?:教师)?(?:测试)?(?:用例|样例)(?:全部|均)?通过(?:时)?(?:给|得|记)(?:满分|\d+(?:\.\d+)?分)",
@@ -339,7 +334,7 @@ def _value_constraint(part, values, names, stdin):
 
 def input_domain(problem, case):
     """Return 'allowed', 'outside', or 'unknown' for a supplemental case only."""
-    from backend.services.programming_rubric import domain_criterion, is_test_scoring_clause
+    from backend.services.programming_rubric import domain_criterion
     stem = problem.stem or ""
     criterion = domain_criterion(problem)
     if len(stem) + len(criterion or "") > 16384:
@@ -487,8 +482,7 @@ def input_domain(problem, case):
             tested.update(values)
             continue
         if rubric:
-            scoring = re.sub(r"^-\s*\[\d+(?:\.\d+)?\s*(?:分|points?)\]\s*", "", part, flags=re.I)
-            unknown |= _SCORING_ONLY.fullmatch(scoring) is None and not is_test_scoring_clause(scoring)
+            unknown |= _SCORING_ONLY.fullmatch(part) is None
             continue
         if _output_only(part):
             continue

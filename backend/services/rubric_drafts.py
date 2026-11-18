@@ -11,7 +11,7 @@ from decimal import Decimal
 from collections.abc import Mapping
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, RootModel, StrictBool, TypeAdapter, model_validator
 
 from backend.services.part_rubric import Key, PartRubric, Points, bind_alternative, bind_parts, render_parts
 from backend.services.teacher_point_allocations import TeacherPolicyCheck, TeacherPolicyUnresolved
@@ -196,6 +196,13 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
     return definition
 
 
+class ProgrammingScoringPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    test_points: Points = Field(strict=True, multiple_of=0.01)
+    input_rules: str = Field(max_length=12000)
+
+
 class RubricDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -208,6 +215,20 @@ class RubricDraft(BaseModel):
     # Unbound means no strictness/partial-credit prose has been appended.
     plan: MathRubricPlan
     display_plan: dict | None = Field(default=None, exclude_if=lambda v: v is None)
+    programming_scoring: ProgrammingScoringPolicy | None = Field(default=None, exclude_if=lambda v: v is None)
+
+    @model_validator(mode="after")
+    def check_programming_scoring(self):
+        if self.programming_scoring is not None:
+            rules = self.plan.part_rubric
+            if (not rules or any(part.deductions for part in rules.parts)
+                    or not any(not step.test_suite for part in rules.parts for step in part.steps)):
+                raise ValueError("Programming scoring needs a frozen code allocation.")
+            test_points = self.programming_scoring.test_points
+            suites = [step.total_pts for part in rules.parts for step in part.steps if step.test_suite]
+            if suites != ([test_points] if test_points else []):
+                raise ValueError("The saved test allocation and scoring formula disagree.")
+        return self
 
 
 def draft_fingerprint(problem) -> str:

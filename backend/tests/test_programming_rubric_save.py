@@ -74,13 +74,12 @@ async def test_review_save_preserves_seven_of_ten_score(monkeypatch, edit):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("patch", [{"criterion": "Award all 10 points for correct code."},
-    {"max_score": 20}, {"stem": "Implement square(x): x is an integer. Return x*x*x."}])
-async def test_scoring_changes_do_not_reseal_old_programming_rules(patch):
+async def test_stem_change_requires_reaffirming_the_saved_test_allocation():
     owner, task, client, url = await setup_question()
-    response = client.put(url, json=patch)
+    response = client.put(url, json={"stem": "Implement square(x): x is an integer. Return x*x*x."})
     assert response.status_code == 200, response.text
     assert saved_draft(saved_problem(owner, task)) is None
+    assert client.put(url, json={"review_status": "confirmed"}).status_code == 422
 
 
 @pytest.mark.asyncio
@@ -103,26 +102,35 @@ async def test_reference_edit_does_not_revalidate_an_already_stale_draft():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("points, template, funded", [
-    (6, "测试占 {tests:g} 分，按通过比例算。算法正确得 {code:g} 分。", True),
-    (7.5, "测试样例占 {tests:g} 分，按测试通过率计分。代码正确得 {code:g} 分。", True),
-    (6, "Tests are worth {tests:g} points, proportional to the fraction passed. Correct algorithm: {code:g} points.", True),
-    (6, "按测试通过比例给 {tests:g} 分，代码正确得 {code:g} 分。", False),
-    (6, "按测试通过比例给 {tests:g} 分，代码正确得 {code:g} 分。", True),
-    (6, "测试占 {tests:g} 分，按通过比例算。代码可读性得 {code:g} 分。", False),
+@pytest.mark.parametrize("points, criterion, funded", [
+    (6, "代码正确得 4 分。", True),
+    (7.5, "Correct algorithm: 2.5 points.", True),
+    (6, "代码注释得 4 分。", False),
+    (6, "Use clear invariant comments and concise names.", False),
 ])
-async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monkeypatch, points, template, funded):
+async def test_structured_test_budget_requires_samples_and_keeps_quality_out_of_input_checks(
+    monkeypatch, points, criterion, funded,
+):
+    import json
+    from unittest.mock import AsyncMock
+    from backend.models import StudentAnswerInfo
+    from backend.services.programming_rubric import domain_criterion
+    from backend.skills.programming import ProgrammingSkill
+    from backend.tests.test_question_material_format_repair import Provider
+
     owner, task, client, url = await setup_question(funded=funded)
     before = saved_problem(owner, task)
     code_points = 10 - points
-    criterion = template.format(tests=points, code=code_points)
-    saved = client.put(url, json={"criterion": criterion, "max_score": 10, "test_cases": []})
+    policy = {"test_points": points, "input_rules": ""}
+    saved = client.put(url, json={"criterion": criterion, "max_score": 10,
+                                  "programming_scoring": policy, "test_cases": []})
     assert saved.status_code == 200, saved.text
-    assert saved.json()["problem"]["effective_criterion"] == criterion
+    problem_view = saved.json()["problem"]
+    assert problem_view["programming_scoring"] == {**policy, "code_criterion": criterion}
     assert any(issue["details"].get("reason") == "required_programming_tests_missing"
-               for issue in saved.json()["problem"]["preparation_issues"])
+               for issue in problem_view["preparation_issues"])
     after = saved_problem(owner, task)
-    assert after.criterion == criterion
+    assert after.criterion == criterion and domain_criterion(after) == ""
     draft = saved_draft(after)
     assert draft is not None and not after.test_cases
     steps = draft.plan.part_rubric.parts[0].steps
@@ -139,14 +147,8 @@ async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monk
     after = saved_problem(owner, task)
     assert saved_draft(after).plan.part_rubric.parts[0].steps == steps
 
-    from backend.tests.test_question_material_format_repair import Provider
-    from backend.models import StudentAnswerInfo
-    from backend.skills.programming import ProgrammingSkill
-    from unittest.mock import AsyncMock
-    import json
-
     monkeypatch.setattr("backend.skills.programming.kb_tool.retrieve_for_grading", AsyncMock(return_value=[]))
-    provider = Provider([json.dumps({"max_score": 10, "confidence": .9, "steps": [
+    provider = Provider([json.dumps({"max_score": 10, "score": 10, "confidence": .9, "steps": [
         {"step_no": 1, "max_points": points, "score": points, "desc": "Tests", "is_correct": True},
         {"step_no": 2, "max_points": code_points, "score": code_points, "desc": "Code", "is_correct": True},
     ]})])
@@ -154,92 +156,133 @@ async def test_explicit_test_budget_edit_keeps_formula_and_requires_samples(monk
         StudentAnswerInfo(q_id="q1", number="1", type="编程题",
                           content="def square(x): return x*x if x < 7 else -1"))
     assert vote.error_kind is None, vote.comment
-    assert len(provider.calls) == 1  # Only grading, even when PR348 is present.
+    assert len(provider.calls) == 1
     assert vote.programming_evidence.generated_tests.passed == 7
+    assert vote.programming_evidence.generated_tests.total == 10
     assert vote.steps[0].score == pytest.approx(points * .7)
     assert vote.score == pytest.approx(code_points + points * .7)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("funded", [False, True])
 @pytest.mark.parametrize("criterion", [
-    "测试占 6 分，按通过比例算。代码正确得 3 分。",
-    "测试占 6 分，按通过比例算。用例占 2 分。代码正确得 2 分。",
-    "测试占 6 分，按通过比例算。代码正确得 4 分。只有全部通过才给测试分。",
-    "测试占 6 分，全部通过才给分。代码正确得 4 分。",
-    "测试占 6 分，按通过比例算。",
-    "The code and tests should both be scored.",
+    "通过测试的比例乘以 6 分，代码正确得 4 分。",
+    "按测试通过比例给 6 分，代码正确得 4 分。",
+    "代码正确得 10 分。",
 ])
-async def test_unrepresentable_edit_preserves_previous_rubric_and_revision(criterion):
-    owner, task, client, url = await setup_question()
+async def test_prose_alone_cannot_set_or_cancel_test_points(funded, criterion):
+    owner, task, client, url = await setup_question(funded=funded)
     before = saved_problem(owner, task)
     revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-    response = client.put(url, json={"criterion": criterion, "expected_workflow_revision": revision})
+    response = client.put(url, json={"criterion": criterion + " ", "expected_workflow_revision": revision})
     assert response.status_code == 422, response.text
-    assert response.json()["error"]["code"] == "invalid_programming_test_award"
+    assert response.json()["error"]["code"] == "programming_test_award_required"
     after = saved_problem(owner, task)
     assert after.criterion == before.criterion and saved_draft(after) == saved_draft(before)
     assert workflow_repository.get_workflow(task, owner_id=owner).workflow_revision == revision
 
 
 @pytest.mark.asyncio
-async def test_saved_generated_rubric_accepts_direct_budget_edit():
-    owner, task, client, url = await setup_question()
-    before = saved_problem(owner, task)
-    criterion = before.criterion.replace("[6分]", "[7分]").replace("[4分]", "[3分]")
-    response = client.put(url, json={"criterion": criterion})
-    assert response.status_code == 200, response.text
-    reopened = saved_problem(owner, task)
-    assert reopened.criterion == criterion and reopened.test_cases == before.test_cases
-    steps = saved_draft(reopened).plan.part_rubric.parts[0].steps
-    assert [(step.test_suite, step.total_pts) for step in steps] == [(True, 7), (False, 3)]
-    from backend.services.programming_input_domain import input_domain
-
-    assert {input_domain(reopened, case) for case in reopened.test_cases} == {"allowed"}
-
-
-def test_adding_cases_can_recover_a_previously_dropped_explicit_formula():
-    criterion = "测试占 6 分，按通过比例算。代码正确得 4 分。"
-    row = _rows([{**source(reference_answer="Square the input"), "criterion": criterion}])["q1"]
+async def test_unverified_saved_contract_stays_blocked_after_adding_tests():
     owner, task = _seed_task()
+    row = _rows([{**source(reference_answer="Square the input"),
+                  "criterion": "通过测试的比例乘以 6 分，代码正确得 4 分。"}])["q1"]
+    mismatched = frozen_problem(_rows([source(reference_answer="Square the input")])["q1"], [])
+    row["rubric_draft"] = mismatched._math_rubric_source["presentation"]["rubric_draft"]
+    row["review_status"] = "confirmed"  # A historical confirmation did not verify the changed text.
     task_facade._replace_draft_questions(task, owner, {"q1": row}, "prepared.json")
-    assert saved_draft(saved_problem(owner, task)) is None
     client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
     url = f"/tasks/{task}/problems/q1"
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 422
     response = client.put(url, json={"test_cases": [{"io_mode": "function",
         "input": str(i), "expected_output": str(i*i)} for i in range(10)]})
     assert response.status_code == 200, response.text
-    result = saved_draft(saved_problem(owner, task))
-    assert result and result.plan.part_rubric.parts[0].steps[0].test_suite
+    assert response.json()["problem"]["programming_scoring"]["test_points"] is None
+    assert client.put(url, json={"review_status": "confirmed"}).status_code == 422
+    questions = assignment_repository.list_questions(task, teacher_id=owner)
+    assert task_facade._question_review_blockers(questions) == ["question_review_blocked"]
+    fixed = client.put(url, json={"criterion": "代码正确得 4 分。",
+                                  "programming_scoring": {"test_points": 6, "input_rules": ""}})
+    assert fixed.status_code == 200, fixed.text
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_explicitly_removing_test_points_releases_the_confirmation_gate():
+async def test_explicit_zero_is_distinct_from_unset_test_points():
     owner, task, client, url = await setup_question()
-    response = client.put(url, json={
-        "criterion": "代码正确得 10 分，不设测试分。", "test_cases": [],
-    })
+    response = client.put(url, json={"criterion": "代码注释清晰。", "test_cases": [],
+        "programming_scoring": {"test_points": 0, "input_rules": ""}})
     assert response.status_code == 200, response.text
-    assert saved_draft(saved_problem(owner, task)) is None
+    draft = saved_draft(saved_problem(owner, task))
+    assert draft.programming_scoring.test_points == 0
+    assert all(not step.test_suite for part in draft.plan.part_rubric.parts for step in part.steps)
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("criterion", [
-    "测试占 6 分，全部通过才给分。代码正确得 4 分。",
-    "测试占 6 分。代码正确得 4 分。",
-    "按测试通过比例给 6 分但须全部通过，代码正确得 4 分。",
-    "测试项满分 6 分，仅全过得分。代码正确得 4 分。",
-    "单元测试占总分 60%，仅全过得分。代码正确得 4 分。",
-])
-async def test_uncompilable_test_budget_on_fresh_question_is_rejected(criterion):
-    owner, task, client, url = await setup_question(funded=False)
+async def test_changing_test_points_replaces_the_formula_with_the_same_code_text():
+    owner, task, client, url = await setup_question()
+    criterion = "Write clear comments explaining the algorithm."
+    for points in (6, 7):
+        response = client.put(url, json={"criterion": criterion,
+            "programming_scoring": {"test_points": points, "input_rules": ""}})
+        assert response.status_code == 200, response.text
+        draft = saved_draft(saved_problem(owner, task))
+        assert draft.programming_scoring.test_points == points
+        steps = draft.plan.part_rubric.parts[0].steps
+        assert [(step.test_suite, step.total_pts) for step in steps] == [(True, points), (False, 10 - points)]
+
+
+@pytest.mark.asyncio
+async def test_code_edit_keeps_the_same_tests_and_separately_saved_input_constraints(monkeypatch):
+    from backend.models import TestCase
+    from backend.services.programming_input_domain import input_domain
+
+    owner, task, client, url = await setup_question()
     before = saved_problem(owner, task)
-    revision = workflow_repository.get_workflow(task, owner_id=owner).workflow_revision
-    response = client.put(url, json={"criterion": criterion, "expected_workflow_revision": revision})
+    policy = {"test_points": 6, "input_rules": "x >= 0."}
+    for criterion in ("代码正确得 4 分。", "代码注释得 4 分。"):
+        response = client.put(url, json={"criterion": criterion, "programming_scoring": policy})
+        assert response.status_code == 200, response.text
+    assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
+    problem = saved_problem(owner, task)
+    assert problem.stem == before.stem and problem.test_cases == before.test_cases
+    assert input_domain(problem, TestCase(io_mode="function", function_args=[-1])) == "outside"
+    assert input_domain(problem, TestCase(io_mode="function", function_args=[0])) == "allowed"
+    vote = await grade(monkeypatch, problem, "def square(x): return x*x")
+    assert vote.error_kind is None and vote.score == 10
+    assert vote.programming_evidence.generated_tests.passed == vote.programming_evidence.generated_tests.total == 10
+
+
+@pytest.mark.asyncio
+async def test_conflicting_explicit_code_points_roll_back_the_policy_and_text():
+    owner, task, client, url = await setup_question()
+    before = saved_problem(owner, task)
+    response = client.put(url, json={"criterion": "通过测试的比例乘以 6 分，代码正确得 4 分。",
+        "programming_scoring": {"test_points": 6, "input_rules": ""}})
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "invalid_programming_test_award"
-    assert "Tests are worth 6 points" in response.json()["error"]["message"]
-    assert saved_problem(owner, task).criterion == before.criterion
-    assert workflow_repository.get_workflow(task, owner_id=owner).workflow_revision == revision
+    after = saved_problem(owner, task)
+    assert after.criterion == before.criterion and saved_draft(after) == saved_draft(before)
+
+
+@pytest.mark.asyncio
+async def test_declared_test_points_without_matching_frozen_formula_cannot_confirm():
+    from copy import deepcopy
+    from backend.db.session import session_scope
+    from backend.db.assignment_repository import AssignmentQuestionRecord
+
+    owner, task, client, url = await setup_question()
+    response = client.put(url, json={"criterion": "代码注释得 4 分。",
+        "programming_scoring": {"test_points": 6, "input_rules": ""}})
+    assert response.status_code == 200, response.text
+    row, = assignment_repository.list_questions(task, teacher_id=owner)
+    damaged = deepcopy(row.source)
+    damaged["presentation"]["rubric_draft"]["programming_scoring"]["test_points"] = 7
+    # Simulate a previously persisted invalid snapshot, bypassing the normal
+    # write validation that would reject it today.
+    with session_scope() as session:
+        session.get(AssignmentQuestionRecord, row.id).source = damaged
+    assert saved_draft(saved_problem(owner, task)) is None
+    assert client.put(url, json={"review_status": "confirmed"}).status_code == 422
+    assert task_facade._question_review_blockers(assignment_repository.list_questions(task, teacher_id=owner))
