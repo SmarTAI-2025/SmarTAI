@@ -208,14 +208,18 @@ async def test_unverified_saved_contract_stays_blocked_after_adding_tests():
 
 
 @pytest.mark.asyncio
-async def test_explicit_zero_is_distinct_from_unset_test_points():
+@pytest.mark.parametrize("criterion", ["代码注释清晰。", "每处代码逻辑错误扣 0.5 分。"])
+async def test_explicit_zero_is_distinct_from_unset_test_points(criterion):
+    from backend.services.programming_rubric import frozen_programming_steps
+
     owner, task, client, url = await setup_question()
-    response = client.put(url, json={"criterion": "代码注释清晰。", "test_cases": [],
+    response = client.put(url, json={"criterion": criterion, "test_cases": [],
         "programming_scoring": {"test_points": 0, "input_rules": ""}})
     assert response.status_code == 200, response.text
-    draft = saved_draft(saved_problem(owner, task))
+    problem = saved_problem(owner, task)
+    draft = saved_draft(problem)
     assert draft.programming_scoring.test_points == 0
-    assert all(not step.test_suite for part in draft.plan.part_rubric.parts for step in part.steps)
+    assert problem.criterion == criterion and frozen_programming_steps(problem) == []
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
 
 

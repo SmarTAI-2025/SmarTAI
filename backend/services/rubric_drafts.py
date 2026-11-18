@@ -221,11 +221,12 @@ class RubricDraft(BaseModel):
     def check_programming_scoring(self):
         if self.programming_scoring is not None:
             rules = self.plan.part_rubric
-            if (not rules or any(part.deductions for part in rules.parts)
-                    or not any(not step.test_suite for part in rules.parts for step in part.steps)):
-                raise ValueError("Programming scoring needs a frozen code allocation.")
             test_points = self.programming_scoring.test_points
-            suites = [step.total_pts for part in rules.parts for step in part.steps if step.test_suite]
+            steps = [step for part in rules.parts for step in part.steps] if rules else []
+            if test_points and (not any(not step.test_suite for step in steps)
+                                or any(part.deductions for part in rules.parts)):
+                raise ValueError("Programming scoring needs a frozen code allocation.")
+            suites = [step.total_pts for step in steps if step.test_suite]
             if suites != ([test_points] if test_points else []):
                 raise ValueError("The saved test allocation and scoring formula disagree.")
         return self

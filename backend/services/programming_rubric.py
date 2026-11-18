@@ -16,10 +16,12 @@ def domain_criterion(problem):
 
 def frozen_programming_steps(problem):
     draft = saved_draft(problem)
-    if not draft or not draft.plan.part_rubric:
+    if not draft:
         presentation = (getattr(problem, "_math_rubric_source", {}) or {}).get("presentation") or {}
         if has_saved_scoring_contract(presentation):
             raise ValueError("programming_case_configuration_invalid")
+        return []
+    if not draft.plan.part_rubric:
         return []
     rows = [(part, step) for part in draft.plan.part_rubric.parts for step in part.steps]
     if not any(step.test_suite for _, step in rows):
@@ -108,13 +110,23 @@ def verified_test_points(plan):
 
 def compile_programming_scoring(problem, policy, *, previous=None):
     """Compile the selected suite budget and the code rubric atomically."""
-    from backend.services.math_rubric_plan import _source_requirements
+    from backend.services.math_rubric_plan import MathRubricRoute, _source_requirements
     from backend.services.rubric_drafts import RubricDefinition, generated_rubric
 
     raw = {**problem._math_rubric_source.get("presentation", {}), **problem.model_dump()}
+    if not (problem.criterion or "").strip():
+        raise ValueError("A programming rubric requires code scoring rules.")
+    if not policy.test_points:
+        # Preserve code-only rules such as deductions in the existing prose
+        # scoring path. No executable suite award is needed for a zero budget.
+        definition = RubricDefinition(routes=(MathRubricRoute(
+            id="code", description="Apply the original code scoring rules.",
+            applies_when="always", mode="holistic",
+        ),))
+        _, draft = generated_rubric(raw, definition)
+        return type(draft).model_validate({**draft.model_dump(), "programming_scoring": policy})
     code_budget = Decimal(str(problem.max_score)) - Decimal(str(policy.test_points))
-    if (code_budget <= 0 or not (problem.criterion or "").strip()
-            or (raw.get("question_structure") or {}).get("subparts")):
+    if code_budget <= 0 or (raw.get("question_structure") or {}).get("subparts"):
         raise ValueError("A programming rubric requires a positive code allocation for the question.")
 
     # Point items in the text are code items. A prose-only code rubric uses
@@ -124,8 +136,7 @@ def compile_programming_scoring(problem, policy, *, previous=None):
         raise ValueError("Use positive code point items.")
     if awards and sum((points for _, _, points in awards), Decimal(0)) != code_budget:
         raise ValueError("The code items must add up to the remaining code points.")
-    steps = ([{"id": "tests", "criterion": "Test suite", "total_pts": policy.test_points, "test_suite": True}]
-             if policy.test_points else [])
+    steps = [{"id": "tests", "criterion": "Test suite", "total_pts": policy.test_points, "test_suite": True}]
     steps.extend(
         {"id": f"code-{index}", "criterion": quote, "source_quote": quote, "total_pts": float(points)}
         for index, (quote, _, points) in enumerate(awards, 1)
