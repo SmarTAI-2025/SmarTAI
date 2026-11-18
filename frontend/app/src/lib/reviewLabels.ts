@@ -36,7 +36,7 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
   }
   const labels: Record<string, [string, string]> = {
     answer_assignment_conflict: ["同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the assignment"],
-    recognition_matching_review: ["请对照原件核对作答归属与原文，修正后保存", "Check the question assignment and transcription against the original, then save corrections"],
+    recognition_matching_review: ["请对照学生作答原文件，确认该题对应的题号", "Check the student's original submission and confirm the corresponding question number"],
     recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
     external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
     authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
