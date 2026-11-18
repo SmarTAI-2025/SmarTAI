@@ -30,6 +30,9 @@ from backend.services.programming_test_contract import has_function_only_contrac
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
+from backend.tools.structured_llm import (
+    PermanentLLMError, StructuredOutputBoundsError, StructuredOutputInvalidError, TransientLLMError,
+)
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
@@ -346,7 +349,7 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
 
 async def _prepare(state, problem, provider, generate, execute, reporter):
     from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases, bind_stdin_cases, required_function_name
-    from backend.skills.programming import _scan_complexity_keywords
+    from backend.skills.programming import _error_kind, _scan_complexity_keywords
     runtime = _reference_execution_identity(problem)
     key = _question_key(state, problem, runtime=runtime)
     async with state.lock(key):
@@ -395,7 +398,13 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 raise ValueError("programming_cases_unavailable")
             from backend.services.programming_rubric import distinct_scoring_cases
             originals, cases = distinct_scoring_cases(problem, originals, cases)
-            cases = await _checked_case_inputs(state, key, problem, originals, cases, state.provider or provider, reporter)
+            try:
+                cases = await _checked_case_inputs(state, key, problem, originals, cases, state.provider or provider, reporter)
+            except (PermanentLLMError, TransientLLMError, StructuredOutputInvalidError, StructuredOutputBoundsError) as exc:
+                # Preparation runs before per-student fan-out. Reuse the
+                # programming failure policy, including critical write errors.
+                state.failures[key] = _error_kind(exc)
+                return key, [], state.failures[key]
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
                 raise ValueError("programming_cases_unavailable")

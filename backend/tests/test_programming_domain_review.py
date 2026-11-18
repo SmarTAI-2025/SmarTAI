@@ -288,3 +288,76 @@ async def test_unresolved_semantic_review_withholds_the_suite_for_every_student(
             assert result.reason == "programming_input_domain_unverified" and result.report is None
     assert len(provider.calls) == 1
     execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("review_result", ["refused", "invalid", "checkpoint_failed"])
+async def test_failed_input_review_is_local_to_the_programming_question(monkeypatch, review_result):
+    from backend.agents import grading_agent, multi_expert
+    from backend.llm.providers import LLMResponse
+    from backend.models import ExpertResult
+    from backend.services.grading_adapter import correction_to_result
+    from backend.services.grading_checkpoints import CheckpointWriteError
+    from backend.tests.test_programming_reference_review import frozen_problem
+
+    prepared = await resolve_generated_outputs(demo(), cases(), provider=Provider([reviewed()]))
+    problem = frozen_problem(demo(), prepared)
+    raw = {**problem.model_dump(), "_math_rubric_source": problem._math_rubric_source}
+    refusal = LLMResponse(content="", model="synthetic", provider="synthetic", duration_ms=1,
+                          finish_reason="refused", refusal_code="provider_content_blocked")
+    invoke = {
+        "refused": {"return_value": refusal},
+        "invalid": {"return_value": LLMResponse(content="not JSON", model="synthetic",
+                                                provider="synthetic", duration_ms=1)},
+        "checkpoint_failed": {},
+    }
+    provider = SimpleNamespace(provider_id="synthetic:batch", provider_type="synthetic",
+                               ainvoke=AsyncMock(**invoke[review_result]))
+    registry = SimpleNamespace(pick_default=lambda: provider, list_available=lambda: [provider])
+    runner = AsyncMock()
+    monkeypatch.setattr("backend.skills.programming.run_sandbox", runner)
+    if review_result == "checkpoint_failed":
+        def fail_write(*_args):
+            raise CheckpointWriteError("checkpoint write failed")
+        monkeypatch.setattr(runs.ProgrammingRun, "store", fail_write)
+    # Keep the real programming path, but isolate the unrelated ordinary
+    # question from model-based rubric preparation and grading.
+    monkeypatch.setattr("backend.services.math_grading_context.prepare_math_plans", AsyncMock(return_value={}))
+    original_skill = multi_expert.get_skill_for_type
+    ordinary_grading = AsyncMock(side_effect=lambda *_args, **_kw: ExpertResult(
+        provider=provider.provider_id, score=3, max_score=4, confidence=.95, comment="Ordinary answer graded."))
+
+    class OrdinarySkill:
+        def __init__(self, *_args, **_kwargs):
+            self.grade = ordinary_grading
+
+    monkeypatch.setattr(multi_expert, "get_skill_for_type",
+                        lambda question_type: OrdinarySkill if question_type == "概念题" else original_skill(question_type))
+    batch = grading_agent.grade_batch(
+        student_store={sid: {"stu_id": sid, "stu_ans": [
+            {"q_id": "q1", "content": CODE}, {"q_id": "q2", "content": "4"},
+        ]} for sid in ("one", "two")},
+        problem_store={"q1": raw, "q2": {"q_id": "q2", "number": "2", "type": "概念题",
+                                       "stem": "How many sides does a square have?", "criterion": "4", "max_score": 4}},
+        registry=registry, multi_sample_n=1,
+    )
+    if review_result == "checkpoint_failed":
+        with pytest.raises(CheckpointWriteError, match="checkpoint write failed"):
+            await batch
+        ordinary_grading.assert_not_awaited()
+        provider.ainvoke.assert_not_awaited()
+    else:
+        result = await batch
+        assert len(result) == ordinary_grading.await_count == 2
+        for student in result:
+            by_question = {row.q_id: row for row in student["corrections"]}
+            assert by_question["q2"].score == 3
+            persisted = correction_to_result(run_id="run", revision_id="revision",
+                question=SimpleNamespace(q_id="q1", id="question", max_score=10),
+                student_id=student["student_id"], correction=by_question["q1"])
+            assert persisted.ai_score is None and persisted.requires_review
+            assert by_question["q1"].expert_results[0].programming_evidence.score_status == "unavailable"
+            assert by_question["q1"].expert_results[0].error_kind == (
+                "provider_content_blocked" if review_result == "refused" else "parse_failed")
+        assert provider.ainvoke.await_count == (2 if review_result == "invalid" else 1)
+    runner.assert_not_awaited()
