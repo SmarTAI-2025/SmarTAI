@@ -48,6 +48,13 @@ def digest(data):
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def input_review_fingerprint(problem, cases):
+    from backend.services.programming_rubric import domain_criterion
+
+    return digest(["programming_input_review_v1", problem.stem, domain_criterion(problem) or "",
+                   [case.model_dump(mode="json") for case in cases]])
+
+
 def source_hash(code):
     return hashlib.sha256(code.encode()).hexdigest()
 
@@ -314,8 +321,14 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
     # Preparation can also add tests to an existing teacher rubric that has no
     # funded suite item. Apply the same review there; legacy grading-time test
     # proposals retain their separate admission path.
-    if ("unknown" in domains and provider is not None
-            and (frozen_programming_steps(problem) or generated.get("source_kind") == "ai_generated")):
+    approved = generated.get("input_review_fingerprint")
+    if ("unknown" in domains and generated.get("source_kind") == "ai_generated"
+            and approved and approved == input_review_fingerprint(problem, cases)):
+        # Reuse the exact prepared suite and rules. A current deterministic
+        # rejection still takes precedence over a stored semantic decision.
+        domains = ["allowed" if domain == "unknown" else domain for domain in domains]
+    elif ("unknown" in domains and provider is not None
+          and (frozen_programming_steps(problem) or generated.get("source_kind") == "ai_generated")):
         from backend.services.programming_input_review import review_input_domains
         from backend.progress.grading_activity import observe_auxiliary_request
         state.store(STARTED, plan_key, {"q_id": problem.q_id})

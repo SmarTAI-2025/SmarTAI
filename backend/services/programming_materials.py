@@ -41,8 +41,11 @@ def input_probes(cases):
     return probes
 
 
-async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None):
-    from backend.services.programming_runs import _reference, _reference_language, _source, _validate_report
+async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None,
+                                    review_evidence=None):
+    from backend.services.programming_runs import (
+        _reference, _reference_language, _source, _validate_report, input_review_fingerprint,
+    )
     from backend.services.programming_input_domain import input_domain
     from backend.services.python_source_encoding import python_execution_source
     from backend.tools.code_interpreter import run_sandbox
@@ -123,4 +126,7 @@ async def resolve_generated_outputs(source, cases, *, execute=None, provider=Non
         raise ReferenceExecutionError("The reference failed to produce complete, usable outputs for the proposed inputs.") from exc
     if all(case.io_mode == "stdin" for case in reference_cases) and not any(row.stdout for row in report.results):
         raise ReferenceExecutionError("The reference produced no stdout for the entire suite. Check its entry/input/output wiring and include an observable-output input; do not invent outputs.")
-    return adapt_programming_cases(problem.stem, resolved)
+    resolved = adapt_programming_cases(problem.stem, resolved)
+    if review_evidence is not None:
+        review_evidence["input_review_fingerprint"] = input_review_fingerprint(problem, resolved)
+    return resolved

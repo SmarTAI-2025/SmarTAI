@@ -2259,6 +2259,7 @@ class AICompletionCandidateOutput(BaseModel):
     test_cases: Optional[List[TestCase]] = None
     rubric_definition: RubricDefinition | None = Field(default=None, exclude=True)
     rubric_draft: dict | None = None
+    input_review_fingerprint: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class AICompletionOutput(BaseModel):
@@ -2551,6 +2552,8 @@ async def generate_missing_question_materials(
         if not isinstance(raw, dict) or raw.get("target_id") not in expected_targets:
             return raw
         item = dict(raw)
+        # Only the server can certify a successfully reviewed test suite.
+        item.pop("input_review_fingerprint", None)
         target = expected_targets[item["target_id"]]
         # target_id uniquely identifies both fields. Contradictions supplied
         # by a provider still fail the identity check in validate_targets.
@@ -2910,8 +2913,10 @@ async def generate_missing_question_materials(
         if reporter:
             await reporter._emit_message("Running the reference implementation to prepare test outputs.")
         try:
+            review_evidence = {}
             candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases,
-                provider=provider, reporter=reporter)
+                provider=provider, reporter=reporter, review_evidence=review_evidence)
+            candidate.input_review_fingerprint = review_evidence.get("input_review_fingerprint")
         except (ValueError, HostCodeExecutionDisabled, IsolatedRunnerUnavailable, TimeoutError) as exc:
             if not allow_partial:
                 raise

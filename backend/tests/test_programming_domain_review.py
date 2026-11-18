@@ -252,6 +252,70 @@ async def test_last_generation_attempt_can_still_validate_required_input_domains
 
 
 @pytest.mark.asyncio
+async def test_saved_review_is_reused_after_preparation_and_across_grading_runs(monkeypatch):
+    from backend.agents import incremental_question_preparation as inc
+    from backend.tests.test_incremental_question_preparation import setup, persisted
+
+    owner, _, operation, pipeline = await setup(monkeypatch)
+    row = {**demo(), "solution_code": ""}
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([row])))
+    initial = json.loads(candidates(include_saved=True))
+    initial["candidates"][1]["input_review_fingerprint"] = "copied-from-model"
+    pipeline.provider = Provider([json.dumps(initial), reviewed()])
+    await pipeline.run()
+
+    _, rows = persisted(owner, operation)
+    saved = rows["q1"]
+    problem = ProblemInfo.model_validate(saved)
+    problem._math_rubric_source = {"presentation": saved}
+    review = saved["ai_completion_provenance"]["test_cases"]["input_review_fingerprint"]
+    assert review == runs.input_review_fingerprint(problem, problem.test_cases)
+    assert review != "copied-from-model"
+    provider = Provider([reviewed()])
+    generate = AsyncMock()
+    answer = StudentAnswerInfo(q_id="q1", number="1", type="编程题", content=CODE)
+    for student in ("one", "two"):
+        # A fresh run has no preparation cache and must use the saved evidence.
+        with runs.programming_run(SimpleNamespace(pick_default=lambda: provider), None):
+            result = await runs.evidence_for_answer(problem=problem, answer=answer, student_id=student,
+                task_id=None, provider=provider, reporter=None, generate=generate, execute=run_sandbox)
+        assert result.status == "executed" and result.report.passed_count == 10
+    assert not provider.calls
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["legacy", "stem", "rules", "inputs", "outputs"])
+async def test_stale_review_keeps_the_existing_input_checks(change):
+    row = demo()
+    evidence = {}
+    prepared = await resolve_generated_outputs(row, cases(), provider=Provider([reviewed()]),
+                                               review_evidence=evidence)
+    row["test_cases"] = prepared
+    row["ai_completion_provenance"] = {"test_cases": {
+        "source_kind": "ai_generated", **({} if change == "legacy" else evidence),
+    }}
+    if change == "stem":
+        row["stem"] += "\nEach array must be sorted in ascending order."
+    if change == "rules":
+        row["criterion"] = "Only sorted inputs are in scope."
+    if change == "inputs":
+        prepared[3] = prepared[3].model_copy(update={"function_args": [[7, 6, 5]], "input": ""})
+    if change == "outputs":
+        prepared[3] = prepared[3].model_copy(update={"expected_return": "[1, 0, 0]", "expected_output": "[1, 0, 0]"})
+    problem = ProblemInfo.model_validate(row)
+    problem._math_rubric_source = {"presentation": row}
+    provider = Provider([reviewed("unknown")])
+    execute = AsyncMock()
+    result = await runs.evidence_for_answer(problem=problem,
+        answer=StudentAnswerInfo(q_id="q1", number="1", type="编程题", content=CODE),
+        student_id="one", task_id=None, provider=provider, reporter=None, generate=AsyncMock(), execute=execute)
+    assert result.reason == "programming_input_domain_unverified"
+    assert len(provider.calls) == 1
+    execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("frozen", [False, True])
 async def test_prepared_suite_is_reviewed_once_for_all_students_and_preserves_real_failure(frozen):
     from backend.tests.test_programming_reference_review import frozen_problem

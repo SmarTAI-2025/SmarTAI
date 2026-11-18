@@ -1171,6 +1171,9 @@ class IncrementalQuestionPreparation:
                                     job_id=self.operation.operation_id, candidate_id=candidate.target_id,
                                     source_kind="ai_generated", provider_id=self.provider_id, review_status="pending",
                                     generated_at=time.time(), updated_at=time.time())
+                                if candidate.input_review_fingerprint:
+                                    saved["q1"]["ai_completion_provenance"][candidate.target][
+                                        "input_review_fingerprint"] = candidate.input_review_fingerprint
                             feedback.pop(target["target_id"], None)
                             await self.finish(f"generated:{identity}:{candidate.target}", saved)
                             # A later missing-field request must see the same
