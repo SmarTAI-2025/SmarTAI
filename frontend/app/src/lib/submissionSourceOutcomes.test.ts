@@ -53,28 +53,28 @@ describe("submission source reason copy", () => {
     {
       code: "question_preparation_time_limit_reached",
       title: ["本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"],
-      duration: ["1.5 小时，排队不计时", "1.5 hours of active processing, excluding queue time"],
+      duration: ["有效处理时限，排队不计时", "active processing limit, excluding queue time"],
       saved: ["已保存的题干、参考答案和评分标准会保留", "Saved question text, reference answers, and rubrics are retained"],
       nextStep: ["可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."],
     },
     {
       code: "question_preparation_wall_time_limit_reached",
       title: ["本次题目处理已达到总时限", "This question preparation run reached its total time limit"],
-      duration: ["2.5 小时总时限，自首次开始运行起，之后等待计入", "2.5-hour total time limit, counted from the first start, including later waits"],
+      duration: ["总时限，自首次开始运行起，之后等待计入", "total time limit, counted from the first start, including later waits"],
       saved: ["已保存的题干、参考答案和评分标准会保留", "Saved question text, reference answers, and rubrics are retained"],
       nextStep: ["可重试未完成部分，或人工核对并补齐。", "Retry unfinished work, or review and complete it manually."],
     },
     {
       code: "grading_time_limit_reached",
       title: ["本次批改已达到有效处理时限", "This grading run reached its active processing limit"],
-      duration: ["2.5 小时，排队不计时", "2.5 hours of active processing, excluding queue time"],
+      duration: ["有效处理时限，排队不计时", "active processing limit, excluding queue time"],
       saved: ["已保存的批改结果会保留", "Saved grading results are retained"],
       nextStep: ["可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."],
     },
     {
       code: "grading_wall_time_limit_reached",
       title: ["本次批改已达到总时限", "This grading run reached its total time limit"],
-      duration: ["3.5 小时总时限，自首次开始运行起，之后等待计入", "3.5-hour total time limit, counted from the first start, including later waits"],
+      duration: ["总时限，自首次开始运行起，之后等待计入", "total time limit, counted from the first start, including later waits"],
       saved: ["已保存的批改结果会保留", "Saved grading results are retained"],
       nextStep: ["可重试失败项，或人工核对并补齐分数。", "Retry failed items, or review and complete the scores manually."],
     },
@@ -99,7 +99,7 @@ describe("submission source reason copy", () => {
 
   it.each(["zh-CN", "en-US"] as const)("explains work-time exhaustion and both continuation options (%s)", locale => {
     const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_time_limit_reached" }), locale);
-    expect(copy.description).toContain(locale === "zh-CN" ? "2.5 小时，排队不计时" : "2.5 hours of active processing, excluding queue time");
+    expect(copy.description).toContain(locale === "zh-CN" ? "有效处理时限，排队不计时" : "active processing limit, excluding queue time");
     expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");
     expect(JSON.stringify(copy)).not.toMatch(/管理员|administrator/);
   });
@@ -107,7 +107,7 @@ describe("submission source reason copy", () => {
   it.each(["zh-CN", "en-US"] as const)("explains the total deadline counted from the first start, including later waits (%s)", locale => {
     const item = source({ reason_code: "submission_wall_time_limit_reached" });
     const copy = getSubmissionSourceReasonCopy(item, locale);
-    expect(copy.description).toContain(locale === "zh-CN" ? "3.5 小时总时限，自首次开始运行起，之后等待计入" : "3.5-hour total time limit, counted from the first start, including later waits");
+    expect(copy.description).toContain(locale === "zh-CN" ? "总时限，自首次开始运行起，之后等待计入" : "total time limit, counted from the first start, including later waits");
     expect(copy.description).toContain(locale === "zh-CN" ? "结构化作答已保留" : "structured answers are retained");
     expect(copy.nextStep).toContain(locale === "zh-CN" ? "重试失败项" : "Retry failed files");
     expect(copy.nextStep).toContain(locale === "zh-CN" ? "人工继续处理" : "continue manually");

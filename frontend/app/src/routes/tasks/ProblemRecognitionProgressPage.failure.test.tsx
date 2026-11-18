@@ -122,8 +122,8 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
   });
 
   it.each([
-    ["question_preparation_time_limit_reached", "本次题目处理已达到有效处理时限", "1.5 小时，排队不计时", "已达到有效处理时限"],
-    ["question_preparation_wall_time_limit_reached", "本次题目处理已达到总时限", "2.5 小时总时限，自首次开始运行起，之后等待计入", "已达到总时限"],
+    ["question_preparation_time_limit_reached", "本次题目处理已达到有效处理时限", "有效处理时限，排队不计时", "已达到有效处理时限"],
+    ["question_preparation_wall_time_limit_reached", "本次题目处理已达到总时限", "总时限，自首次开始运行起，之后等待计入", "已达到总时限"],
   ])("shows retained question results and existing recovery actions for %s", (code, title, timing, itemLabel) => {
     failureCode = code;
     generationProgress = { question_error_codes: { q2: code } };

@@ -47,6 +47,8 @@ import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { PdfDocumentPreview } from "@/components/tasks/PdfDocumentPreview";
 import { recognitionEventText } from "@/components/tasks/RecognitionActivity";
+import type { WorkflowTimeoutMinutes } from "@/types/health";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
 import { gradingActivityText } from "@/components/tasks/GradingActivity";
 import { buildResultsModel, formatPercent, formatScore, problemLabel } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -92,6 +94,7 @@ function initialSteps(locale: Locale): RunStep[] {
 }
 
 export function FrontierLiveDemoPage() {
+  const limits = useWorkflowTimeouts();
   const { locale, t } = useI18n();
   const navigate = useNavigate();
   const gradingIntent = useGradingIntent();
@@ -682,7 +685,7 @@ export function FrontierLiveDemoPage() {
               <div role="progressbar" aria-label={tx(locale, "当前处理进度", "Current processing progress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(snapshot)} className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                 <span className="block h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progressPercent(snapshot)}%` }} />
               </div>
-              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
+              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale, limits)}</p>
             </div>
           ) : null}
 
@@ -1213,14 +1216,14 @@ function progressPercent(snapshot: TaskStateSnapshot) {
   return total > 0 ? Math.max(4, Math.min(100, Math.round((progress.completed_units / total) * 100))) : progress.phase === "done" ? 100 : 8;
 }
 
-function latestProgressMessage(snapshot: TaskStateSnapshot, locale: Locale) {
+function latestProgressMessage(snapshot: TaskStateSnapshot, locale: Locale, limits?: WorkflowTimeoutMinutes) {
   const progress = snapshot.progress;
   if (isTaskPaused(snapshot.status)) return tx(locale, "本次处理已停止", "This run has stopped");
   if (snapshot.status === "graded" || snapshot.status === "finalized") return gradingProgressText(locale, "completed");
   if (progress?.activity_latest || snapshot.status === "grading") {
     return gradingActivityText(progress?.activity_latest, progress?.model_progress ?? [], locale === "zh-CN");
   }
-  return recognitionEventText(progress?.messages?.at(-1), locale === "zh-CN");
+  return recognitionEventText(progress?.messages?.at(-1), locale === "zh-CN", false, limits);
 }
 
 function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep[] {

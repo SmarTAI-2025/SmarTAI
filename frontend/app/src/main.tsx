@@ -5,6 +5,7 @@ import { WorkspaceSession } from "@/components/auth/WorkspaceSession";
 import { AppShell } from "@/components/layout/AppShell";
 import { useI18n } from "@/i18n/I18nProvider";
 import { Providers } from "@/providers/Providers";
+import { WorkflowTimeoutsProvider } from "@/providers/WorkflowTimeouts";
 import { StudentUnavailablePage } from "@/routes/StudentUnavailablePage";
 import { RouteRecoveryPage } from "@/routes/RouteRecoveryPage";
 import "@/styles/globals.css";
@@ -187,7 +188,9 @@ const router = createBrowserRouter([{ element: <PublicRouteLayout />, children: 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <Providers>
-      <RouterProvider router={router} />
+      <WorkflowTimeoutsProvider>
+        <RouterProvider router={router} />
+      </WorkflowTimeoutsProvider>
     </Providers>
   </React.StrictMode>,
 );

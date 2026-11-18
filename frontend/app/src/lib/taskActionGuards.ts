@@ -204,6 +204,7 @@ export interface RecoverableErrorInfo {
   dailyQuotaExhausted?: boolean;
   retryUnavailable?: boolean;
   showUsageLinks?: boolean;
+  workflowTimeoutCode?: string;
   technicalDetails: Array<{ label: string; value: string }>;
 }
 
@@ -824,8 +825,9 @@ export function classifyRecoverableError(
 
   if (code === "knowledge_wall_time_limit_reached") {
     return {
+      workflowTimeoutCode: code,
       title: tx(locale, "资料库处理已达到总时限", "Library processing reached its total time limit"),
-      description: tx(locale, "本轮处理已达到 2 小时，已提取的页面和内容会保留。可继续处理未完成页面，或重试缺页；新一轮重新计时。", "This run reached 2 hours. Extracted pages and content are retained. Resume unfinished pages or retry gaps with a fresh time allowance."),
+      description: tx(locale, "本轮处理已达到总时限，已提取的页面和内容会保留。可继续处理未完成页面，或重试缺页；新一轮重新计时。", "This run reached its total time limit. Extracted pages and content are retained. Resume unfinished pages or retry gaps with a fresh time allowance."),
       actionLabel: tx(locale, "继续处理", "Resume"),
       actionKind: "retry", tone: "warning", technicalDetails,
     };
@@ -843,12 +845,13 @@ export function classifyRecoverableError(
   if (code === "question_preparation_time_limit_reached" || code === "question_preparation_wall_time_limit_reached") {
     const wallTime = code === "question_preparation_wall_time_limit_reached";
     return {
+      workflowTimeoutCode: code,
       title: wallTime
         ? tx(locale, "本次题目处理已达到总时限", "This question preparation run reached its total time limit")
         : tx(locale, "本次题目处理已达到有效处理时限", "This question preparation run reached its active processing limit"),
       description: (wallTime
-        ? tx(locale, "本次题目处理已达到 2.5 小时总时限，自首次开始运行起，之后等待计入。", "This question preparation run reached its 2.5-hour total time limit, counted from the first start, including later waits. ")
-        : tx(locale, "本次有效处理时间已达到 1.5 小时，排队不计时。", "This run reached 1.5 hours of active processing, excluding queue time. "))
+        ? tx(locale, "本次题目处理已达到总时限，自首次开始运行起，之后等待计入。", "This question preparation run reached its total time limit, counted from the first start, including later waits. ")
+        : tx(locale, "本次已达到有效处理时限，排队不计时。", "This run reached its active processing limit, excluding queue time. "))
         + tx(locale, "已保存的题干、参考答案和评分标准会保留；可重试未完成部分，或人工核对并补齐。", "Saved question text, reference answers, and rubrics are retained. Retry unfinished work, or review and complete it manually."),
       actionLabel: tx(locale, "重试失败项", "Retry failed items"),
       actionKind: "retry", tone: "warning", technicalDetails,
@@ -858,12 +861,13 @@ export function classifyRecoverableError(
   if (code === "submission_time_limit_reached" || code === "submission_wall_time_limit_reached") {
     const wallTime = code === "submission_wall_time_limit_reached";
     return {
+      workflowTimeoutCode: code,
       title: wallTime
         ? tx(locale, "本次识别已达到总时限", "This recognition run reached its total time limit")
         : tx(locale, "本次识别已达到处理时限", "This recognition run reached its processing limit"),
       description: (wallTime
-        ? tx(locale, "本次作答识别已达到 3.5 小时总时限，自首次开始运行起，之后等待计入。", "This submission recognition run reached its 3.5-hour total time limit, counted from the first start, including later waits. ")
-        : tx(locale, "本次有效处理时间已达到 2.5 小时，排队不计时。", "This run reached 2.5 hours of active processing, excluding queue time. "))
+        ? tx(locale, "本次作答识别已达到总时限，自首次开始运行起，之后等待计入。", "This submission recognition run reached its total time limit, counted from the first start, including later waits. ")
+        : tx(locale, "本次已达到有效处理时限，排队不计时。", "This run reached its active processing limit, excluding queue time. "))
         + tx(locale, "已完成的识别和结构化作答已保留；可重试失败项继续补充，也可人工继续处理，只补齐未完成内容。", "Completed recognition and structured answers are retained. Retry failed files to continue, or fill unfinished content manually."),
       actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
@@ -873,12 +877,13 @@ export function classifyRecoverableError(
   if (code === "grading_time_limit_reached" || code === "grading_wall_time_limit_reached") {
     const wallTime = code === "grading_wall_time_limit_reached";
     return {
+      workflowTimeoutCode: code,
       title: wallTime
         ? tx(locale, "本次批改已达到总时限", "This grading run reached its total time limit")
         : tx(locale, "本次批改已达到有效处理时限", "This grading run reached its active processing limit"),
       description: (wallTime
-        ? tx(locale, "本次批改已达到 3.5 小时总时限，自首次开始运行起，之后等待计入。", "This grading run reached its 3.5-hour total time limit, counted from the first start, including later waits. ")
-        : tx(locale, "本次有效处理时间已达到 2.5 小时，排队不计时。", "This run reached 2.5 hours of active processing, excluding queue time. "))
+        ? tx(locale, "本次批改已达到总时限，自首次开始运行起，之后等待计入。", "This grading run reached its total time limit, counted from the first start, including later waits. ")
+        : tx(locale, "本次已达到有效处理时限，排队不计时。", "This run reached its active processing limit, excluding queue time. "))
         + tx(locale, "已保存的批改结果会保留；可重试失败项，或人工核对并补齐分数。", "Saved grading results are retained. Retry failed items, or review and complete the scores manually."),
       actionLabel: tx(locale, "重试失败项", "Retry failed items"),
       actionKind: "retry", tone: "warning", technicalDetails,

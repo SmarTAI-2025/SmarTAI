@@ -11,6 +11,7 @@ import { Link, useLocation } from "react-router-dom";
 import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
 import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "@/types";
 import { answerReviewNotes } from "@/lib/reviewConfirmation";
 
@@ -138,7 +139,7 @@ function SourceOutcomeRow({ source, locale, requiredOnly }: { source: Submission
   const shown = requiredOnly ? diagnostics.slice(0, 20) : diagnostics;
   const diagnosticCount = requiredOnly ? source.answer_required_diagnostic_count ?? diagnostics.length
     : source.answer_diagnostic_count ?? diagnostics.length;
-  const copy = getSubmissionSourceReasonCopy(source, locale);
+  const copy = getSubmissionSourceReasonCopy(source, locale, useWorkflowTimeouts());
   const Icon = source.status === "parsed"
     ? CheckCircle2
     : source.status === "identity_needs_review" || source.status === "manual_review"
