@@ -66,7 +66,7 @@ it("shows both required field repairs and optional confidence checks for one ans
   }]} /></MemoryRouter>);
   expect(screen.getByText("第 1.10 题")).toBeVisible();
   expect(screen.getByText(/需处理：待核对：作答内容/)).toHaveClass("text-red-700");
-  expect(screen.getByText(/建议复核：置信度 0.4/)).toHaveClass("text-amber-700");
+  expect(screen.getByText(/建议复核：作答识别置信度较低（0\.4）/)).toHaveClass("text-amber-700");
 });
 
 it("progress counts only severe responses, keeps twenty and hides yellow notes", () => {

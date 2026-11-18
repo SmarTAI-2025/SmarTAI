@@ -1,6 +1,6 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
-import { formatSubmissionFlag, hasQuestionType, incompleteSubmissionLabel, questionIssueCodeLabel } from "./reviewLabels";
+import { formatSubmissionFlag, genericAnswerReviewLabel, hasQuestionType, incompleteSubmissionLabel, isUnclearAnswerFlag, questionIssueCodeLabel, unclearAnswerLabel } from "./reviewLabels";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -98,7 +98,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
       return label;
     }
   }
-  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return issue.details.message;
+  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return locale === "zh-CN" ? "请核对教师评分规则的解读。" : "Check how the teacher’s scoring rule was interpreted.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
@@ -226,11 +226,19 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
     .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
       severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
-  for (const fields of splitMissingFields ? missingNames.map(name => [name]) : missingNames.length ? [missingNames] : []) {
-    notes.push({ label: locale === "zh-CN"
-      ? `请补齐缺失的${fields.join("、")}。`
-      : `Complete the missing ${fields.join(", ")}.`,
-      severity: "blocking" });
+  if (splitMissingFields) {
+    const labels = locale === "zh-CN" ? {
+      "题号": "请补齐题号。", "题型": "请选择题型。",
+      "题干": "题干缺失，请对照原件补齐。", "评分标准": "评分标准缺失或不完整，请补齐。",
+    } : {
+      "question number": "Enter the question number.", "question type": "Select the question type.",
+      "question text": "Question text is missing. Complete it against the source.",
+      rubric: "The rubric is missing or incomplete. Complete it.",
+    };
+    for (const name of missingNames) notes.push({ label: labels[name]!, severity: "blocking" });
+  } else if (missingNames.length) {
+    notes.push({ label: locale === "zh-CN" ? `请补齐缺失的${missingNames.join("、")}。`
+      : `Complete the missing ${missingNames.join(", ")}.`, severity: "blocking" });
   }
   if (answerMissing && problem.review_status !== "confirmed" && !generatedFields.has("answer")) {
     notes.push({ label: locale === "zh-CN"
@@ -331,8 +339,7 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
   return [...sourceIssues, ...identities, ...answers];
 }
 
-export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false,
-  presentation: "queue" | "detail" = "detail"): Array<{ label: string; severity: "blocking" | "advisory" }> {
+export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false, compact = false): Array<{ label: string; severity: "blocking" | "advisory" }> {
   const saved = answer?.review_status === "confirmed" || answer?.review_status === "edited";
   if (!answer || (saved && !answerReviewNextBlocked(answer))) return [];
   const confidence = confidenceValue(answer.recognition_confidence);
@@ -348,15 +355,32 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete"]);
   const specificFailure = flags.some(flag => flag.startsWith("recognition_invalid_fields:")
     || ["no_matching_answer", "parse_failed", "recognition_matching_review", "answer_assignment_conflict", "recognition_paused", "recognition_incomplete"].includes(flag));
-  const visibleFlags = flags.filter(flag => !(flag === "recognition_uncertain" && flags.includes("recognition_boundary_uncertain"))
+  const blankRecognitionFailure = !answer.content?.trim() && !specificFailure
+    && flags.some(flag => ["recognition_failed", "recognition_manual_pending"].includes(flag));
+  const pageFailure = answerReviewNextBlocked(answer) && (blankRecognitionFailure || flags.includes("recognition_incomplete"));
+  const visibleFlags = flags.filter(flag => !(pageFailure && ["recognition_failed", "recognition_manual_pending", "recognition_incomplete"].includes(flag))
+    && !(flag === "recognition_uncertain" && flags.includes("recognition_boundary_uncertain"))
     && !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
     && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
     && !(flag === "parse_failed" && flags.some(item => item.startsWith("recognition_invalid_fields:"))));
-  return [
-    ...(!saved && confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
-    ...[...new Set(visibleFlags)].map(flag => ({
-      label: flag === "recognition_incomplete" ? incompleteSubmissionLabel(answer.flag ?? [], locale, presentation) : formatSubmissionFlag(flag, locale),
-      severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const,
-    })),
-  ].filter(note => !saved || note.severity === "blocking");
+  const lowConfidence = !saved && confidence !== null && confidenceNeedsAttention(confidence);
+  const unclear = visibleFlags.some(isUnclearAnswerFlag);
+  const notes = visibleFlags.filter(flag => !isUnclearAnswerFlag(flag)).map(flag => ({
+    label: flag === "recognition_incomplete" ? incompleteSubmissionLabel(answer, locale, compact) : formatSubmissionFlag(flag, locale),
+    severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const,
+  }));
+  if (pageFailure) notes.unshift({ severity: "blocking", label: incompleteSubmissionLabel(answer, locale, compact) });
+  if (unclear || lowConfidence) {
+    notes.unshift({ severity: "advisory", label: unclear ? unclearAnswerLabel(locale, lowConfidence ? confidence : undefined)
+      : locale === "zh-CN" ? `作答识别置信度较低（${confidence}），建议对照原文件核对。`
+        : `Low confidence in the answer transcription (${confidence}). Check it against the original.` });
+  }
+  const generic = genericAnswerReviewLabel(locale);
+  const unique = new Map<string, typeof notes[number]>();
+  for (const note of notes) {
+    if (saved && note.severity !== "blocking") continue;
+    if (note.label === generic && notes.some(other => other.severity === note.severity && other.label !== generic)) continue;
+    unique.set(`${note.severity}:${note.label}`, note);
+  }
+  return [...unique.values()];
 }

@@ -54,7 +54,7 @@ import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
 import { answerReviewNextBlocked, submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
-import { formatSubmissionFlag } from "@/lib/submissionReview";
+import { answerReviewQueueReason } from "@/lib/submissionReview";
 import { gradingProgressText } from "@/lib/gradingProgressCopy";
 import { DemoContentTabs, type DemoContentStage } from "./DemoContentTabs";
 import "./frontier.css";
@@ -771,7 +771,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, canStart, on
                 <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-primary">{studentAnswerLabel(answer)}</span>
-                    {answerReviewNextBlocked(answer) ? <span className="text-[10px] font-medium text-warning">{answer.flag.map(flag => formatSubmissionFlag(flag, locale)).join(" · ")}</span> : null}
+                    {answerReviewNextBlocked(answer) ? <span className="text-[10px] font-medium text-warning">{answerReviewQueueReason(answer, locale, "blocking")}</span> : null}
                   </div>
                   <MarkdownMath className="mt-1 max-h-28 overflow-auto text-[11px] leading-5 text-foreground">{answer.content}</MarkdownMath>
                 </div>
@@ -830,7 +830,7 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
       <LiveResultCarousel model={model} locale={locale} />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-muted/60 px-4 py-3 text-xs text-foreground">
-        <span>{tx(locale, `有 ${model.reviewCount} 个题次需要关注，可查看复核详情。`, `${model.reviewCount} responses need attention. See the review details.`)}</span>
+        <span>{tx(locale, `${model.reviewCount} 个题次待复核。`, `${model.reviewCount} responses to review.`)}</span>
         <span className="font-semibold text-primary">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
       </div>
     </section>

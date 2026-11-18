@@ -430,20 +430,28 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   const scoreDetail = displayScore !== null && correction.max_score > 0
     ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
     : "";
-  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}${item ? ` · ${queueReason(locale, item)}` : ""}`;
+  const reason = state === "hard" || state === "review"
+    ? correctionQueueReason(correction, locale, state === "hard" ? "blocking" : "advisory", item) : undefined;
+  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}${reason ? ` · ${reason}` : ""}`;
   const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "warning" : "ok";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 
+function correctionQueueReason(correction: Correction, locale: Locale, severity: "blocking" | "advisory", item?: ReviewItem) {
+  const notes = correctionReviewNotes(correction, locale, true);
+  const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
+  if (reasons.length) return reasons.join(" · ");
+  if (!notes.length && item?.severity === severity) return queueReason(locale, item);
+}
+
 function ReviewQueue({ locale, taskId, items, returnTo, confirmation }: { confirmation: React.ReactNode; locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
   return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.flatMap(item => {
-    const notes = correctionReviewNotes(item.correction, locale);
     return (["blocking", "advisory"] as const).flatMap(severity => {
-      const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
-      if (!reasons.length && (notes.length || item.severity !== severity)) return [];
+      const reason = correctionQueueReason(item.correction, locale, severity, item);
+      if (!reason) return [];
       return [{
         key: `${reviewCellKey(item.student.id, item.question.id)}:${severity}`, title: `${item.student.name} · ${item.question.label}`,
-        reason: reasons.length ? reasons.join(" · ") : queueReason(locale, item), severity,
+        reason, severity,
         href: reviewDetailHref(taskId, item.student.id, item.question.id, returnTo),
       }];
     });

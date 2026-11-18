@@ -214,16 +214,20 @@ export function QuestionPreparationOverviewPage() {
   );
 }
 
+function questionQueueReasons(problem: ProblemInfo, locale: string, severity: "blocking" | "advisory") {
+  return questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale), true)
+    .filter(note => note.severity === severity).map(note => note.label).join(locale === "zh-CN" ? "；" : " · ");
+}
+
 function QuestionReviewQueue({ risks, taskId, locale, confirmation }: { confirmation: React.ReactNode; risks: OpenRiskRow[]; taskId: string; locale: string }) {
   const grouped = new Map<string, OpenRiskRow[]>();
   for (const row of risks) grouped.set(row.problem.q_id, [...(grouped.get(row.problem.q_id) ?? []), row]);
   return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={[...grouped.values()].flatMap(rows => {
     const { problem } = rows[0];
-    const notes = questionReviewNotes(problem, locale, code => issueCodeLabel(code, locale), true);
     return (["blocking", "advisory"] as const).flatMap(severity => {
-      const matching = notes.filter(note => note.severity === severity);
-      return matching.length ? [{ key: `${problem.q_id}:${severity}`, title: problem.number || "—", severity,
-        reason: matching.map(note => note.label).join("；"),
+      const reason = questionQueueReasons(problem, locale, severity);
+      return reason ? [{ key: `${problem.q_id}:${severity}`, title: problem.number || "—", severity,
+        reason,
         href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}` }] : [];
     });
   })} />;
@@ -301,9 +305,11 @@ function RiskMetric({ label, value, tone }: { label: string; value: number; tone
 
 function MaterialStatus({ problem, field, locale }: { problem: ProblemInfo; field: MaterialField; locale: string }) {
   const status = getMaterialStatus(problem, field, locale);
+  const reason = status.tone === "danger" ? questionQueueReasons(problem, locale, "blocking")
+    : status.tone === "warning" ? questionQueueReasons(problem, locale, "advisory") : "";
   return (
     <span
-      title={status.detail}
+      title={reason || status.detail}
       className={cn(
         "inline-flex min-w-[82px] items-center justify-center gap-1 rounded-full px-3 py-1 text-xs font-semibold",
         status.tone === "success" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300",
@@ -320,6 +326,10 @@ function MaterialStatus({ problem, field, locale }: { problem: ProblemInfo; fiel
 
 function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: string }) {
   const needsReview = problem.max_score_review_status !== "confirmed";
+  const maxScoreIssues = (problem.preparation_issues ?? []).filter(issue => issue.field === "max_score" && questionIssueNeedsReview(issue));
+  const blocking = problem.rubric_point_summary?.is_valid === false || maxScoreIssues.some(issue => issue.severity === "blocking");
+  const reason = blocking ? questionQueueReasons(problem, locale, "blocking")
+    : maxScoreIssues.length ? questionQueueReasons(problem, locale, "advisory") : "";
   const source = problem.max_score_source ?? "legacy";
   const sourceLabel = {
     default_10: tx(locale, "系统默认，需确认", "System default; confirm it"),
@@ -330,12 +340,12 @@ function MaxScoreStatus({ problem, locale }: { problem: ProblemInfo; locale: str
   }[source];
   return (
     <span
-      title={needsReview ? sourceLabel : tx(locale, "满分已确认", "Maximum score confirmed")}
+      title={reason || (needsReview ? sourceLabel : tx(locale, "满分已确认", "Maximum score confirmed"))}
       className={cn(
         "inline-flex min-w-[68px] items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold",
-        problem.rubric_point_summary?.is_valid === false || (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && issue.severity === "blocking" && questionIssueNeedsReview(issue))
+        blocking
           ? "bg-red-100 text-red-700"
-          : (problem.preparation_issues ?? []).some(issue => issue.field === "max_score" && questionIssueNeedsReview(issue)) ? "bg-amber-100 text-amber-800"
+          : maxScoreIssues.length ? "bg-amber-100 text-amber-800"
           : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/35",
       )}
     >
@@ -349,7 +359,7 @@ function AttentionStatus({ problem, locale }: { problem: ProblemInfo; locale: st
   if (!issues.length) {
     return <span className="inline-flex min-w-[88px] items-center justify-center gap-1 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"><CheckCircle2 aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "状态正常", "Ready")}</span>;
   }
-  return <span tabIndex={0} title={issues.map((issue) => issue.label).join("；")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", issues.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
+  return <span tabIndex={0} title={questionQueueReasons(problem, locale, issues.some(issue => issue.severity === "blocking") ? "blocking" : "advisory")} className={cn("inline-flex min-w-[88px] items-center justify-center rounded-full px-3 py-1 text-xs font-semibold", issues.some(issue => issue.severity === "blocking") ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-800")}>{tx(locale, `${issues.length} 项待复核`, `${issues.length} to review`)}</span>;
 }
 
 function MatrixEmpty({ filtered, locale }: { filtered: boolean; locale: string }) {

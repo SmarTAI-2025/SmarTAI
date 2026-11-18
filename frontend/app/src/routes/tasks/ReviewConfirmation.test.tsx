@@ -111,8 +111,8 @@ describe("one-click grading review", () => {
     show();
     const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
     const expected = locale === "en-US"
-      ? ["Some experts completed", "low confidence (0.4)", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
-      : ["部分专家完成", "置信度 0.4 较低", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+      ? ["Some experts did not finish", "low confidence (0.4)", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家未完成", "置信度较低（0.4）", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
     for (const label of expected) expect(queue).toHaveTextContent(label);
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "Expert disagreement; review suggested." : "专家分歧，建议复核。");
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
@@ -165,7 +165,7 @@ describe("one-click grading review", () => {
   it.each([0.25, 0.5999, 0.60])("shows optional confidence text only beside detail confirmation at %s", confidence => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
     show(true);
-    const hint = screen.queryByText(`Low confidence (${confidence}); review suggested.`);
+    const hint = screen.queryByText(`Low confidence (${confidence}). Review suggested.`);
     if (confidence < 0.60) {
       expect(hint?.closest("ul")).toHaveClass("text-[11px]");
       expect(hint?.closest("header")).toContainElement(screen.getByRole("button", { name: /Q1.*Confirm review/ }));

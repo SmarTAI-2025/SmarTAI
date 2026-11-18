@@ -69,7 +69,7 @@ describe("review hard failures", () => {
     expect(blockers).toHaveLength(4);
     const fields = locale === "zh-CN" ? ["题号", "题型", "题干", "评分标准"] : ["question number", "question type", "question text", "rubric"];
     blockers.forEach((blocker, index) => {
-      expect(blocker.label).toContain(fields[index]);
+      expect(blocker.label.toLowerCase()).toContain(fields[index].toLowerCase());
       expect(blocker.label).not.toMatch(/标答|reference answer|置信度|confidence|确认|confirm/i);
       expect(blocker.href).toContain("/questions/q1/content#question-q1");
     });
@@ -81,8 +81,8 @@ describe("review hard failures", () => {
     const task = { task_id: "T1", student_data: { S1: { stu_id: "S1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
     const blockers = submissionReviewBlockers(task, locale);
     expect(blockers).toHaveLength(2);
-    expect(blockers[0].label).toMatch(/同一题号|Multiple answers/);
-    expect(blockers[1].label).toMatch(/解析失败|parsing failed/);
+    expect(blockers[0].label).toMatch(/有多份作答|multiple answers/i);
+    expect(blockers[1].label).toMatch(/解析未完成|parsing did not complete/);
     for (const blocker of blockers) expect(blocker.label).not.toMatch(/置信度|confidence|笔迹|writing|确认|confirm/i);
     answer.flag = ["authorship_uncertain"];
     answer.content = "Saved transcription";

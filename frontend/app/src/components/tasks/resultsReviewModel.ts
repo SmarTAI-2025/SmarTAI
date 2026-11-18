@@ -111,14 +111,15 @@ export function correctionReviewLabels(correction: Correction, locale: Locale) {
   return correctionReviewNotes(correction, locale).map(issue => issue.label);
 }
 
-export function correctionReviewNotes(correction: Correction, locale: Locale) {
+export function correctionReviewNotes(correction: Correction, locale: Locale, compact = false) {
   const text = (zh: string, en: string) => locale === "en-US" ? en : zh;
   const labels = new Map<string, "blocking" | "advisory">();
   const add = (label: string, severity: "blocking" | "advisory" = "advisory") => {
     if (severity === "blocking" || !hasSavedCorrectionReview(correction)) labels.set(label, severity);
   };
   if (correctionReviewBlocked(correction)) {
-    add(text("缺少有效分数，请填写", "Enter a valid score"), "blocking");
+    add(compact ? text("缺少有效分数，请填写。", "Enter a valid score.")
+      : text("缺少有效分数，请填写", "Enter a valid score"), "blocking");
   }
   const pendingScore = pendingScoreReview(correction);
   if (pendingScore) add(reviewReasonLabel(pendingScore, locale), "blocking");
@@ -128,25 +129,26 @@ export function correctionReviewNotes(correction: Correction, locale: Locale) {
   if (experts.length) {
     for (const expert of experts.filter(expert => confidenceNeedsAttention(expert.confidence))) {
       add(multi
-        ? text(`${expert.provider} 置信度 ${expert.confidence} 较低，建议核对确认。`, `${expert.provider}: low confidence (${expert.confidence}); review suggested.`)
-        : text(`置信度 ${expert.confidence} 较低，建议核对确认。`, `Low confidence (${expert.confidence}); review suggested.`));
+        ? text(`${expert.provider} 置信度较低（${expert.confidence}），建议核对。`, `${expert.provider}: low confidence (${expert.confidence}). Review suggested.`)
+        : text(`置信度较低（${expert.confidence}），建议核对。`, `Low confidence (${expert.confidence}). Review suggested.`));
     }
   } else if (confidenceNeedsAttention(correction.confidence) && !correctionReviewBlocked(correction)) {
-    add(text(`置信度 ${correction.confidence} 较低，建议核对确认。`, `Low confidence (${correction.confidence}); review suggested.`));
+    add(text(`置信度较低（${correction.confidence}），建议核对。`, `Low confidence (${correction.confidence}). Review suggested.`));
   }
   if (hasUnknownConfidence(correction) && !correctionReviewBlocked(correction)) {
     const unknown = experts.filter(expert => confidenceValue(expert.confidence) === null);
     if (multi && unknown.length) for (const expert of unknown) {
-      add(text(`${expert.provider} 置信度未提供，建议核对确认。`, `${expert.provider}: confidence not provided; review suggested.`));
+      add(text(`${expert.provider} 置信度未提供，建议核对。`, `${expert.provider}: confidence unavailable. Review suggested.`));
     } else add(reviewReasonLabel("confidence_unavailable", locale));
   }
   const failedExperts = (correction.expert_results ?? []).filter(expert => expert.error_kind);
-  const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}：${reviewReasonLabel(expert.error_kind!, locale)}`))];
+  const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}${text("：", ": ")}${reviewReasonLabel(expert.error_kind!, locale)}`))];
   if (hasPartialExperts(correction)) {
-    add(text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested.")
-      + (failureLabels.length ? ` ${failureLabels.join("；")}` : ""));
+    add((compact ? text("部分专家未完成，建议核对。", "Some experts did not finish. Review suggested.")
+      : text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested."))
+      + (failureLabels.length ? ` ${failureLabels.join(text("；", " · "))}` : ""));
   } else for (const expert of failedExperts) {
-    add(`${expert.provider}：${reviewReasonLabel(expert.error_kind!, locale)}`,
+    add(`${expert.provider}${text("：", ": ")}${reviewReasonLabel(expert.error_kind!, locale)}`,
       correctionReviewBlocked(correction) ? "blocking" : "advisory");
   }
   for (const label of mathReviewLabels(correction, locale)) {

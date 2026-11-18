@@ -13,7 +13,7 @@ it("shows the affected student, question and specific failure before entering re
     problem_data: { q1: { number: "1.10" } } } as unknown as Task}
     progress={{ grading_review: [correction], grading_review_summary: { affected: 25, missing_scores: 3 } } as JobProgress} />);
   expect(screen.getByText("测试教师的样例学生（S2026001） · 第 1.10 题")).toBeVisible();
-  expect(screen.getByText(/25 份作答需要关注，其中 3 份缺少有效分数/)).toBeVisible();
+  expect(screen.getByText(/25 个题次需处理，其中 3 个缺少有效分数/)).toBeVisible();
   expect(screen.getByText(/Gemini：模型返回的评分格式无法读取/)).toHaveClass("text-red-700");
   expect(screen.queryByText(/所有专家均失败/)).not.toBeInTheDocument();
   expect(screen.getByText(/进入复核可查看全部/)).toBeVisible();
@@ -24,7 +24,7 @@ it("filters advisory notes and rows before limiting to twenty required responses
     expert_results: [], review_reasons: ["low_confidence"], requires_human_review: true } as unknown as Correction;
   const blocked = Array.from({ length: 25 }, (_, i) => ({ ...warning, student_id: `required-${i}`, q_id: `q${i + 1}`, score: null }));
   render(<GradingFailureDiagnostics locale="en-US" progress={{ grading_review: [warning, ...blocked] } as JobProgress} />);
-  expect(screen.getByText("25 responses need attention; 25 have no valid score")).toBeVisible();
+  expect(screen.getByText("25 responses need action, including 25 with no valid score.")).toBeVisible();
   expect(screen.getAllByRole("listitem")).toHaveLength(20);
   expect(screen.queryByText(/Suggested:/)).not.toBeInTheDocument();
   expect(screen.queryByText(/advisory ·/)).not.toBeInTheDocument();
@@ -34,7 +34,7 @@ it("filters advisory notes and rows before limiting to twenty required responses
 it("retains mandatory programming confirmation even when a score exists", () => {
   render(<GradingFailureDiagnostics locale="zh-CN" progress={{ grading_review: [{ student_id: "s1", q_id: "q1",
     score: 8, max_score: 10, confidence: 1, review_reasons: ["programming_ai_only"], expert_results: [] }] } as unknown as JobProgress} />);
-  expect(screen.getByText("有 1 份作答需要关注，其中 0 份缺少有效分数")).toBeVisible();
+  expect(screen.getByText("1 个题次需处理，其中 0 个缺少有效分数。")).toBeVisible();
   expect(screen.getByText(/需处理：/)).toBeVisible();
 });
 

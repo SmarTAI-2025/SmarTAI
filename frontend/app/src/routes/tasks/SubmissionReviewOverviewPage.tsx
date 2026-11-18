@@ -1,6 +1,6 @@
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions, reviewActionClass } from "@/components/tasks/ReviewConfirmation";
-import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, answerReviewNotes, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { submissionReviewBlockers, submissionRecognitionIncomplete, answerReviewBlocked, studentIdentityReviewBlocked, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { SortableTableHead, useColumnSort, sortColumnRows, directionFor, type ColumnSort } from "@/components/ui/SortableTableHead";
 import { AlertCircle, CheckCircle2, ChevronRight, RotateCcw, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -9,7 +9,7 @@ import { useTask, useUpdateStudentAnswer, useManuallyCompleteSubmissionRecogniti
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { getAPIErrorCode } from "@/api/client";
 import { confirmSubmissionBatch } from "@/lib/submissionReviewBatch";
-import { answerNeedsConfirmation, answerReviewAttention, answerReviewLabels } from "@/lib/submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention, answerReviewQueueReason } from "@/lib/submissionReview";
 import { isWorkflowRevisionConflictCode } from "@/lib/taskActionGuards";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
@@ -27,7 +27,6 @@ import {
   answerMap,
   buildSubmissionQuestions,
   getAnswerState,
-  formatSubmissionFlag,
   getSubmissionReviewStats,
   type SubmissionAnswerState,
   type SubmissionQuestion,
@@ -535,7 +534,8 @@ function AnswerStatusLink({
   };
   const stateLabel = state === "reviewed" ? (locale === "zh-CN" ? "已确认" : "Confirmed") : answerReviewBlocked(answer) ? (locale === "zh-CN" ? "需处理" : "Action required") : t(labels[state]);
   const attention = answerReviewAttention(answer);
-  const label = attention === "blocking" && answer?.flag?.length ? `${stateLabel} · ${answer.flag.map((flag) => formatSubmissionFlag(flag, locale)).join(" · ")}` : stateLabel;
+  const reason = answerReviewQueueReason(answer, locale, attention);
+  const label = reason ? `${stateLabel} · ${reason}` : stateLabel;
   const tone: MatrixStatusTone = state === "reviewed" ? "reviewed" : attention === "blocking" ? "error" : attention === "advisory" ? "warning" : "ok";
 
   return <MatrixStatusCell to={to} label={label} tone={tone} />;
@@ -680,12 +680,9 @@ function buildSubmissionQueueItems(
     for (const answer of student.stu_ans) {
       const question = questions.find(item => item.id === answer.q_id);
       if (!question) continue;
-      const attention = answerReviewAttention(answer);
-      if (attention === "none") continue;
-      const notes = answerReviewNotes(answer, locale, true, "queue");
       for (const severity of ["blocking", "advisory"] as const) {
-        const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
-        if (!reasons.length && (notes.length || attention !== severity)) continue;
+        const reason = answerReviewQueueReason(answer, locale, severity);
+        if (!reason) continue;
         items.push({
         key: `${student.stu_id}:${answer.answer_id ?? question.id}${severity === "blocking" ? ":blocking" : ""}`,
         href: studentReviewPath(taskId, student.stu_id, answer.answer_id ?? question.id, returnSearch),
@@ -694,7 +691,7 @@ function buildSubmissionQueueItems(
         questionLabel: question.label,
         reasonKey: reasonKeys.flagged,
         severity,
-        reason: reasons.length ? reasons.join(" · ") : answerReviewLabels(answer, locale).join(" · "),
+        reason,
       });
       }
     }
