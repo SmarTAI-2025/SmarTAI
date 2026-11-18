@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from backend.services.source_question_units import QUESTION_HEADING
+from backend.services.source_question_units import QUESTION_HEADING, source_question_units
 from backend.services.programming_submission_mapping import native_source
 
 
@@ -168,6 +168,22 @@ def split_submission_question_units(source, problems, target_ids=None):
             return [(source, targets)]
         units.append((replace(source, whole_source=False, text="\n\n".join(part for part in (preamble, body) if part)), {q_id}))
     return units or [(source, targets)]
+
+
+def closed_questions_on_read_pages(pages, problems, coverage):
+    """Bound a parsed answer by known headings or the read end of its PDF."""
+    if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
+        return set()
+    from backend.services.question_matching import question_number_aliases, resolve_question_match
+
+    aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
+    # Use successfully read pages only, even when an earlier attempt also
+    # produced a candidate for an unread page.
+    read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
+    units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
+                                  qualified=True, source_end_page=coverage.get("total_pages"))
+    return {q_id for unit in units if unit.complete
+            and (q_id := resolve_question_match(unit.number, unit.text, problems))}
 
 
 def merge_source_answer_units(results, source, problems):

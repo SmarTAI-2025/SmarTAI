@@ -3526,6 +3526,7 @@ async def run_task_submission_parsing(
                 return True
 
             from backend.services.submission_incremental import (
+                closed_questions_on_read_pages,
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
             )
             from backend.agents.question_preparation_agent import _major_question_generation_concurrency
@@ -3776,6 +3777,10 @@ async def run_task_submission_parsing(
                 requested = coverage.get("requested_pages") or []
                 await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
                     complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
+                closed = closed_questions_on_read_pages(page_texts.get(source.source_id, {}), problem_data, coverage)
+                closed -= boundary_invalidations.get(source.source_id, set())
+                if closed:
+                    source = replace(source, closed_question_ids=frozenset(closed))
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their

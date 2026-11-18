@@ -52,18 +52,24 @@ class PreparedSubmissionSource:
     retryable: bool = False
     recognition: dict | None = None
     whole_source: bool = True
+    closed_question_ids: frozenset[str] = frozenset()
 
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
     """Keep reading uncertainty separate from student identity and correctness."""
-    by_source = {source.source_id: source.recognition for source in sources if source.recognition}
+    by_source = {source.source_id: source for source in sources if source.recognition}
     output = []
     for result in results:
-        summary = by_source.get(result.source_id)
-        if result.student is None or summary is None:
+        source = by_source.get(result.source_id)
+        if result.student is None or source is None:
             output.append(result)
             continue
-        verified = set(verified_question_ids)
+        summary = source.recognition
+        closed = getattr(source, "closed_question_ids", ())
+        verified = set(verified_question_ids) | {
+            answer["q_id"] for answer in result.student.get("stu_ans", [])
+            if answer["q_id"] in closed and answer.get("content", "").strip()
+        }
         student = {**result.student, "recognition": {**result.student.get("recognition", {}), **summary,
             **({"complete_question_ids": sorted(verified)} if verified else {})}}
         # File assessments stay in source diagnostics. Each parsed answer owns

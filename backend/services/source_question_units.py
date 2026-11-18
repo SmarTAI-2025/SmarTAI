@@ -23,12 +23,20 @@ NUMBERED_QUESTION_HEADING = re.compile(
     r"(?:\*\*)?[ \t]+(?P<title>\S[^\n]*)$"
 )
 
+# A full exercise label such as 1.1.20 can bound a submission answer.
+# Single integers and ordinary decimals are not section-qualified labels.
+QUALIFIED_QUESTION_HEADING = re.compile(
+    r"(?m)^[ \t]*(?P<number>\d+(?:\.\d+){2,})"
+    r"(?:[ \t]*[:：、][ \t]*|\.(?:[ \t]+|$)|[ \t]+|$)(?P<title>[^\n]*)$"
+)
 
-def question_headings(text: str, *, numbered=False):
+
+def question_headings(text: str, *, numbered=False, qualified=False):
     matches = list(QUESTION_HEADING.finditer(text))
-    if numbered:
+    if numbered or qualified:
         starts = {match.start() for match in matches}
-        matches.extend(match for match in NUMBERED_QUESTION_HEADING.finditer(text) if match.start() not in starts)
+        pattern = NUMBERED_QUESTION_HEADING if numbered else QUALIFIED_QUESTION_HEADING
+        matches.extend(match for match in pattern.finditer(text) if match.start() not in starts)
     return sorted(matches, key=lambda match: match.start())
 
 
@@ -44,11 +52,12 @@ class SourceQuestionUnit:
 def source_question_units(pages: dict[int, str], *, source_complete=False,
                           known_numbers: set[str] | None = None,
                           allow_repeated_numbers=False, numbered=False,
+                          qualified=False, source_end_page: int | None = None,
                           number_key: Callable[[str], str | None] = str) -> list[SourceQuestionUnit]:
     """Identify bounded source text, without inferring content or inventing IDs.
 
     Only a next explicit heading in contiguous saved pages closes a question.
-    The final unit requires a confirmed complete source. Adjacent same-number
+    The final unit requires a confirmed end of the source. Adjacent same-number
     headings across pages continue that unit; a number returning after another
     question, gaps and unfinished tails stay incomplete. Callers may persist fragments,
     but must not generate/grade from an incomplete unit. An optional number_key
@@ -70,7 +79,7 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             offset += len(text) + 2
         text = "\n\n".join(parts)
         matches, previous = [], None
-        for match in question_headings(text, numbered=numbered):
+        for match in question_headings(text, numbered=numbered, qualified=qualified):
             page = next(page for page, start, stop in offsets
                         if start <= match.start("number") < stop)
             # Repeating a running question label on its continuation page is
@@ -91,7 +100,8 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             # assert completeness against a known question set.
             next_key = number_key(following.group("number")) if following else None
             next_known = next_key is not None and (known_keys is None or next_key in known_keys)
-            final = following is None and source_complete and len(groups) == 1
+            final = following is None and ((source_complete and len(groups) == 1)
+                                           or group[-1] == source_end_page)
             body = text[match.start():end].strip()
             records.append(SourceQuestionUnit(number, body,
                 tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
