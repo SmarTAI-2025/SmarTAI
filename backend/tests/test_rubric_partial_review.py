@@ -208,7 +208,8 @@ async def test_conflict_does_not_stop_later_questions_and_survives_manual_handof
         task_facade.update_problem(**args, patch={"type": "编程题"})
         task_facade.update_problem(**args, patch={"stem": "输入一个整数，输出它的平方。"})
         task_facade.update_problem(**args, patch={"reference_answer": "读取输入并输出其平方。"})
-        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。"})
+        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。",
+            "programming_scoring": {"test_points": 0, "input_rules": ""}})
         result = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
         assert result["problem"]["review_status"] == "confirmed"
         from backend.services.math_grading_context import problem_from_question
@@ -287,7 +288,8 @@ def test_changing_grading_engine_retires_only_math_review(monkeypatch, kind):
         expected_version=before.version, source={"presentation": presentation})
     monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *_: pytest.fail("A programming edit must not compile a math rubric"))
     updated = task_facade.update_problem(**args, patch={"type": kind, "stem": "输入一个整数，输出其平方。",
-        "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。"})
+        "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。",
+        "programming_scoring": {"test_points": 0, "input_rules": ""}})
     assert not any(i["status"] == "open" and i["severity"] == "blocking" for i in updated["problem"]["preparation_issues"])
     confirmed = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
     assert confirmed["problem"]["review_status"] == "confirmed"
@@ -307,8 +309,46 @@ def test_new_programming_checks_survive_retiring_a_math_error():
         expected_version=before.version, source={"presentation": presentation})
     with pytest.raises(ValidationError) as failure:
         task_facade.update_problem(**args, patch={"type": "编程题", "stem": "输入一个整数，输出其平方。",
-            "criterion": "程序输出正确得满分。", "test_cases": [
+            "criterion": "程序输出正确得满分。", "programming_scoring": {"test_points": 0, "input_rules": ""},
+            "test_cases": [
                 {"input": "2", "expected_output": "4"}, {"input": "2", "expected_output": "5"}]})
     assert failure.value.code == "invalid_programming_test_cases"
     after = assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
     assert after.type == before.type
+
+
+@pytest.mark.asyncio
+async def test_recovered_rubric_uses_normal_save_validation_then_confirmation_reuses_frozen_rules(monkeypatch):
+    from backend.tests.test_frozen_part_rubric import _persist_method_question
+    from backend.db import assignment_repository
+    from backend.services import task_facade
+    from backend.services.math_grading_context import problem_from_question
+    from backend.services.rubric_review import review_issue
+    args = _persist_method_question()
+    def record():
+        return assignment_repository.list_questions(args["task_id"], teacher_id=args["owner_id"])[0]
+    before = record()
+    previous = saved_draft(problem_from_question(before))
+    raw = previous.plan.part_rubric.model_dump(mode="json")
+    presentation = dict(before.source["presentation"])
+    presentation.pop("rubric_draft")
+    presentation["review_status"] = "needs_review"
+    source = {**problem_from_question(before).model_dump(mode="json"), "criterion": ""}
+    presentation["preparation_issues"] = [review_issue("q1", review_extraction({"part_rubric": raw}, source))]
+    assignment_repository.update_question(args["task_id"], teacher_id=args["owner_id"], q_id="q1",
+        expected_version=before.version, criterion="", source={"presentation": presentation})
+    pending = task_facade._save_problem_edit(**args, patch={"criterion": before.criterion}, expected_revision=None)
+    assert isinstance(pending, task_facade._PendingRubricEdit)
+    assert record().criterion == "" and saved_draft(problem_from_question(record())) is None
+    compiled = await compile_parts_draft(pending.problem, Provider([json.dumps({"part_rubric": raw})]))
+    saved = task_facade._save_problem_edit(**args, patch={"criterion": before.criterion},
+        expected_revision=pending.revision, question_version=pending.question_version, compiled=compiled)
+    assert saved["problem"]["criterion"] == before.criterion
+    assert not any(i["status"] == "open" and i["severity"] == "blocking" for i in saved["problem"]["preparation_issues"])
+    frozen = saved_draft(problem_from_question(record()))
+    assert frozen.plan.part_rubric.parts == compiled.plan.part_rubric.parts
+    monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *_: pytest.fail("Confirmation must reuse the saved rules"))
+    confirmed = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
+    assert confirmed["problem"]["review_status"] == "confirmed"
+    assert task_facade._question_review_blockers([record()]) == []
+    assert saved_draft(problem_from_question(record())).plan.part_rubric.parts == frozen.plan.part_rubric.parts

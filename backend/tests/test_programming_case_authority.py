@@ -148,7 +148,7 @@ def test_identical_teacher_material_remains_authoritative_independent_of_row_ord
 
 @pytest.mark.parametrize("patch", [
     {"stem": "实现 f(xs)。xs 是有序整数列表。返回列表长度。"},
-    {"criterion": "结果正确给 10 分。"},
+    {"criterion": "结果正确给 10 分。", "programming_scoring": {"test_points": 0, "input_rules": ""}},
 ])
 def test_other_question_edits_do_not_authorize_ai_cases(patch):
     owner, task, client, url = setup_cases()

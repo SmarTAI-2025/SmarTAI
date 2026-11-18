@@ -359,6 +359,7 @@ export function useUpdateProblem() {
       type?: string;
       stem?: string;
       criterion?: string;
+      programming_scoring?: import("@/types").ProgrammingScoringPolicy;
       alternative_rule_edits?: Record<string, string>;
       max_score?: number;
       review_status?: "needs_review" | "edited" | "confirmed";

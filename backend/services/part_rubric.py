@@ -227,7 +227,8 @@ class PartRubric(Frozen):
     )
     parts: tuple[RubricPart, ...] = Field(min_length=1, max_length=100)
     nonblank_floor: Floor = Field(default_factory=lambda: Floor(pts=0))
-    # Warnings concern interpretation of the teacher's ordinary rules only.
+    # Teacher gaps describe source interpretation; low confidence also applies
+    # to otherwise valid AI rubrics awaiting a teacher's review.
     teacher_gaps: tuple[str, ...] = Field(default=(), max_length=20)
     low_confidence: bool = False
 
@@ -917,7 +918,7 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
             "parts": tuple(fixed),
             "base_unit_pts": _base_unit(fixed, teacher),
             "teacher_gaps": tuple(dict.fromkeys(gaps)),
-            "low_confidence": bool(teacher and rubric.low_confidence),
+            "low_confidence": rubric.low_confidence,
         }
     )
 

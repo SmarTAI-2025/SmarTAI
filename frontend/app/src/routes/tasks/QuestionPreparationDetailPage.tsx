@@ -1,6 +1,6 @@
 import { questionSaveError } from "@/lib/questionSaveError";
 import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
-import { RubricReviewDetails, RubricReviewErrorDetails } from "@/components/tasks/RubricReviewDetails";
+import { rubricReviewText } from "@/lib/rubricReviewText";
 import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
@@ -46,7 +46,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
-import type { ProblemInfo, TestCase } from "@/types";
+import type { ProblemInfo, ProgrammingScoringPolicy, TestCase } from "@/types";
 
 type TextFieldKey = "number" | "type" | "stem" | "reference_answer" | "solution_code";
 
@@ -253,7 +253,7 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) {
+  async function saveScoring(problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, programmingScoring?: ProgrammingScoringPolicy) {
     const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
@@ -261,6 +261,7 @@ function QuestionPreparationDetailPageForm() {
       ...(maxScore === problem.max_score && alternatives ? {} : { max_score: maxScore }),
       ...(criterion === problem.criterion && alternatives ? {} : { criterion }),
       ...(alternatives ? { alternative_rule_edits: alternatives } : {}),
+      ...(programmingScoring ? { programming_scoring: programmingScoring } : {}),
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -342,7 +343,6 @@ function QuestionPreparationDetailPageForm() {
       {failure ? <div role="alert" className="mt-4 rounded-lg border border-red-200 bg-red-50/40 p-4 text-sm">
         <p>{tx(locale, `已确认 ${failure.completed} 道题；请核对第 ${failure.problem.number || "—"} 题。`, `${failure.completed} questions confirmed. Review question ${failure.problem.number || "—"}.`)}</p>
         <p className="mt-1">{questionSaveError(failure.error, locale)}</p>
-        <RubricReviewErrorDetails error={failure.error} locale={locale} />
         <button type="button" onClick={() => void taskQuery.refetch()} className="mt-2 mr-4 font-semibold text-primary">{tx(locale, "重新加载", "Reload")}</button>
         <button type="button" onClick={() => {
           if (filtered.some((problem) => problem.q_id === failure.problem.q_id)) scrollToQuestion(failure.problem.q_id);
@@ -444,7 +444,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
+  onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, programmingScoring?: ProgrammingScoringPolicy) => Promise<void>;
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
   onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
   onNavigate: (qId: string) => void;
@@ -514,11 +514,20 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>) => Promise<void>;
+  onSave: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, programmingScoring?: ProgrammingScoringPolicy) => Promise<void>;
 }) {
+  const programming = isProgrammingProblem(problem);
   const originalScore = String(problem.max_score ?? 10);
-  const originalCriterion = problem.criterion ?? "";
-  const scoringRules = problem.effective_criterion?.trim() || originalCriterion;
+  const originalCriterion = (programming ? problem.programming_scoring?.code_criterion : undefined) ?? problem.criterion ?? "";
+  const editableCriterion = originalCriterion.trim()
+    ? originalCriterion
+    : rubricReviewText(problem.preparation_issues, locale);
+  const originalInputRules = problem.programming_scoring?.input_rules ?? "";
+  const originalTestPoints = problem.programming_scoring?.test_points?.toString() ?? "";
+  const scoringRules = problem.effective_criterion?.trim()
+    || (programming ? problem.criterion?.trim() : "")
+    || editableCriterion;
+  const legacyCriterion = programming && originalCriterion !== problem.criterion ? problem.criterion : null;
   const alternativeGroups = new Map<string, string[]>();
   for (const part of problem.alternative_rules ?? []) {
     if (part.show_in_review === false) continue;
@@ -533,16 +542,19 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
   const manualEditing = useManualEditor(problem, ["criterion"]);
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [scoreDraft, setScoreDraft] = useState(originalScore);
-  const [criterionDraft, setCriterionDraft] = useState(originalCriterion);
+  const [criterionDraft, setCriterionDraft] = useState(editableCriterion);
+  const [testPointsDraft, setTestPointsDraft] = useState(originalTestPoints);
+  const [inputRulesDraft, setInputRulesDraft] = useState(originalInputRules);
   const [alternateDrafts, setAlternateDrafts] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  const [reviewError, setReviewError] = useState<unknown>();
   const dirty = editing && (
     scoreDraft !== originalScore || criterionDraft !== originalCriterion || Object.keys(alternateDrafts).length > 0
+    || testPointsDraft !== originalTestPoints || inputRulesDraft !== originalInputRules
   );
   const scoreHundredths = parseScoreHundredths(scoreDraft);
   const scoreValid = scoreHundredths !== null && scoreHundredths > 0 && scoreHundredths <= 1_000_000;
-  const needsStructuredReview = Boolean(problem.rubric_version || problem.preparation_issues?.some(
+  const testHundredths = testPointsDraft.trim() ? parseScoreHundredths(testPointsDraft) : null;
+  const needsStructuredReview = programming || Boolean(problem.rubric_version || problem.preparation_issues?.some(
     issue => issue.status === "open" && issue.field === "rubric" && issue.details?.reason === "invalid_structured_rubric",
   ));
   const draftSummary = useMemo(
@@ -556,7 +568,31 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         : summarizeRubricPoints(criterionDraft, scoreDraft, problem.question_structure),
     [criterionDraft, originalCriterion, originalScore, problem.question_structure, problem.rubric_point_summary, needsStructuredReview, scoreDraft],
   );
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`, value: { scoreDraft, criterionDraft, alternateDrafts }, baseline: { scoreDraft: originalScore, criterionDraft: originalCriterion, alternateDrafts: {} }, version: JSON.stringify([originalScore, originalCriterion, problem.alternative_rules]), enabled: !readOnly, busy: saving, onRestore: (draft) => { setScoreDraft(draft.scoreDraft); setCriterionDraft(draft.criterionDraft); setAlternateDrafts(draft.alternateDrafts ?? {}); setEditing(true); } });
+  const draftValues = { scoreDraft, criterionDraft, alternateDrafts,
+    ...(programming ? { testPointsDraft, inputRulesDraft } : {}) };
+  const localDraft = useDraftProtection({
+    scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:scoring`,
+    value: draftValues,
+    baseline: { scoreDraft: originalScore, criterionDraft: editableCriterion, alternateDrafts: {},
+      ...(programming ? { testPointsDraft: originalTestPoints, inputRulesDraft: originalInputRules } : {}) },
+    version: JSON.stringify([originalScore, editableCriterion, problem.alternative_rules,
+      ...(programming ? [originalTestPoints, originalInputRules] : [])]),
+    enabled: !readOnly, busy: saving,
+    onRestore: (draft) => {
+      const testPoints = draft.testPointsDraft ?? originalTestPoints;
+      const inputRules = draft.inputRulesDraft ?? originalInputRules;
+      setScoreDraft(draft.scoreDraft);
+      setCriterionDraft(draft.criterionDraft);
+      setAlternateDrafts(draft.alternateDrafts ?? {});
+      setTestPointsDraft(testPoints);
+      setInputRulesDraft(inputRules);
+      if (draft.scoreDraft !== originalScore || draft.criterionDraft !== editableCriterion
+          || Object.keys(draft.alternateDrafts ?? {}).length > 0
+          || testPoints !== originalTestPoints || inputRules !== originalInputRules) {
+        setEditing(true);
+      }
+    },
+  });
   const leave = useDraftLeave();
   const savedSummary = problem.rubric_point_summary
     ?? summarizeRubricPoints(originalCriterion, originalScore, problem.question_structure);
@@ -566,9 +602,11 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
     if (!editing && !localDraft.savedAt) {
       setScoreDraft(originalScore);
       setAlternateDrafts({});
-      setCriterionDraft(originalCriterion);
+      setCriterionDraft(editableCriterion);
+      setTestPointsDraft(originalTestPoints);
+      setInputRulesDraft(originalInputRules);
     }
-  }, [editing, originalCriterion, originalScore]);
+  }, [editing, editableCriterion, originalScore, originalTestPoints, originalInputRules]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
@@ -577,14 +615,21 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
       setError(scoringValidationMessage(draftSummary, scoreValid, locale));
       return;
     }
+    if (programming && (testHundredths === null || testHundredths < 0
+        || scoreHundredths === null || testHundredths >= scoreHundredths)) {
+      setError(tx(locale, "请填写测试配分。填 0 表示测试不单独计分，测试配分须小于本题满分。", "Enter test points below the maximum. Enter 0 if tests carry no separate points."));
+      return;
+    }
     setError(null);
-    setReviewError(undefined);
+    const programmingScoring = programming && testHundredths !== null
+      ? { test_points: testHundredths / 100, input_rules: inputRulesDraft }
+      : undefined;
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft, Object.keys(alternateDrafts).length ? alternateDrafts : undefined), { scoreDraft, criterionDraft, alternateDrafts })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, Number(scoreDraft), criterionDraft,
+        Object.keys(alternateDrafts).length ? alternateDrafts : undefined, programmingScoring), draftValues)) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (error) {
-      setReviewError(error);
       setError(isQuestionModelError(error) ? null : questionSaveError(error, locale));
     }
   }
@@ -597,7 +642,9 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-sm font-bold text-foreground">{tx(locale, "本题满分与评分标准", "Maximum Score and Rubric")}</h3>
           </div>
-          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">{sourceLabel} · {programming
+            ? tx(locale, "测试配分和代码配分的合计等于本题满分。", "Test points and code points add up to the question maximum.")
+            : tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
         {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || "—"} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || "—"}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
@@ -605,7 +652,6 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
         </button> : null}
       </div>
 
-      {editing && reviewError ? <RubricReviewErrorDetails error={reviewError} locale={locale} /> : null}
       {editing ? (
         <div className="mt-3 space-y-3">
           <label className="block">
@@ -628,10 +674,32 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
             </div>
           </label>
           {!scoreValid ? <p id={`${fieldKey}-score-error`} role="alert" className="text-xs text-danger">{scoringValidationMessage(draftSummary, false, locale)}</p> : null}
+          {programming ? <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "测试配分", "Test points")}</span>
+            <input
+              type="number" inputMode="decimal" min="0" step="0.01"
+              value={testPointsDraft}
+              onChange={(event) => { setTestPointsDraft(event.target.value); setError(null); }}
+              className="h-9 w-36 rounded-[7px] border bg-background px-3 text-sm font-semibold outline-none focus:border-primary focus:ring-2 focus:ring-primary/15"
+            />
+            <span className="mt-1 block text-xs text-muted-foreground">{tx(locale, "按有效样例的通过比例计分。填 0 表示测试不单独计分。", "Points are prorated by valid cases passed. Enter 0 for no separate test award.")}</span>
+          </label> : null}
           <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "评分标准", "Scoring rubric")}</span>
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{programming
+              ? tx(locale, "代码评分规则", "Code scoring rubric")
+              : tx(locale, "评分标准", "Scoring rubric")}</span>
             <textarea aria-label={tx(locale, `第 ${problem.number || "—"} 题评分标准`, `Rubric for question ${problem.number || "—"}`)} value={criterionDraft} onChange={(event) => { setCriterionDraft(event.target.value); setError(null); }} rows={8} className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
           </label>
+          {programming ? <label className="block">
+            <span className="mb-1.5 block text-xs font-semibold text-foreground">{tx(locale, "额外输入限制", "Additional input constraints")}</span>
+            <textarea value={inputRulesDraft} onChange={(event) => { setInputRulesDraft(event.target.value); setError(null); }} rows={3}
+              className="w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15" />
+            <span className="mt-1 block text-xs text-muted-foreground">{tx(locale, "如果原评分标准含有题干之外的输入限制，请移到这里。没有可留空。", "Move any input constraints beyond the question text here. Leave blank when there are none.")}</span>
+          </label> : null}
+          {legacyCriterion ? <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer font-semibold">{tx(locale, "查看原评分标准", "View the previous rubric")}</summary>
+            <p className="mt-1 whitespace-pre-wrap">{legacyCriterion}</p>
+          </details> : null}
           <RubricPointStatus summary={draftSummary} locale={locale} />
           {error ? <p role="alert" className="text-xs text-danger">{error}</p> : null}
           <div className="flex justify-end gap-2">
@@ -647,7 +715,6 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
           <RubricPointStatus summary={savedSummary} locale={locale} />
         </div>
       )}
-      <RubricReviewDetails issues={problem.preparation_issues} locale={locale} />
       {legacyRubricNotes.length > 0 && <aside role="note" className="mt-4 rounded-md bg-amber-50 p-3 text-sm dark:bg-amber-950/30">
         <h4 className="font-semibold">{tx(locale, "评分标准待核对", "Rubric details to review")}</h4>
         {[...new Set(legacyRubricNotes)].map(note => <p key={note} className="mt-1 whitespace-pre-line">{note}</p>)}
