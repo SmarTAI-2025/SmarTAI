@@ -235,6 +235,23 @@ async def test_manual_retry_really_requests_only_failed_material_and_keeps_saved
 
 
 @pytest.mark.asyncio
+async def test_last_generation_attempt_can_still_validate_required_input_domains(monkeypatch):
+    from backend.agents import incremental_question_preparation as inc
+    from backend.tests.test_incremental_question_preparation import setup, persisted
+
+    owner, _, operation, pipeline = await setup(monkeypatch)
+    row = {**demo(), "solution_code": ""}
+    monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value=inc._rows([row])))
+    provider = Provider([candidates(count=9, include_saved=True), candidates(count=9), candidates(), reviewed()])
+    pipeline.provider = provider
+    await pipeline.run()
+    final, rows = persisted(owner, operation)
+    assert len(provider.calls) == 4
+    assert len(rows["q1"]["test_cases"]) == 10
+    assert not final.checkpoint["incremental_errors"]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("frozen", [False, True])
 async def test_prepared_suite_is_reviewed_once_for_all_students_and_preserves_real_failure(frozen):
     from backend.tests.test_programming_reference_review import frozen_problem

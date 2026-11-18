@@ -8,6 +8,7 @@ from backend.services.programming_reference_inputs import ReferenceInputCase, ex
 from backend.services.programming_test_contract import (
     adapt_programming_cases, bind_programming_cases, bind_stdin_cases, case_input_key, native_standard_supported,
 )
+from backend.tools.structured_llm import llm_attempt_budget
 
 GENERATED_TEST_COUNT = 10
 
@@ -92,9 +93,12 @@ async def resolve_generated_outputs(source, cases, *, execute=None, provider=Non
         raise ValueError("Use only runnable test inputs verifiably inside the question's stated domain.")
     domains = [input_domain(problem, c) for c in probes]
     feedback = {}
-    if "outside" not in domains:
+    if provider is not None and "unknown" in domains and "outside" not in domains:
         from backend.services.programming_input_review import review_input_domains
-        domains = await review_input_domains(problem, probes, domains, provider, reporter=reporter, feedback=feedback)
+        # Input review is required before executing otherwise valid proposals.
+        # A successful last generation attempt must still be able to reach it.
+        with llm_attempt_budget(independent=True):
+            domains = await review_input_domains(problem, probes, domains, provider, reporter=reporter, feedback=feedback)
     if any(domain != "allowed" for domain in domains):
         rejected = "; ".join(f"{i}: {domain}" + (f" — {feedback[i]}" if i in feedback else "")
                              for i, domain in enumerate(domains, 1) if domain != "allowed")
