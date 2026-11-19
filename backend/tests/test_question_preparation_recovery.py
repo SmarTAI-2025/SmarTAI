@@ -61,6 +61,23 @@ class _RecoveryRegistry(_Registry):
         }]
 
 
+class _RecoveryRegistryWithReplacement(_RecoveryRegistry):
+    replacement = _RecoveryRegistry.Provider()
+    replacement.provider_id = "replacement-byok"
+
+    def get(self, provider_id):
+        return self.replacement if provider_id == self.replacement.provider_id else super().get(provider_id)
+
+    def list_configs(self):
+        return [*super().list_configs(), {
+            "provider_id": self.replacement.provider_id,
+            "provider_type": "openai",
+            "model": "replacement-model",
+            "enabled": True,
+            "scope": "owner",
+        }]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("running", [False, True])
 @pytest.mark.parametrize("edited_after_stop", [False, True])
@@ -1490,24 +1507,8 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider_unavailable", [None, "retry_same_model", "switch_immediately"])
 async def test_switching_back_to_prior_model_only_retries_latest_failed_questions(monkeypatch, provider_unavailable):
-    class RegistryWithReplacement(_RecoveryRegistry):
-        replacement = _RecoveryRegistry.Provider()
-        replacement.provider_id = "replacement-byok"
-
-        def get(self, provider_id):
-            return self.replacement if provider_id == self.replacement.provider_id else super().get(provider_id)
-
-        def list_configs(self):
-            return [*super().list_configs(), {
-                "provider_id": self.replacement.provider_id,
-                "provider_type": "openai",
-                "model": "replacement-model",
-                "enabled": True,
-                "scope": "owner",
-            }]
-
     owner, task = _seed_task()
-    registry = RegistryWithReplacement()
+    registry = _RecoveryRegistryWithReplacement()
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
     _, started, _ = await _queue_question_preparation(
         owner, task, registry=registry, source_text="1. First.\n2. Second.\n3. Third.",

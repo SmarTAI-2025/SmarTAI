@@ -28,8 +28,10 @@ def _archive_bytes(name: str = "student.txt", content: bytes = b"answer") -> byt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
-@pytest.mark.parametrize("paused_run", [False, True])
-async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename, paused_run):
+@pytest.mark.parametrize(("paused_run", "switch_on_continue"), [(False, False), (True, False), (True, True)])
+async def test_stopped_or_failed_submissions_recover_completed_answers(
+    monkeypatch, saved_filename, paused_run, switch_on_continue,
+):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -39,7 +41,9 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     from backend.services.task_execution import stop_task_run
 
     owner, task = _seed_task(with_question=True)
-    registry = _Registry()
+    from backend.tests.test_question_preparation_recovery import _RecoveryRegistryWithReplacement
+
+    registry = _RecoveryRegistryWithReplacement() if switch_on_continue else _Registry()
     calls = []
     started = saved_filename is not None
     saved_parse = asyncio.Event()
@@ -81,6 +85,33 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     paused = task_facade.get_task(task_id=task, owner_id=owner)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     saved_calls = list(calls)
+    if switch_on_continue:
+        assert paused["status"] == "submissions_paused"
+        retried_files = []
+
+        async def replacement_invoke(messages):
+            prompt = messages[-1].content
+            filename = next(name for name in ("S1.txt", "S2.txt") if f"**[Filename]**: {name}" in prompt)
+            retried_files.append(filename)
+            return SimpleNamespace(content=json.dumps({"stu_id": filename.removesuffix(".txt"), "stu_name": filename,
+                "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "Newly recognized", "flag": []}]}))
+
+        monkeypatch.setattr(registry.replacement, "ainvoke", replacement_invoke)
+        retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=origin.id,
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=paused["workflow_revision"],
+                recognition_provider_id=registry.replacement.provider_id, acknowledge_possible_duplicate_call=True),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        assert isinstance(retry, dict), getattr(retry, "body", retry)
+        row = workflow_repository.claim_operation(retry["job_id"], owner_id=owner, worker_id="resumed", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="resumed", lease_seconds=60))
+        after = task_facade.get_task(task_id=task, owner_id=owner)
+        assert after["status"] == "submissions_ready"
+        assert sorted(retried_files) == sorted({"S1.txt", "S2.txt"} - {saved_filename})
+        assert calls == saved_calls
+        answers = {student["source_filename"]: student["stu_ans"][0]["content"] for student in after["student_data"].values()}
+        assert answers == {name: "saved wrong answer -2" if name == saved_filename else "Newly recognized"
+                           for name in ("S1.txt", "S2.txt")}
+        return
     with pytest.raises(DomainError):
         await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"] + 1)
     if not started:
