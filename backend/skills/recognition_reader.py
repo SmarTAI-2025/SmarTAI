@@ -231,12 +231,17 @@ class LLMRecognitionEngine:
         if _private_identity(self.provider, _LLM_IDENTITY) != self._identity:
             raise RecognitionError("recognition_route_changed")
         try:
-            from backend.tools.structured_llm import ainvoke_vision_with_rate_retry
+            from backend.tools.structured_llm import ConnectionNotEstablished, ainvoke_vision_with_rate_retry
             response = await ainvoke_vision_with_rate_retry(
                 self.provider, prompt, images, max_output_tokens=max_output_tokens,
             )
         except asyncio.CancelledError:
             raise
+        except ConnectionNotEstablished as exc:
+            # The final attempt did not connect. Keep uncertainty from earlier attempts.
+            raise RecognitionError(
+                exc.code, submission_may_exist=getattr(exc, "submission_may_exist", False),
+            ) from None
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
             # No connection/request was established. Preserve safe retry instead
             # of recording an uncertain paid OCR dispatch indefinitely.
