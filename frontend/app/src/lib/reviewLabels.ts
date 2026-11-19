@@ -55,7 +55,7 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
   const labels: Record<string, [string, string]> = {
     answer_assignment_conflict: ["同一学生的该题有多份作答，请更正题号。", "This student has multiple answers assigned to this question. Correct the assignments."],
     recognition_matching_review: ["请对照学生作答原文件，确认该题对应的题号。", "Check the student's original submission and confirm the corresponding question number."],
-    question_identifier_conflict: ["作答题号与当前分配不一致，请对照学生作答原文件核对。", "The answer’s question number does not match its current assignment. Check the original submission."],
+    question_identifier_conflict: ["请对照学生作答原文件，确认该题对应的题号。", "Check the student's original submission and confirm the corresponding question number."],
     crossed_out_text_unclear: ["部分划掉的文字识别不清，建议对照原文件核对。", "Some crossed-out text could not be read clearly. Check it against the original."],
     recognition_boundary_previous_page_failed: ["作答识别可能不完整，请核对识别失败的上一页是否有遗漏。", "This answer may be incomplete. Check the previous page, which could not be read, for missing work."],
     recognition_boundary_next_page_failed: ["作答识别可能不完整，请核对识别失败的下一页是否有遗漏。", "This answer may be incomplete. Check the next page, which could not be read, for missing work."],

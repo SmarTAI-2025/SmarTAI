@@ -7,7 +7,7 @@ describe("OCR review labels", () => {
   it.each([
     ["unclear_text", "部分作答识别不清，建议对照原文件核对。"],
     ["crossed_out_text_unclear", "部分划掉的文字识别不清，建议对照原文件核对。"],
-    ["question_identifier_conflict", "作答题号与当前分配不一致，请对照学生作答原文件核对。"],
+    ["question_identifier_conflict", "请对照学生作答原文件，确认该题对应的题号。"],
   ])("shows only the specific %s suggestion in the queue and detail", (flag, label) => {
     const answer = { q_id: "q1", number: "1.1.20", type: "reasoning", content: "Saved work",
       recognition_confidence: .97, flag: [flag] };

@@ -151,8 +151,7 @@ test("shows independent body and number evidence as yellow suggestions", async (
   await expect(queue.getByRole("tab", { name: "需要处理 (0)" })).toBeVisible();
   await queue.getByRole("tab", { name: "建议处理 (2)" }).click();
   await expect(queue.getByText("部分作答识别不清，建议对照原文件核对。", { exact: true })).toBeVisible();
-  await expect(queue.getByText("作答题号与当前分配不一致，请对照学生作答原文件核对。", { exact: true })).toBeVisible();
-  await expect(queue.getByText("请对照学生作答原文件，确认该题对应的题号。", { exact: true })).toHaveCount(0);
+  await expect(queue.getByText("请对照学生作答原文件，确认该题对应的题号。", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "进入批改设置", exact: true }).click();
   await expect(page).toHaveURL(/grading-setup$/);
   expect(errors).toEqual([]);
