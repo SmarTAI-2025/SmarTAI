@@ -30,7 +30,7 @@ from backend.agents.question_preparation_agent import (
 )
 from backend.config import settings
 from backend.domain.errors import ValidationError, LeaseLost, RecognitionError
-from backend.models import TestCase
+from backend.models import TestCase, is_programming_question_type
 from backend.services.programming_test_contract import literal_programming_case_groups
 from backend.services.background_errors import classify_background_error
 from backend.services.question_preparation_artifacts import (
@@ -354,6 +354,18 @@ class IncrementalQuestionPreparation:
                     row["preparation_issues"].append(_issue(q_id, _issue_field(field), "generation_failed",
                         "warning" if field == "reference_answer" else "blocking", []))
             generation_failure = self.failures.get("generation:" + identity) if generated else None
+            from backend.services.question_preparation_diagnostics import (
+                required_programming_tests_missing, required_programming_tests_issue,
+            )
+            row["preparation_issues"] = [issue for issue in row["preparation_issues"]
+                if (issue.get("details") or {}).get("reason") != "required_programming_tests_missing"]
+            if required_programming_tests_missing(row):
+                row["preparation_issues"] = [issue for issue in row["preparation_issues"]
+                    if not (issue.get("field") == "programming_tests" and issue.get("code") == "generation_failed")]
+                row["preparation_issues"].append(required_programming_tests_issue(q_id))
+            elif (is_programming_question_type(row.get("type")) and not row.get("test_cases")
+                    and not any(issue.get("field") == "programming_tests" for issue in row["preparation_issues"])):
+                row["preparation_issues"].append(_issue(q_id, "programming_tests", "generation_failed", "warning", []))
             if generation_failure:
                 from backend.services.background_errors import provider_failure_diagnostic
                 try:
@@ -1183,7 +1195,10 @@ class IncrementalQuestionPreparation:
                         if not pending:
                             break
                     if pending:
-                        raise ValidationError("Some materials could not be completed.", code="provider_response_invalid")
+                        from backend.services.question_preparation_diagnostics import required_programming_tests_missing
+                        raise ValidationError("Some materials could not be completed.", code="provider_response_invalid",
+                            details={"unfinished_targets": [target["target"] for target in pending],
+                                     "required_tests_missing": required_programming_tests_missing(data["q1"])})
                 self.repair_feedback.pop(key, None)
                 await self.reporter.mark_question_generation_finished(progress_id, succeeded=True, revision=identity)
                 await self.finish(key)
@@ -1332,8 +1347,17 @@ class IncrementalQuestionPreparation:
                 await asyncio.gather(*pending)
             if self.operation.checkpoint_data.get("incremental_inflight_units"):
                 raise RuntimeError("provider_submit_uncertain")
-            if self.failures:
-                raise next(iter(self.failures.values()))
+            # A bounded, known failure of supplementary programming materials
+            # goes to the same review state as manual handoff. Do not turn a
+            # test/code warning into a task-wide error, or hide source, rubric,
+            # transport and uncertain-submission failures behind this rule.
+            for key, failure in self.failures.items():
+                unfinished = (getattr(failure, "details", None) or {}).get("unfinished_targets")
+                if not (key.startswith("generation:") and isinstance(failure, ValidationError)
+                        and failure.code == "provider_response_invalid" and unfinished
+                        and not failure.details.get("required_tests_missing")
+                        and set(unfinished) <= {"solution_code", "test_cases"}):
+                    raise failure
             await self.reporter.set_stage_progress("detecting_conflicts", total_steps=8, completed_steps=6)
             self.latest = self.project()
             if not self.latest:

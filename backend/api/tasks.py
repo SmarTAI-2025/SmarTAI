@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from backend.agents.history_query_agent import interpret_history_query
 from backend.progress.tracker import ProgressReporter
+from backend.services.rubric_drafts import ProgrammingScoringPolicy
 
 import asyncio
 import hashlib
@@ -134,6 +135,7 @@ class UpdateProblemRequest(BaseModel):
     type: str | None = Field(default=None, min_length=1, max_length=64)
     stem: str | None = None
     criterion: str | None = None
+    programming_scoring: ProgrammingScoringPolicy | None = None
     alternative_rule_edits: dict[str, str] = Field(default_factory=dict, max_length=100)
     max_score: float | None = Field(
         default=None,

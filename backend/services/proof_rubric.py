@@ -109,10 +109,10 @@ async def audit_proof_steps(provider, task, rules):
         ]}, ensure_ascii=False),
         output_model=ProofRubricAudit, validate_output=validate,
     )
-    failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict != "consistent"]
+    failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict == "inconsistent"]
     failures.extend(f"{part.part_id}: split independently earnable goals in steps "
                     f"{', '.join(part.bundled_steps)} without changing the part budget: {part.reason}"
-                    for part in audit.parts if part.bundled_steps)
+                    for part in audit.parts if part.bundled_steps and part.verdict != "uncertain")
     if failures:
         # Feed the actual defect to the existing bounded material-repair loop.
         raise ProofRubricUnverified("Proof scoring steps need correction: " + "; ".join(failures))
@@ -138,7 +138,11 @@ async def prepare_proof_steps(provider, question, rules, *, reference_answer="",
         # One audit, no routine regeneration. Failed candidates go to the
         # existing targeted material-repair loop, with the audit's specific reason.
         with llm_attempt_budget(independent=True):
-            await audit_proof_steps(provider, task, rules)
+            audit = await audit_proof_steps(provider, task, rules)
+        if any(part.verdict == "uncertain" for part in audit.parts):
+            # Uncertainty is review advice, not evidence of missing content.
+            # All structure, budget, source and confirmed-defect checks remain.
+            return rules.model_copy(update={"low_confidence": True})
         return rules
     except ProofRubricUnverified:
         raise

@@ -1,9 +1,7 @@
-import { cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { PreparationIssue } from "@/types";
-import { RubricReviewDetails } from "./RubricReviewDetails";
+import { rubricReviewText } from "./rubricReviewText";
 
-afterEach(cleanup);
 const issue: PreparationIssue = { issue_id: "pending", field: "rubric", code: "generation_failed", severity: "blocking", status: "open",
   details: { rubric_review_draft: { fields: [
     { path: "part_rubric.total_pts", value: 10 },
@@ -12,6 +10,7 @@ const issue: PreparationIssue = { issue_id: "pending", field: "rubric", code: "g
     { path: "part_rubric.parts[0].steps[0].criterion", value: "Equation / 列式" },
     { path: "part_rubric.parts[0].steps[0].total_pts", value: 3 },
     { path: "part_rubric.parts[0].steps[0].follow_through_pts", value: 0 },
+    { path: "part_rubric.parts[0].steps[0].test_suite", value: true },
     { path: "part_rubric.parts[0].steps[0].required_conditions", value: ["Unit required / 写出单位"] },
     { path: "part_rubric.parts[0].alternative", value: { maximum: { points: 5 }, minimum: { points: 0 }, deduct_per_error: 1 } },
     { path: "part_rubric.parts[0].deductions[0].limit", value: 2 },
@@ -20,19 +19,18 @@ const issue: PreparationIssue = { issue_id: "pending", field: "rubric", code: "g
 
 it.each(["zh-CN", "en-US"])("shows extracted fields and missing values as pending, with readable labels (%s)", locale => {
   const zh = locale === "zh-CN";
-  render(<RubricReviewDetails issues={[issue]} locale={locale} />);
-  expect(screen.getByRole("complementary", { name: zh ? "待核对的评分项" : "Scoring details to review" })).toBeVisible();
-  expect(screen.getByText("Equation / 列式")).toBeVisible();
-  expect(screen.getByText(zh ? "(a) · 步骤 1 · 沿用前一步错值时得分" : "(a) · Step 1 · Credit for following an earlier error")).toBeVisible();
-  expect(screen.getByText(zh ? "3 分" : "3 pts")).toBeVisible();
-  expect(screen.getByText(zh ? "本题满分的 50%" : "50% of the question maximum")).toBeVisible();
-  expect(screen.getByText(zh ? "待核对" : "Review needed")).toBeVisible();
-  expect(screen.queryByText(/hidden-key|part_rubric|follow_through_pts/)).toBeNull();
+  const text = rubricReviewText([issue], locale);
+  expect(text).toContain("Equation / 列式");
+  expect(text).toContain(zh ? "(a) · 步骤 1 · 沿用前一步错值时得分：0 分" : "(a) · Step 1 · Credit for following an earlier error：0 pts");
+  expect(text).toContain(zh ? "3 分" : "3 pts");
+  expect(text).toContain(zh ? "本题满分的 50%" : "50% of the question maximum");
+  expect(text).toContain(zh ? "待核对" : "Review needed");
+  expect(text).toContain(zh ? "整组测试按通过比例计分" : "Award the suite budget in proportion to passed tests");
+  expect(text).not.toMatch(/hidden-key|part_rubric|follow_through_pts/);
 });
 
 it("hides resolved extraction and tolerates absent or malformed details", () => {
-  render(<RubricReviewDetails issues={[{ ...issue, status: "resolved" }, { ...issue, details: { rubric_review_draft: { fields: null } } }]} locale="zh-CN" />);
-  expect(screen.queryByRole("complementary")).toBeNull();
+  expect(rubricReviewText([{ ...issue, status: "resolved" }, { ...issue, details: { rubric_review_draft: { fields: null } } }], "zh-CN")).toBe("");
 });
 
 
@@ -44,12 +42,11 @@ it.each(["zh-CN", "en-US"])("locates whole malformed steps, parts and collection
       "part_rubric.parts[2].deductions[0]", "part_rubric.parts[3].steps",
       "part_rubric.parts", "part_rubric"],
   } } };
-  render(<RubricReviewDetails issues={[malformed]} locale={locale} />);
-  expect(screen.getByText(zh ? "3 分" : "3 pts")).toBeVisible();
+  const text = rubricReviewText([malformed], locale);
+  expect(text).toContain(zh ? "3 分" : "3 pts");
   for (const label of zh ? ["小问 1 · 步骤 2", "小问 2", "小问 3 · 扣分项 1", "小问 4 · 评分步骤", "整题 · 小问", "整题 · 评分标准"]
     : ["Part 1 · Step 2", "Part 2", "Part 3 · Deduction 1", "Part 4 · Scoring steps", "Question · Parts", "Question · Rubric"]) {
-    expect(screen.getByText(label)).toBeVisible();
-    expect(screen.getByText(label).parentElement).toHaveTextContent(zh ? "待核对" : "Review needed");
+    expect(text).toContain(`${label}：${zh ? "待核对" : "Review needed"}`);
   }
-  expect(screen.queryByText(/part_rubric/)).toBeNull();
+  expect(text).not.toContain("part_rubric");
 });

@@ -69,6 +69,11 @@ export interface RubricPointSummaryV1 {
   issue_code?: "rubric_subpart_points_incomplete" | "rubric_subpart_points_duplicate" | "rubric_subpart_points_mismatch" | null;
 }
 
+export interface ProgrammingScoringPolicy {
+  test_points: number;
+  input_rules: string;
+}
+
 export interface ProblemInfo {
   q_id: string;
   number: string;
@@ -76,6 +81,10 @@ export interface ProblemInfo {
   stem: string;
   criterion: string;
   effective_criterion?: string;
+  programming_scoring?: Omit<ProgrammingScoringPolicy, "test_points"> & {
+    test_points: number | null;
+    code_criterion: string;
+  };
   rubric_version?: number;
   recognition_confidence?: number | null;
   max_score: number;

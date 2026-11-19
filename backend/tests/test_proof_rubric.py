@@ -43,8 +43,8 @@ def initial(rules=None, *, reference=True):
     return json.dumps({"candidates": candidates})
 
 
-async def generate(provider, *, reference=True, existing_reference="", **kwargs):
-    row = dict(number="1", type="推理题", stem=STEM, max_score=10, reference_answer=existing_reference)
+async def generate(provider, *, reference=True, existing_reference="", stem=STEM, question_type="推理题", **kwargs):
+    row = dict(number="1", type=question_type, stem=stem, max_score=10, reference_answer=existing_reference)
     targets = [dict(q_id="q1", target=key, target_id=f"q1:{key}")
                for key in (["criterion", "reference_answer"] if reference else ["criterion"])]
     return await generate_missing_question_materials(_rows([row]), targets, 1, provider,
@@ -84,15 +84,74 @@ async def test_one_generation_one_audit_freezes_concrete_steps(reference, existi
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("verdict", ["inconsistent", "uncertain"])
-async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling(verdict):
+async def test_semantic_failure_preserves_exact_repair_reason_and_good_sibling():
     issue = "square: the reference uses an invalid exponent identity"
-    feedback = {}
-    provider = Provider([initial(), audit(verdict, issue)])
-    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
+    feedback, review = {}, {}
+    provider = Provider([initial(), audit("inconsistent", issue)])
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
     assert [c.target for c in candidates] == ["reference_answer"]
     assert issue in feedback["q1:criterion"]
+    extraction = review["q1:criterion"]
+    assert extraction["status"] == "needs_review"
+    assert any(field["path"] == "part_rubric.parts[0].steps[1].criterion" and field["value"] == POINTS[1][2]
+               for field in extraction["fields"])
     assert len(provider.calls) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stem,criteria", [
+    (
+        "证明系统的可靠性与完备性有什么区别？请各举一个例子",
+        (
+            "解释可靠性（可推导的结论在语义上有效），并给一个恰当的例子。",
+            "解释完备性（语义上有效的结论均可推导），并给一个恰当的例子。",
+        ),
+    ),
+    (
+        r"For $x$ an element in $G$ show that $x$ and $x^{-1}$ have the same order.",
+        ("Show finite orders coincide.", "Show infinite orders coincide."),
+    ),
+])
+async def test_concept_question_does_not_infer_proof_audit_from_stem(stem, criteria):
+    proposal = {
+        "part_rubric": {
+            "total_pts": 10, "parts": [{
+                "id": "p1", "total_pts": 10, "alternative": {"deduct_per_error": 2},
+                "steps": [
+                    {"id": "s1", "criterion": criteria[0], "total_pts": 5},
+                    {"id": "s2", "criterion": criteria[1], "total_pts": 5},
+                ],
+            }],
+        },
+    }
+    response = json.dumps({"candidates": [{"target_id": "q1:criterion", "rubric_definition": proposal}]})
+    provider = Provider([response, audit("inconsistent", "The proposed rubric has no proof steps.")])
+    candidate, = await generate(provider, reference=False, stem=stem, question_type="概念题", allow_partial=True)
+    assert len(provider.calls) == 1
+    frozen = RubricDraft.model_validate(candidate.rubric_draft)
+    assert [(s.criterion, s.total_pts) for s in frozen.plan.part_rubric.parts[0].steps] == [
+        (criterion, 5) for criterion in criteria
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bundled", [[], ["square"]])
+async def test_uncertainty_keeps_valid_rules_with_review_advice_instead_of_missing_content(bundled):
+    from backend.services import task_facade
+    from types import SimpleNamespace
+    provider = Provider([initial(), audit("uncertain", "Review the identity and its allocation.", bundled_steps=bundled)])
+    feedback, review = {}, {}
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    candidate = next(c for c in candidates if c.target == "criterion")
+    frozen = RubricDraft.model_validate(candidate.rubric_draft)
+    assert len(candidates) == 2 and not feedback and not review
+    assert frozen.plan.part_rubric.low_confidence
+    assert [(s.id, s.total_pts, s.criterion) for s in frozen.plan.part_rubric.parts[0].steps] == POINTS
+    assert len(provider.calls) == 2
+    question = SimpleNamespace(q_id="q1", source={"presentation": {}})
+    issue, = task_facade._math_rubric_advisory(question, frozen.plan, "zh")
+    assert issue["severity"] == "warning" and issue["code"] == "math_rubric_advisory"
+    assert "评分依据" in issue["details"]["message"]
 
 
 @pytest.mark.asyncio
