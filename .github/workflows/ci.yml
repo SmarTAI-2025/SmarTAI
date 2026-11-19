@@ -15,12 +15,12 @@ concurrency:
 
 jobs:
   backend-sqlite-tests:
-    name: Backend (SQLite shard ${{ matrix.shard }}/7)
+    name: Backend (SQLite shard ${{ matrix.shard }}/9)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "ci-provider-master-key-0123456789abcdef"
@@ -49,7 +49,7 @@ jobs:
           SMARTAI_SEED_TEST_USERS: "false"
           SMARTAI_GRADING_ENGINE: v2
         run: >-
-          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/7
+          python -m pytest backend/tests -q --test-shard=${{ matrix.shard }}/9
           --durations=30 --junitxml=test-results/sqlite-${{ matrix.shard }}.xml
       - name: Preserve SQLite test timings
         if: always()
@@ -179,12 +179,12 @@ jobs:
           test -f dist-admin/admin.html
 
   e2e-tests:
-    name: E2E (Playwright shard ${{ matrix.shard }}/3)
+    name: E2E (Playwright shard ${{ matrix.shard }}/5)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5]
     env:
       SMARTAI_RUNTIME_ENVIRONMENT: "test"
       SMARTAI_PROVIDER_ENCRYPTION_KEY: "e2e-provider-master-key-0123456789abcdef"
@@ -206,18 +206,22 @@ jobs:
           node-version-file: frontend/app/.node-version
           cache: npm
           cache-dependency-path: frontend/app/package-lock.json
-      - name: Install backend dependencies
-        working-directory: backend
+      - name: Install E2E dependencies and browser
+        shell: bash
         run: |
-          python -m pip install --require-hashes --only-binary=:all: -r ../requirements-dev.txt
-          python -m pip check
-      - name: Install frontend dependencies
-        run: npm ci
-      - name: Install Playwright browsers
-        run: |
-          # The runner's preferred Azure mirror can stall dependency downloads.
-          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
-          npx playwright install --with-deps --only-shell chromium
+          (
+            python -m pip install --require-hashes --only-binary=:all: -r ../../requirements-dev.txt
+            python -m pip check
+          ) &
+          backend_install=$!
+
+          # Avoid slow regional mirrors and keep the official Ubuntu archive fallback.
+          browser_result=0
+          npm ci &&
+            sudo sed -Ei '/(azure|ec2)\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt &&
+            npx playwright install --with-deps --only-shell chromium || browser_result=$?
+          wait "$backend_install"
+          exit "$browser_result"
       - name: Run E2E
         run: |
           # Start the backend on a fixed port with a throwaway SQLite DB, then
@@ -240,9 +244,9 @@ jobs:
           done
           # Keep the suite's existing file isolation; explicitly independent
           # cases may opt into parallel mode within the two-worker limit.
-          npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/3
+          npm run e2e -- --workers=2 --shard=${{ matrix.shard }}/5
       - name: Run controlled grading retry E2E
-        if: matrix.shard == 1
+        if: matrix.shard == 2
         run: |
           # A separate SQLite/FakeProvider server supplies the opt-in fixture.
           (
