@@ -1,9 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 
 const stages = {
-  problems: { active: "extracting_problems", paused: "problems_paused", operation: "question_preparation", label: "题目准备暂停", action: "继续准备题目" },
-  submissions: { active: "parsing_submissions", paused: "submissions_paused", operation: "submission_recognition", label: "作答识别暂停", action: "继续识别" },
-  grading: { active: "grading", paused: "grading_paused", operation: "grading", label: "批改暂停", action: "继续批改" },
+  problems: { active: "extracting_problems", paused: "problems_paused", operation: "question_preparation", label: "题目准备暂停", action: "继续准备题目", picker: "题目准备模型" },
+  submissions: { active: "parsing_submissions", paused: "submissions_paused", operation: "submission_recognition", label: "作答识别暂停", action: "继续识别", picker: "作答识别模型" },
+  grading: { active: "grading", paused: "grading_paused", operation: "grading", label: "批改暂停", action: "继续批改", picker: "重试批改模型" },
 } as const;
 
 async function fixture(page: Page, reason: "user_busy" | "server_busy" | "rate_limited", stage: keyof typeof stages) {
@@ -28,7 +28,10 @@ async function fixture(page: Page, reason: "user_busy" | "server_busy" | "rate_l
     if (request.method() === "OPTIONS") return route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*", "Access-Control-Allow-Methods": "*" } });
     if (path === "/auth/me") return json({ id: "teacher", username: "test", role: "teacher", is_active: true });
     if (path === "/auth/activity") return json({ token: "synthetic-execution-token" });
-    if (path.startsWith("/experts")) return json([{ provider_id: "saved-provider", provider_type: "openai", model: "synthetic-model", enabled: true, is_default: true, is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10 }]);
+    if (path.startsWith("/experts")) return json(["saved-provider", "replacement-byok"].map((id) => ({
+      provider_id: id, provider_type: "openai", model: id, enabled: true, is_default: id === "saved-provider",
+      is_shared: false, scope: "owner", editable: true, max_concurrent: 1, rpm: 10,
+    })));
     if (path === "/tags/") return json([]);
     if (path === "/course-materials/") return json({ items: [] });
     if (path === "/knowledge/activity") return json({ items: [], active_count: 0, total: 0, page: 1, page_size: 5 });
@@ -89,13 +92,24 @@ for (const stage of ["problems", "submissions", "grading"] as const) for (const 
       await page.locator(`a[href="${progressHref}"]:visible`).filter({ hasText: spec.label }).first().click();
       await expect(page.getByRole("heading", { name: spec.label, exact: true })).toBeVisible();
     }
+    const replacement = reason === "rate_limited" ? "replacement-byok" : null;
+    const picker = page.getByRole("combobox", { name: spec.picker, exact: true });
+    await expect(picker).toBeVisible();
+    if (replacement) {
+      await picker.selectOption(replacement);
+      await expect(picker).toHaveValue(replacement);
+      expect(calls).toHaveLength(1);
+    }
     await page.getByRole("button", { name: spec.action, exact: true }).click();
     await expect(page.getByText(/服务器繁忙，本任务已自动排队/)).toBeVisible();
     expect(calls).toHaveLength(2);
     expect(calls[0].body).toEqual({ job_id: "run-1", expected_workflow_revision: 7 });
     expect(calls[1].body).toMatchObject(stage === "grading"
-      ? { expected_workflow_revision: 8, retry_scope: "failed_only", request_id: expect.any(String) }
-      : { recognition_provider_id: "saved-provider", expected_workflow_revision: 8, acknowledge_possible_duplicate_call: true });
+      ? { expected_workflow_revision: 8, retry_scope: "failed_only", request_id: expect.any(String),
+          ...(replacement ? { retry_provider_id: replacement } : {}) }
+      : { recognition_provider_id: replacement ?? "saved-provider", expected_workflow_revision: 8, acknowledge_possible_duplicate_call: true });
+    expect(calls[1].path).toBe(stage === "grading" ? "/tasks/execution-task/grade" :
+      `/tasks/execution-task/${stage === "problems" ? "question-preparation" : "submission-recognition"}/run-1/retry`);
     expect(errors).toEqual([]);
   });
 }

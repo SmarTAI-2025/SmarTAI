@@ -34,7 +34,7 @@ class Registry:
 def case(monkeypatch, request):
     if os.environ.get("SMARTAI_TEST_POSTGRES_URL") == os.environ.get("SMARTAI_DATABASE_URL"):
         request.getfixturevalue("pg_database")
-    seeded = _seed_legacy_structured_case(question_count=2)
+    seeded = _seed_legacy_structured_case(question_count=getattr(request, "param", 2))
     task_id, owner = seeded["assignment_id"], seeded["owner_id"]
     monkeypatch.setattr(grading_runs, "_registry_for", lambda _owner: Registry())
     monkeypatch.setattr(grading_runs.settings, "e2e_fake_provider", False)
@@ -472,6 +472,114 @@ def test_failed_only_retry_preserves_success_and_teacher_review(case, monkeypatc
     assert kept.teacher_review["new_comment"] == "Preserve teacher feedback"
     assert grading.get_run(retry["job_id"]).status == "completed"
     assert len(grading.list_results_for_run(first["job_id"])) == 2
+
+
+@pytest.mark.parametrize("early_failure", [False, True])
+def test_retry_uses_selected_owner_model_and_preserves_previous_results(case, monkeypatch, early_failure):
+    from types import SimpleNamespace
+    from backend.api.tasks import GradeRequest, start_grading
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.models import ProviderConfig
+
+    task_id, owner = case
+    master_key = "test-suite-provider-master-key-0123456789abcdef"
+    monkeypatch.setattr(grading_runs.settings, "provider_encryption_key", master_key)
+    original_setup = workflows.get_live_workflow(task_id, owner_id=owner).grading_setup
+    replacement = upsert_provider_config(owner, ProviderConfig(
+        provider_type="openai", api_key="synthetic-key", model="replacement",
+        base_url="https://api.openai.com/v1",
+    ), master_key=master_key)
+    first = start(case, "original")["job_id"]
+    finish(case, first, monkeypatch)
+    success = next(row for row in grading.list_results_for_run(first) if row.q_id == "q1")
+    grading.add_teacher_review(success.id, teacher_id=owner, new_score=9,
+                               new_comment="Keep teacher feedback", confirm=True)
+
+    def request(key, provider_id, *, revision=None):
+        return start_grading(task_id, GradeRequest(
+            expected_workflow_revision=workflows.get_live_workflow(task_id, owner_id=owner).workflow_revision
+            if revision is None else revision,
+            request_id=key, retry_scope="failed_only", retry_provider_id=provider_id,
+        ), current=SimpleNamespace(id=owner, role="teacher"))
+
+    unavailable = request("unavailable-provider", "unavailable-provider")
+    assert unavailable.status_code == 422
+    assert len(grading.list_runs_for_assignment(task_id, actor_id=owner)) == 1
+    revision = workflows.get_live_workflow(task_id, owner_id=owner).workflow_revision
+    retry = request("new-model", replacement.id, revision=revision)["job_id"]
+    assert request("new-model", replacement.id, revision=revision)["job_id"] == retry
+    frozen = workflows.get_run_setup(retry)
+    assert frozen.setup == {
+        **original_setup, "selected_provider_ids": [replacement.id], "primary_provider_id": replacement.id,
+    }
+    assert workflows.get_run_setup(first).setup == original_setup
+    if early_failure:
+        class RejectingRegistry:
+            def select(self, *_args, **_kwargs):
+                raise ValueError("provider_not_enabled")
+
+        with pytest.raises(DomainError, match="grading_provider_selection_invalid"):
+            asyncio.run(grading_runs.process_run(run_id=retry, worker_id="early-failure", registry=RejectingRegistry()))
+        assert not grading.list_results_for_run(retry)
+        retry = request("retry-after-early-failure", replacement.id)["job_id"]
+
+    monkeypatch.setattr(grading_runs, "_registry_for", REAL_REGISTRY_FOR)
+    called = finish(case, retry, monkeypatch, ())
+    assert called["grading_setup"].selected_provider_ids == [replacement.id]
+    retry_registry = called["registry"]
+    assert [config["provider_id"] for config in retry_registry.list_configs()] == [replacement.id]
+    assert [provider.config.model for provider in retry_registry.list_available()] == ["replacement"]
+    assert all(qids == {"q2"} for qids in called["question_ids_by_student"].values())
+    kept = next(row for row in grading.list_results_for_run(retry) if row.q_id == "q1")
+    assert kept.effective_score == 9
+    assert kept.teacher_review["new_comment"] == "Keep teacher feedback"
+    assert workflows.get_live_workflow(task_id, owner_id=owner).grading_setup == original_setup
+    projected = task_facade.task_results(task_id=task_id, owner_id=owner)
+    corrections = {item["q_id"]: item for item in projected["results"][0]["corrections"]}
+    assert corrections["q1"]["primary_provider_id"] == original_setup["primary_provider_id"]
+    assert "primary_provider_id" not in corrections["q2"]
+    assert projected["primary_provider_id"] == replacement.id
+
+
+@pytest.mark.parametrize("case", [3], indirect=True)
+def test_switching_back_to_prior_grading_model_keeps_completed_rows_from_both_models(case, monkeypatch):
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.models import ProviderConfig
+
+    task_id, owner = case
+    master_key = "test-suite-provider-master-key-0123456789abcdef"
+    monkeypatch.setattr(grading_runs.settings, "provider_encryption_key", master_key)
+    monkeypatch.setattr(grading_runs, "_registry_for", REAL_REGISTRY_FOR)
+    original = workflows.get_live_workflow(task_id, owner_id=owner).grading_setup["primary_provider_id"]
+    replacement = upsert_provider_config(owner, ProviderConfig(
+        provider_type="openai", api_key="synthetic-key", model="replacement",
+        base_url="https://api.openai.com/v1",
+    ), master_key=master_key).id
+
+    def retry(key, provider_id):
+        return task_facade.start_task_grading(task_id=task_id, owner_id=owner,
+            expected_workflow_revision=workflows.get_live_workflow(task_id, owner_id=owner).workflow_revision,
+            request_id=key, retry_scope="failed_only", retry_provider_id=provider_id)["job_id"]
+
+    first = start(case, "original")["job_id"]
+    finish(case, first, monkeypatch, ("q2", "q3"), score=7)
+    second = retry("replacement", replacement)
+    second_call = finish(case, second, monkeypatch, ("q3",), score=8)
+    assert second_call["grading_setup"].selected_provider_ids == [replacement]
+    assert list(second_call["question_ids_by_student"].values()) == [{"q2", "q3"}]
+    result_b = next(row for row in grading.list_results_for_run(second) if row.q_id == "q2")
+    grading.add_teacher_review(result_b.id, teacher_id=owner, new_score=9,
+                               new_comment="Preserve replacement review", confirm=True)
+    last = retry("original-again", original)
+    last_call = finish(case, last, monkeypatch, (), score=10)
+    assert last_call["grading_setup"].selected_provider_ids == [original]
+    assert list(last_call["question_ids_by_student"].values()) == [{"q3"}]
+    projected = task_facade.task_results(task_id=task_id, owner_id=owner)
+    corrections = {item["q_id"]: item for item in projected["results"][0]["corrections"]}
+    assert [corrections[qid]["score"] for qid in ("q1", "q2", "q3")] == [7, 9, 10]
+    assert corrections["q1"]["primary_provider_id"] == original
+    assert corrections["q2"]["primary_provider_id"] == replacement
+    assert corrections["q2"]["teacher_comment"] == "Preserve replacement review"
 
 
 def test_failed_only_retry_does_not_repeat_manually_scored_failure(case, monkeypatch):

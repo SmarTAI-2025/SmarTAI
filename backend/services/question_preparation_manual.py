@@ -81,7 +81,8 @@ def _project_interrupted_save(operation):
         recognition_provider_id=payload["recognition_provider_id"],
         provider_configuration_fingerprint=payload["provider_configuration_fingerprint"],
         generation_language=payload.get("generation_language"),
-        acknowledged_restart_from=payload.get("acknowledged_restart_from"))
+        acknowledged_restart_from=payload.get("acknowledged_restart_from"),
+        model_retry_origin=payload.get("model_retry_origin"))
     if expected_hash != operation.input_hash:
         unavailable()
     context = SimpleNamespace(operation_id=operation.id, owner_id=operation.owner_id,

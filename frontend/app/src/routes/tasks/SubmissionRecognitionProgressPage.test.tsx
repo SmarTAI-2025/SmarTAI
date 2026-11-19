@@ -16,7 +16,9 @@ vi.mock("@/api/hooks/tasks", () => ({
   useRetrySubmissionRecognition: () => ({ isPending: false, mutateAsync: retryRecognition }),
   useManuallyCompleteSubmissionRecognition: () => ({ isPending: false, mutateAsync: manuallyComplete }),
 }));
-vi.mock("@/api/hooks", () => ({ useStageProviders: () => ({ data: [] }) }));
+vi.mock("@/api/hooks", () => ({ useStageProviders: () => ({
+  data: ["test-provider", "replacement"].map(provider_id => ({ provider_id, model: provider_id, provider_type: "openai", enabled: true })),
+}) }));
 vi.mock("@/hooks/useTaskProgress", () => ({
   useTaskProgress: () => ({ data: snapshot, progress, refetch: vi.fn() }),
 }));
@@ -95,7 +97,9 @@ describe("submission recognition completion", () => {
     snapshot = { ...detail, status: "error", last_failed_job_id: "new-job", error: "saved_text_recovery_retired" };
     show();
     expect(screen.getByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    const models = screen.getByRole("combobox", { name: "作答识别模型" });
+    fireEvent.change(models, { target: { value: "replacement" } });
+    expect(models).toHaveValue("replacement");
     expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
     expect(manuallyComplete).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();
@@ -161,7 +165,7 @@ describe("submission recognition completion", () => {
       submission_recognition_provider_id: "test-provider", submission_sources: [archiveFailure(reason)] };
     show();
     expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "作答识别模型" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "人工继续处理" })).toBeEnabled();
     fireEvent.click(screen.getByRole("link", { name: "返回修改配置" }));
     expect(await screen.findByRole("heading", { name: "作答上传页面" })).toBeVisible();
@@ -199,6 +203,9 @@ describe("submission recognition completion", () => {
     const retryLabel = locale === "zh-CN" ? "重试失败项" : "Retry failed items";
     fireEvent.click(screen.getByRole("button", { name: retryLabel }));
     expect(await screen.findByText(locale === "zh-CN" ? /剩余失败项需要重新整理文件/ : /The remaining failures require corrected files/)).toBeVisible();
+    const models = screen.getByRole("combobox", { name: locale === "zh-CN" ? "作答识别模型" : "Submission recognition model" });
+    fireEvent.change(models, { target: { value: "replacement" } });
+    expect(models).toHaveValue("replacement");
     expect(screen.queryByRole("button", { name: retryLabel })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: locale === "zh-CN" ? "人工继续处理" : "Continue manually" })).toBeEnabled();
     expect(retryRecognition).toHaveBeenCalledOnce();
@@ -220,7 +227,7 @@ describe("submission recognition completion", () => {
       ] };
     show();
     expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "作答识别模型" })).toBeEnabled();
     expect(screen.getByRole("link", { name: "返回修改配置" })).toHaveAttribute("href", "/tasks/T/submissions/upload");
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();

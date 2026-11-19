@@ -11,7 +11,7 @@ from backend.services import task_facade
 from backend.services.task_execution import stop_task_run
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 from backend.tests.test_question_preparation_recovery import (
-    _RecoveryRegistry, _queue_question_preparation, _claim, _install_incremental_preparer,
+    _RecoveryRegistry, _RecoveryRegistryWithReplacement, _queue_question_preparation, _claim, _install_incremental_preparer,
 )
 
 
@@ -131,29 +131,34 @@ async def test_submissions_stop_then_continue_or_start_from_saved_configuration(
 async def test_questions_stop_preserves_saved_results_and_requires_inflight_ack(monkeypatch, inflight):
     owner, task = _seed_task()
     _, first, _ = await _queue_question_preparation(owner, task, source_text="1. First.\n2. Second.")
-    calls = []
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: _RecoveryRegistry())
+    calls, routes = [], []
+    registry = _RecoveryRegistryWithReplacement()
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     _install_incremental_preparer(monkeypatch, calls,
         question_count=2, cancel_after_question=None if inflight else "q1",
-        cancel_after_question_started="q2" if inflight else None)
+        cancel_after_question_started="q2" if inflight else None, generation_routes=routes)
     with pytest.raises(asyncio.CancelledError):
         await task_preparation.run_durable_question_preparation(_claim(owner, first["job_id"], "first"))
     revision = stop(owner, task, first["job_id"])
-    request = task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision)
+    assert task_facade.get_task(task_id=task, owner_id=owner)["status"] == "problems_paused"
+    request = task_preparation.RetryQuestionPreparationRequest(expected_workflow_revision=revision,
+        recognition_provider_id="replacement-byok", use_current_configuration=True)
     async def retry():
         return await task_preparation.retry_question_preparation(task_id=task, job_id=first["job_id"],
             request=request, background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner),
-            registry=_RecoveryRegistry())
+            registry=registry)
     if inflight:
         rejected = await retry()
         assert rejected.status_code == 409
         assert "provider_submit_uncertain" in rejected.body.decode()
         request.acknowledge_possible_duplicate_call = True
     job = assert_started(await retry())
-    _install_incremental_preparer(monkeypatch, calls, question_count=2)
+    routes.clear()
+    _install_incremental_preparer(monkeypatch, calls, question_count=2, generation_routes=routes)
     await task_preparation.run_durable_question_preparation(_claim(owner, job, "finish"))
     assert flows.get_operation(job, owner_id=owner).status == "done"
     assert calls == ["q1", "q2"]
+    assert routes == [("q2", "replacement-byok")]
 
 
 @pytest.mark.asyncio

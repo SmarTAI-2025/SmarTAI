@@ -55,6 +55,7 @@ def question_preparation_input_hash(
     recognition_provider_id: str,
     provider_configuration_fingerprint: str,
     acknowledged_restart_from: str | None = None,
+    model_retry_origin: str | None = None,
     generation_language: str | None = None,
 ) -> str:
     """Hash the ordered logical input independently of retry claim revisions."""
@@ -75,6 +76,7 @@ def question_preparation_input_hash(
                 ),
                 **({"acknowledged_restart_from": acknowledged_restart_from}
                    if acknowledged_restart_from else {}),
+                **({"model_retry_origin": model_retry_origin} if model_retry_origin else {}),
             },
             sort_keys=True,
             separators=(",", ":"),

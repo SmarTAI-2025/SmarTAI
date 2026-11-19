@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import type { ProviderFailure } from "../src/types/progress";
 
 // Synthetic API responses only. Never use a user's task, key or paid endpoint.
-async function fixture(page: Page, stage: "problems" | "submissions" | "grading", code = "provider_request_rejected", startSucceeds = false, diagnostic?: ProviderFailure, locale = "zh-CN") {
+async function fixture(page: Page, stage: "problems" | "submissions" | "grading", code = "provider_request_rejected", startSucceeds = false, diagnostic?: ProviderFailure, locale = "zh-CN", unreadable = false) {
   const calls: Array<{ path: string; body: string }> = [];
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -44,6 +44,9 @@ async function fixture(page: Page, stage: "problems" | "submissions" | "grading"
     if (path.endsWith("/draft-reference")) return json({ available: true, prepared: false, filename: "saved.pdf" });
     if (path.endsWith("/question-preparation/capabilities")) return json({ source_roles: Object.fromEntries(["problem", "reference_answer", "rubric", "programming_tests"].map((role) => [role, { accepted_extensions: [".pdf", ".txt", ".png"] }])), reader: { ocr: true }, limits: { max_file_bytes: 5242880 }, score_policy: { maximum_max_score: 10000, per_question_text_max_characters: 12000 } });
     if (path.endsWith("/grading-setup")) return json(setupResponse);
+    if (unreadable && [`/tasks/${task.task_id}`, `/tasks/${task.task_id}/state`].includes(path)) {
+      return json({ detail: { code: "version_conflict" } }, 409);
+    }
     if (path === `/tasks/${task.task_id}/state`) return json({ ...task, progress: { phase: task.status === "error" ? "error" : "processing", current_step: stage, error_detail: task.error, messages: [], provider_failures: diagnostic ? [diagnostic] : [] } });
     if (path === `/tasks/${task.task_id}`) return json(task);
     if (path.endsWith("/kb")) return json({ docs: [] });
@@ -279,6 +282,44 @@ test("grading error keeps retry and configuration recovery with saved model and 
   expect(calls).toHaveLength(0);
   expect(errors).toEqual([]);
 });
+
+for (const [stage, label, code] of [
+  ["problems", "题目准备模型", "unknown_failure"],
+  ["submissions", "作答识别模型", "provider_timeout"],
+  ["grading", "重试批改模型", "shared_pool_usage_unavailable"],
+] as const) {
+  test(`model selection remains visible when ${stage} state cannot be read`, async ({ page }) => {
+    const { calls } = await fixture(page, stage, undefined, false, undefined, "zh-CN", true);
+    await page.goto(`/tasks/recovery-task/${stage}/progress`);
+    const model = page.getByRole("combobox", { name: label, exact: true });
+    await model.selectOption("new");
+    await expect(model).toHaveValue("new");
+    await expect(page.getByRole("button", { name: "刷新状态", exact: true })).toBeVisible();
+    expect(calls).toHaveLength(0);
+  });
+
+  test(`chooses a BYOK model and retries only failed work in ${stage}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width: stage === "grading" ? 390 : 1440, height: 900 });
+    const { calls, errors } = await fixture(page, stage, code, true);
+    await page.goto(`/tasks/recovery-task/${stage}/progress`);
+    const model = page.getByRole("combobox", { name: label, exact: true });
+    await model.selectOption("new");
+    await expect(model).toHaveValue("new");
+    expect(calls).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("retry-model.png") });
+    await page.getByRole("button", { name: "重试失败项", exact: true }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    if (stage === "grading") {
+      expect(calls[0].path).toBe("/tasks/recovery-task/grade");
+      expect(JSON.parse(calls[0].body)).toMatchObject({ retry_scope: "failed_only", retry_provider_id: "new", expected_workflow_revision: 7 });
+    } else {
+      expect(calls[0].path).toContain(`/${stage}-job/retry`);
+      expect(JSON.parse(calls[0].body)).toMatchObject({ recognition_provider_id: "new", expected_workflow_revision: 7 });
+    }
+    expect(errors).toEqual([]);
+  });
+}
 
 for (const code of ["provider_rate_limited", "provider_timeout", "source_empty", "unknown_failure"]) {
   test(`fallback controls remain usable for ${code}`, async ({ page }) => {

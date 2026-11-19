@@ -223,16 +223,27 @@ class IncrementalQuestionPreparation:
         payload = self.operation.payload or {}
         if not payload.get("retry_origin_id") or self.operation.checkpoint_data.get("retry_origin_copied"):
             return
-        origin = workflow_repository.get_operation(payload["retry_origin_id"], owner_id=self.operation.owner_id)
-        old, checkpoint = origin.payload or {}, origin.checkpoint or {}
-        if (origin.assignment_id != self.operation.assignment_id or origin.operation_type != "question_preparation"
-                or origin.status != "error" or "manual_saved_sources" in old or old.get("question_preparation_version") != 2
-                or any(old.get(key) != payload.get(key) for key in (
-                    "source_content_hashes", "source_text_hashes", "source_refs", "score_policy",
-                    "generation_policy", "generation_language"))):
-            raise ValidationError("Retry inputs changed.", code="question_preparation_artifact_invalid")
-        if checkpoint.get("incremental_inflight_units") and not payload.get("acknowledged_restart_from"):
-            raise RuntimeError("provider_submit_uncertain")
+        origin_id = payload["retry_origin_id"]
+        visited = {self.operation.operation_id}
+        while True:
+            if origin_id in visited:
+                raise ValidationError("Invalid preparation retry lineage.", code="question_preparation_artifact_invalid")
+            visited.add(origin_id)
+            origin = workflow_repository.get_operation(origin_id, owner_id=self.operation.owner_id)
+            old, checkpoint = origin.payload or {}, origin.checkpoint or {}
+            if (origin.assignment_id != self.operation.assignment_id or origin.operation_type != "question_preparation"
+                    or origin.status != "error" or "manual_saved_sources" in old or old.get("question_preparation_version") != 2
+                    or any(old.get(key) != payload.get(key) for key in (
+                        "source_content_hashes", "source_text_hashes", "source_refs", "score_policy",
+                        "generation_policy", "generation_language"))):
+                raise ValidationError("Retry inputs changed.", code="question_preparation_artifact_invalid")
+            if checkpoint.get("incremental_inflight_units") and not payload.get("acknowledged_restart_from"):
+                raise RuntimeError("provider_submit_uncertain")
+            # Provider loading or cancellation can fail before the new worker
+            # copies the previous attempt. Such a run has no new model results.
+            if not old.get("retry_origin_id") or checkpoint.get("retry_origin_copied"):
+                break
+            origin_id = old["retry_origin_id"]
         inherited, inherited_refs, _ = await run_in_threadpool(read_incremental_preparation_units,
             checkpoint=checkpoint, artifact_refs=origin.artifact_refs, owner_id=origin.owner_id,
             task_id=origin.assignment_id, operation_id=origin.id, attempt=origin.attempt,

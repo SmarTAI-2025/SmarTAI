@@ -13,6 +13,11 @@ vi.mock("@/api/hooks/tasks", () => ({
   useTask: vi.fn(),
 }));
 
+vi.mock("@/api/hooks/experts", async importOriginal => ({
+  ...await importOriginal<typeof import("@/api/hooks/experts")>(),
+  useStageProviders: () => ({ data: [] }),
+}));
+
 vi.mock("@/hooks/useTaskProgress", () => ({
   useTaskProgress: vi.fn(),
 }));
@@ -248,6 +253,20 @@ describe("GradingProgressPage completion routing", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("This grading run did not finish");
     expect(screen.getByRole("alert")).not.toHaveTextContent("grading_failed");
     expect(screen.getByRole("alert")).not.toHaveTextContent("run-1");
+  });
+
+  it("keeps the grading recovery picker visible when detail predates the grading failure", () => {
+    vi.mocked(useTask).mockReturnValue({
+      data: { task_id: "task-1", status: "submissions_ready", workflow_revision: 4 },
+    } as ReturnType<typeof useTask>);
+    vi.mocked(useTaskProgress).mockReturnValue({
+      data: { task_id: "task-1", status: "error", error: "grading_failed", workflow_revision: 5,
+        last_failed_job_id: "run-failed", grading_job_id: "run-failed" },
+      progress: null, percent: 0,
+    } as unknown as ReturnType<typeof useTaskProgress>);
+    renderProgress();
+    expect(screen.getByRole("combobox", { name: "Grading retry model" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Retry failed items" })).toBeEnabled();
   });
 
   it("renders the classified provider cause from the grading run", () => {

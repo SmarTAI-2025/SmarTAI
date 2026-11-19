@@ -278,6 +278,7 @@ export interface ExpertResult {
 }
 
 export interface Correction {
+  primary_provider_id?: string;
   q_id: string;
   type: string;
   score: number | null;

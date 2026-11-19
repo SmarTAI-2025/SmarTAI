@@ -212,6 +212,50 @@ def test_restart_recovers_saved_expert_without_replaying_and_retry_reuses_it(cas
     assert {row.q_id: row.effective_score for row in grades.list_results_for_run(retry_id)} == {"q1": 0, "q2": 8}
 
 
+def test_stop_and_switch_grading_model_keeps_finalized_scores(case, monkeypatch):
+    from backend.db.provider_repository import upsert_provider_config
+    from backend.models import Correction, ProviderConfig
+    from backend.tests.test_task_grading_retry import REAL_REGISTRY_FOR, finish
+
+    task_id, owner = case
+    master_key = "test-suite-provider-master-key-0123456789abcdef"
+    monkeypatch.setattr(grading_runs.settings, "provider_encryption_key", master_key)
+    monkeypatch.setattr(grading_runs, "_registry_for", REAL_REGISTRY_FOR)
+    replacement = upsert_provider_config(owner, ProviderConfig(
+        provider_type="openai", api_key="synthetic-key", model="replacement",
+        base_url="https://api.openai.com/v1",
+    ), master_key=master_key).id
+
+    run_id = start(case, "before-stop")["job_id"]
+    checkpoints, _, revisions, setup = prepare(case, run_id)
+    student_id = revisions[0][1]
+    original = setup.setup["primary_provider_id"]
+    checkpoints.save_expert(student_id, "q1", original, 0, ExpertResult(
+        provider="original-model", provider_id=original, score=7, max_score=10,
+        confidence=.95, comment="Original expert explanation", steps=[],
+    ))
+    checkpoints.save_correction(student_id, Correction(
+        q_id="q1", type="concept", score=7, max_score=10,
+        confidence=.95, synthesis_method="single", comment="Completed before stopping", steps=[],
+    ))
+    assert stop(case, run_id)["status"] == "stopped"
+    paused = task_facade.get_task(task_id=task_id, owner_id=owner)
+    assert paused["status"] == "grading_paused"
+    stored = {row.q_id: row for row in grades.list_results_for_run(run_id)}
+    assert stored["q1"].effective_score == 7 and stored["q2"].effective_score is None
+    resumed = task_facade.start_task_grading(task_id=task_id, owner_id=owner,
+        expected_workflow_revision=paused["workflow_revision"], request_id="continue-with-replacement",
+        retry_scope="failed_only", retry_provider_id=replacement)["job_id"]
+    call = finish(case, resumed, monkeypatch, failed=(), score=9)
+    assert [config["provider_id"] for config in call["registry"].list_configs()] == [replacement]
+    assert call["question_ids_by_student"] == {student_id: {"q2"}}
+    projected = task_facade.task_results(task_id=task_id, owner_id=owner)
+    rows = {row["q_id"]: row for row in projected["results"][0]["corrections"]}
+    assert rows["q1"]["score"] == 7 and rows["q1"]["comment"] == "Completed before stopping"
+    assert rows["q1"]["primary_provider_id"] == setup.setup["primary_provider_id"]
+    assert rows["q2"]["score"] == 9
+
+
 def test_stop_preserves_each_sample_and_resume_only_calls_missing_samples(case, monkeypatch):
     flow = workflows.get_live_workflow(case[0], owner_id=case[1])
     config = {**flow.grading_setup, "multi_sample_n": 3, "aggregation_method": "weighted_average"}

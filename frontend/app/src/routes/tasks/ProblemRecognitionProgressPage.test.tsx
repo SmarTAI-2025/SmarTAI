@@ -180,7 +180,7 @@ describe("ProblemRecognitionProgressPage recovery", () => {
       <Route path="/tasks/:taskId/questions" element={<div>Persisted question matrix</div>} />
     </Routes></MemoryRouter>);
     expect(screen.getByRole("heading", { name: "此旧整理任务已停用" })).toBeVisible();
-    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "题目准备模型" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "重试失败项" })).not.toBeInTheDocument();
     expect(manualMutateAsync).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "人工继续处理" })).not.toBeInTheDocument();

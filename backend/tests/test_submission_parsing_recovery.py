@@ -28,8 +28,10 @@ def _archive_bytes(name: str = "student.txt", content: bytes = b"answer") -> byt
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("saved_filename", [None, "S1.txt", "S2.txt"])
-@pytest.mark.parametrize("paused_run", [False, True])
-async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinished_source(monkeypatch, saved_filename, paused_run):
+@pytest.mark.parametrize(("paused_run", "switch_on_continue"), [(False, False), (True, False), (True, True)])
+async def test_stopped_or_failed_submissions_recover_completed_answers(
+    monkeypatch, saved_filename, paused_run, switch_on_continue,
+):
     import asyncio
     import json
     from types import SimpleNamespace
@@ -39,7 +41,9 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     from backend.services.task_execution import stop_task_run
 
     owner, task = _seed_task(with_question=True)
-    registry = _Registry()
+    from backend.tests.test_question_preparation_recovery import _RecoveryRegistryWithReplacement
+
+    registry = _RecoveryRegistryWithReplacement() if switch_on_continue else _Registry()
     calls = []
     started = saved_filename is not None
     saved_parse = asyncio.Event()
@@ -81,6 +85,33 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
     paused = task_facade.get_task(task_id=task, owner_id=owner)
     origin = workflow_repository.get_operation(queued["job_id"], owner_id=owner)
     saved_calls = list(calls)
+    if switch_on_continue:
+        assert paused["status"] == "submissions_paused"
+        retried_files = []
+
+        async def replacement_invoke(messages):
+            prompt = messages[-1].content
+            filename = next(name for name in ("S1.txt", "S2.txt") if f"**[Filename]**: {name}" in prompt)
+            retried_files.append(filename)
+            return SimpleNamespace(content=json.dumps({"stu_id": filename.removesuffix(".txt"), "stu_name": filename,
+                "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": "Newly recognized", "flag": []}]}))
+
+        monkeypatch.setattr(registry.replacement, "ainvoke", replacement_invoke)
+        retry = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=origin.id,
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=paused["workflow_revision"],
+                recognition_provider_id=registry.replacement.provider_id, acknowledge_possible_duplicate_call=True),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        assert isinstance(retry, dict), getattr(retry, "body", retry)
+        row = workflow_repository.claim_operation(retry["job_id"], owner_id=owner, worker_id="resumed", lease_seconds=60)
+        await task_facade.run_durable_submission_recognition(LeasedOperation(row, worker_id="resumed", lease_seconds=60))
+        after = task_facade.get_task(task_id=task, owner_id=owner)
+        assert after["status"] == "submissions_ready"
+        assert sorted(retried_files) == sorted({"S1.txt", "S2.txt"} - {saved_filename})
+        assert calls == saved_calls
+        answers = {student["source_filename"]: student["stu_ans"][0]["content"] for student in after["student_data"].values()}
+        assert answers == {name: "saved wrong answer -2" if name == saved_filename else "Newly recognized"
+                           for name in ("S1.txt", "S2.txt")}
+        return
     with pytest.raises(DomainError):
         await continue_manually(task_id=task, owner_id=owner, job_id=origin.id, expected_revision=paused["workflow_revision"] + 1)
     if not started:
@@ -394,8 +425,23 @@ async def test_page_failure_details_survive_worker_restart_and_retry_is_explicit
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_partial", [False, True])
 @pytest.mark.parametrize("nested_archive", [False, True])
-async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(monkeypatch, legacy_partial, nested_archive):
+@pytest.mark.parametrize("switch_back", [False, True])
+async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_source(
+    monkeypatch, legacy_partial, nested_archive, switch_back,
+):
     from types import SimpleNamespace
+
+    class RegistryWithReplacement(_Registry):
+        replacement = SimpleNamespace(provider_id="replacement-byok", supports_vision=False)
+
+        def get(self, provider_id):
+            return self.replacement if provider_id == self.replacement.provider_id else super().get(provider_id)
+
+        def list_configs(self):
+            return [*super().list_configs(), {"provider_id": self.replacement.provider_id,
+                                             "enabled": True, "scope": "owner"}]
+
+    registry = RegistryWithReplacement()
     owner, task = _seed_task(with_question=True)
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as archive:
@@ -403,7 +449,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
             archive.writestr("inner.zip", _archive_bytes())
         archive.writestr("one.txt", "first answer")
         archive.writestr("two.txt", "second answer")
-    reads, parsed = [], []
+        if switch_back:
+            archive.writestr("three.txt", "third answer")
+    reads, parsed, routes = [], [], []
     round_number = 0
 
     async def read(**kw):
@@ -412,7 +460,7 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
                        if legacy_partial and round_number == 0 and kw["filename"] == "one.txt" else None)
         return SimpleNamespace(text=kw["content"].decode(), recognition=recognition)
 
-    async def parse(sources, *_args, **_kwargs):
+    async def parse(sources, _problems, provider, **_kwargs):
         result = []
         for source in sources:
             if source.pre_error_code:
@@ -421,7 +469,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
                     source.failure_phase, source.retryable))
                 continue
             parsed.append(source.filename)
-            failed = source.filename == "two.txt" and round_number == 0
+            routes.append((round_number, source.filename, provider.provider_id))
+            failed = ((source.filename == "two.txt" and round_number == 0)
+                      or (source.filename == "three.txt" and round_number < 2))
             student = None if failed else {"stu_id": source.filename, "stu_name": source.filename,
                 "stu_ans": [{"q_id": "q1", "content": source.text, "flag": []}],
                 "source_id": source.source_id, "stored_file_id": source.stored_file_id,
@@ -434,9 +484,9 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
 
     monkeypatch.setattr(task_facade, "read_question_source", read)
     monkeypatch.setattr(task_facade, "parse_student_answer_sources", parse)
-    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: _Registry())
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
     first = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
-        filename="answers.zip", content=buf.getvalue(), content_type="application/zip", registry=_Registry())
+        filename="answers.zip", content=buf.getvalue(), content_type="application/zip", registry=registry)
 
     async def finish(job):
         row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
@@ -447,30 +497,53 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
     assert snapshot["status"] == "error"
     assert snapshot["student_data"] == {}
     assert snapshot["submission_source_summary"]["parsed"] == (0 if legacy_partial else 1)
-    assert snapshot["submission_source_summary"]["failed"] == (2 if legacy_partial else 1) + int(nested_archive)
+    assert snapshot["submission_source_summary"]["failed"] == 1 + int(legacy_partial) + int(nested_archive) + int(switch_back)
+
+    async def retry(job_id, provider_id):
+        snapshot = task_facade.get_task(task_id=task, owner_id=owner)
+        queued = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=job_id,
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=snapshot["workflow_revision"],
+                                                           recognition_provider_id=provider_id),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        await finish(queued["job_id"])
+        return queued
+
     round_number = 1
-    retried = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=first["job_id"],
-        request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=snapshot["workflow_revision"]),
-        background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry())
-    await finish(retried["job_id"])
+    retried = await retry(first["job_id"], "replacement-byok")
+    if switch_back:
+        kept = task_facade.get_task(task_id=task, owner_id=owner)
+        assert kept["submission_source_summary"]["parsed"] == 2
+        assert kept["submission_source_summary"]["failed"] == 1 + int(nested_archive)
+        round_number = 2
+        retried = await retry(retried["job_id"], "test-provider")
     expected = ["one.txt", "two.txt", "one.txt", "two.txt"] if legacy_partial else ["one.txt", "two.txt", "two.txt"]
+    expected_routes = (
+        [(0, "one.txt", "test-provider"), (0, "two.txt", "test-provider")]
+        + ([(1, "one.txt", "replacement-byok")] if legacy_partial else [])
+        + [(1, "two.txt", "replacement-byok")]
+    )
+    if switch_back:
+        expected += ["three.txt"] * 3
+        expected_routes += [(0, "three.txt", "test-provider"), (1, "three.txt", "replacement-byok"),
+                            (2, "three.txt", "test-provider")]
     assert sorted(reads) == sorted(expected)
     assert sorted(parsed) == sorted(expected)  # Independent sources parse concurrently.
+    assert sorted(routes) == sorted(expected_routes)
     result = task_facade.get_task(task_id=task, owner_id=owner)
-    assert result["submission_source_summary"]["parsed"] == 2
+    assert result["submission_source_summary"]["parsed"] == 2 + int(switch_back)
     assert result["submission_source_summary"]["failed"] == int(nested_archive)
     if nested_archive:
         assert result["status"] == "error"
         blocked = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=retried["job_id"],
             request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=result["workflow_revision"]),
-            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=_Registry())
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
         assert blocked.status_code == 409
         assert "submission_retry_requires_reupload" in blocked.body.decode()
         assert sorted(reads) == sorted(expected)
         assert task_facade.get_task(task_id=task, owner_id=owner)["submission_sources"] == result["submission_sources"]
         return
     assert result["status"] == "submissions_ready"
-    assert len(result["student_data"]) == 2
+    assert len(result["student_data"]) == 2 + int(switch_back)
     assert result["submission_source_summary"]["failed"] == 0
 
 
