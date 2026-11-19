@@ -68,6 +68,7 @@ from backend.domain.grading_review import result_score_review_reason, teacher_re
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
 from backend.services.question_preparation_diagnostics import current_programming_test_issues
+from backend.services.question_matching import QUESTION_IDENTIFIER_CONFLICT_FLAGS, transcribed_answer_match
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
@@ -1173,7 +1174,13 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     }
 
 
-def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_only=False):
+def _answer_match_problems(questions):
+    return {question.q_id: {"number": question.number, "stem": question.stem} for question in questions}
+
+
+def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_only=False, match_problems=None):
+    if match_problems is None and not diagnostics_only:
+        match_problems = _answer_match_problems(questions)
     duplicates = {q_id for q_id, count in Counter(answer.q_id for answer in answers).items() if count > 1}
     return [{
         "answer_id": answer.answer_key or answer.id,
@@ -1181,7 +1188,8 @@ def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_on
         **({"has_content": bool(answer.has_content)} if diagnostics_only else {"content": answer.content}),
         "flag": _public_answer_flags(answer.flag, content=None if diagnostics_only else answer.content,
                                     has_content=bool(answer.has_content) if diagnostics_only else None,
-                                    answer_type=answer.type, review_status=statuses.get(answer.id))
+                                    answer_type=answer.type, review_status=statuses.get(answer.id),
+                                    q_id=answer.q_id, number=answer.number, match_problems=match_problems)
                 + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
         "recognition_confidence": _answer_recognition_confidence(answer.flag),
         "review_status": statuses.get(answer.id, "pending"),
@@ -1194,6 +1202,7 @@ def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_on
 
 def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[str, dict]:
     questions = assignment_repository.list_questions(task_id, teacher_id=owner_id)
+    match_problems = _answer_match_problems(questions)
     presentations = workflow_repository.list_student_presentations(task_id)
     container_source = None
     workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
@@ -1224,7 +1233,8 @@ def _serialize_student_data(task_id: str, owner_id: str, submissions) -> dict[st
         output[display_id] = {
             "stu_id": display_id,
             "stu_name": presentation.display_name if presentation else submission.student_id,
-            "stu_ans": _serialize_review_answers(revision.answers, review_statuses, questions),
+            "stu_ans": _serialize_review_answers(revision.answers, review_statuses, questions,
+                                                   match_problems=match_problems),
             "source_filename": (
                 presentation.source_filename if presentation else revision.file_name
             ),
@@ -3592,7 +3602,8 @@ async def run_task_submission_parsing(
                         from backend.services.review_diagnostics import public_answer_diagnostics
                         diagnostics = public_answer_diagnostics([
                             {**answer, "flag": _public_answer_flags(answer.get("flag"), content=answer.get("content"),
-                                                                  answer_type=answer.get("type"))}
+                                answer_type=answer.get("type"), q_id=answer["q_id"],
+                                number=answer.get("number"), match_problems=problem_data)}
                             if _answer_matching_review_is_advisory(answer.get("flag"), answer.get("content"),
                                                                    answer_type=answer.get("type")) else answer
                             for answer in student.get("stu_ans", [])
@@ -5133,6 +5144,7 @@ def grading_readiness(
         issues.append("workflow_busy")
 
     recognition_review_ids = []
+    match_problems = _answer_match_problems(questions)
     if submissions:
         # Older tasks can have complete normalized questions and answers without
         # the source-evidence rows introduced by the newer ingestion workflow.
@@ -5168,7 +5180,11 @@ def grading_readiness(
                     issues.append("submission_recognition_blocked")
                 for answer in revision.answers:
                     matching_advisory = _answer_matching_review_is_advisory(answer.flag, answer.content, answer_type=answer.type)
-                    if (matching_advisory or BOUNDARY_REVIEW_FLAG in (answer.flag or [])
+                    has_matching_related_advice = matching_advisory and bool(_public_answer_flags(
+                        answer.flag, content=answer.content, answer_type=answer.type,
+                        q_id=answer.q_id, number=answer.number, match_problems=match_problems,
+                    ))
+                    if (has_matching_related_advice or BOUNDARY_REVIEW_FLAG in (answer.flag or [])
                             or confidence_needs_attention(_answer_recognition_confidence(answer.flag))):
                         recognition_review_ids.append(answer.id)
                     if _answer_recognition_failures(answer.flag) and not (
@@ -5259,7 +5275,8 @@ def _metadata_only_recognition_fields(flags, content=None, *, has_content=None):
     return fields
 
 
-def _public_answer_flags(flags, *, content=None, answer_type=None, review_status=None, has_content=None):
+def _public_answer_flags(flags, *, content=None, answer_type=None, review_status=None, has_content=None,
+                         q_id=None, number=None, match_problems=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
@@ -5273,7 +5290,16 @@ def _public_answer_flags(flags, *, content=None, answer_type=None, review_status
             result = [flag for flag in result if flag != "recognition_manual_pending"]
         elif _answer_matching_review_is_advisory(flags, content, answer_type=answer_type, has_content=has_content):
             result = [flag for flag in result if flag != "recognition_manual_pending"]
-            result.append("recognition_matching_advisory")
+            if content and "[unclear]" in content.casefold() and "unclear_text" not in result:
+                result.append("unclear_text")
+            match = transcribed_answer_match(q_id, number, content, match_problems or {}, result)
+            if match == "conflict":
+                if not QUESTION_IDENTIFIER_CONFLICT_FLAGS.intersection(result):
+                    result.append("question_identifier_conflict")
+            elif match == "unverified" and content is not None:
+                # Content-free polling only reports explicit facts. The detailed
+                # review checks the actual transcription before giving this advice.
+                result.append("recognition_matching_advisory")
         else:
             result.append("recognition_matching_review")
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
@@ -6345,13 +6371,21 @@ def update_student_answer(
             workflow_row.workflow_revision += 1
             workflow_row.updated_at = now
             session.flush()
+            match_problems = None
+            if review.review_status == "pending" and _answer_matching_review_is_advisory(
+                target.flag, target.content, answer_type=target.type
+            ):
+                match_problems = _answer_match_problems(session.scalars(select(AssignmentQuestionRecord).where(
+                    assignment_repository.active_question_clause(), AssignmentQuestionRecord.assignment_id == task_id,
+                )))
             return {
                 "status": "ok", "stu_id": display_student_id, "q_id": q_id,
                 "answer": {
                     "answer_id": target.answer_key,
                     "q_id": target.q_id, "number": target.number, "type": normalize_question_type(target.type),
                     "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content,
-                        answer_type=target.type, review_status=review.review_status),
+                        answer_type=target.type, review_status=review.review_status,
+                        q_id=target.q_id, number=target.number, match_problems=match_problems),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
                 },
@@ -6727,6 +6761,7 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
     questions = grading_runs._questions_for_run(
         assignment_id=task_id, frozen_setup=frozen_setup,
     )
+    match_problems = _answer_match_problems(questions)
     math_plans = _math_plans_for_projection(run_id, questions)
 
     presentations = workflow_repository.list_student_presentations(task_id)
@@ -6780,7 +6815,8 @@ def _run_snapshot_payload(*, task_id: str, owner_id: str, run_id: str) -> dict:
                     if presentation else frozen.student_id
                 )
             ),
-            "stu_ans": _serialize_review_answers(revision.answers, answer_statuses),
+            "stu_ans": _serialize_review_answers(revision.answers, answer_statuses,
+                                                   match_problems=match_problems),
             "source_filename": (
                 frozen_presentation.get("source_filename")
                 if frozen_presentation is not None

@@ -306,7 +306,7 @@ async def test_format_repair_rechecks_retained_answer_matching_before_real_save(
     assert calls == [['q1', 'q2'], ['q1']]
     assert answers['q1']['type'] == known['q1']['type']
     assert answers['q1']['content'] == retained_content
-    assert ('recognition_matching_advisory' in answers['q1']['flag']) is (repair_case != 'discarded_conflict')
+    assert ('question_identifier_conflict' in answers['q1']['flag']) is (repair_case != 'discarded_conflict')
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q1']['flag'])
     assert answers['q2']['content'] == 'Verified answer for q2' and not answers['q2']['flag']
     readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)

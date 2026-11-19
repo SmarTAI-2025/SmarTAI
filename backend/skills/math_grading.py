@@ -1890,7 +1890,7 @@ class MathGradingSkill(GradingSkill):
             kind, friendly = classify_skill_error(exc)
             if isinstance(exc, TransientLLMError) and kind == "general":
                 kind = "transient_llm"
-            failed = self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
+            failed = self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind, error=exc)
             if kind == "parse_failed":
                 response_failures[stage] = _response_failure_reason(exc)
                 failed = failed.model_copy(update={"raw_output": _json({

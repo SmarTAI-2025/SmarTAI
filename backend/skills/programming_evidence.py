@@ -26,7 +26,7 @@ _STUDENT_FAILURES = {
 }
 # These fixed explanations may enter a teacher's saved result. Unknown codes
 # and exception strings stay out of public text.
-_UNGRADED_REASONS = {
+UNGRADED_REASONS = {
     "native_standard_unsupported": ("本题要求的语言标准超出 C11 / C++17 支持范围，请按题目要求人工复核。", "The requested standard is outside C11 / C++17. Review the submission using the required standard."),
     "native_header_unavailable": ("缺少程序需要的头文件，请核对提交文件或联系管理员。", "A required header is missing. Check the submitted files or contact your administrator."),
     "native_main_required": ("请教师复核函数片段，或提交含 main 的单文件标准输入程序。", "Review the function fragment or submit one stdin program with main."),
@@ -64,7 +64,7 @@ _UNGRADED_REASONS = {
 def ungraded_message(reason, language):
     if reason == "programming_execution_contract_invalid":
         reason = "contract_invalid"
-    messages = _UNGRADED_REASONS.get(reason, (
+    messages = UNGRADED_REASONS.get(reason, (
         "未能取得有效的批改结果，请查看任务进度或人工复核。",
         "A valid grading result was unavailable. Check task progress or review the item manually.",
     ))

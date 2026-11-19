@@ -13,7 +13,8 @@ for (const width of [1440, 390]) test(`preparation diagnostics and concise rubri
   });
   const issues = [
     { issue_id: "formula", q_id: "q1", field: "stem", code: "recognition_needs_review", status: "open", severity: "warning", details: { reason: "conflicting_printed_formula", confidence_scope: "question" } },
-    { issue_id: "rubric", q_id: "q1", field: "rubric", code: "generation_failed", status: "open", severity: "blocking" },
+    { issue_id: "rubric", q_id: "q1", field: "rubric", code: "generation_failed", status: "open", severity: "blocking",
+      details: { provider_error_code: "provider_timeout" } },
     { issue_id: "reference", q_id: "q1", field: "answer", code: "generation_failed", status: "open", severity: "warning" },
   ];
   const q1 = { q_id: "q1", number: "1.10", type: "concept", stem: "按增长率由小至大排列各函数：$n^2,2^n,n!$。",
@@ -54,6 +55,7 @@ for (const width of [1440, 390]) test(`preparation diagnostics and concise rubri
   await expect(diagnostics.getByText("第 1.10 题")).toBeVisible();
   await expect(diagnostics).toContainText("已保存 2 个题干、1 份标答、1 份评分标准");
   await expect(diagnostics).toContainText("需处理：评分标准未生成或不完整");
+  await expect(diagnostics).toContainText("模型响应超时");
   await expect(diagnostics).not.toContainText("建议复核：");
   await expect(page.getByText("未找齐指定题目", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("preparation-failure.png"), fullPage: true });
@@ -69,6 +71,7 @@ for (const width of [1440, 390]) test(`preparation diagnostics and concise rubri
   const card = page.locator('[data-question-id="q1"]');
   await expect(card).toContainText("3 项待确认");
   await expect(card.locator("[data-review-issue-notes]")).toContainText("评分标准未生成或不完整");
+  await expect(card.locator("[data-review-issue-notes]")).toContainText("模型响应超时");
   await expect(card.locator("[data-review-issue-notes]")).toContainText("本题公式待核对");
   await page.goto("/tasks/diagnostics/questions/q2/content");
   const rubric = page.locator('[data-question-id="q2"]');

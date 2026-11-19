@@ -4,6 +4,14 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from typing import Literal
+
+from backend.services.source_question_units import question_headings
+
+
+QUESTION_IDENTIFIER_CONFLICT_FLAGS = frozenset({
+    "question_identifier_conflict", "question_identifier_mismatch", "identifier_mismatch",
+})
 
 
 def _label(value):
@@ -82,6 +90,37 @@ def resolve_question_match(number, content, problems):
     if len(copied) == 1 and (not number or copied[0] in numbered):
         return copied[0]
     return None
+
+
+def transcribed_answer_match(q_id, number, content, problems, flags) -> Literal["verified", "conflict", "unverified"]:
+    """Use a leading exercise heading as evidence without changing assignment."""
+    if QUESTION_IDENTIFIER_CONFLICT_FLAGS.intersection(flags):
+        return "conflict"
+    if not content or q_id not in problems:
+        return "unverified"
+    numbered = question_number_candidates(number, problems)
+    if numbered and q_id not in numbered:
+        return "conflict"
+    copied = copied_question_candidates(content, problems)
+    if any(candidate != q_id for candidate in copied):
+        return "conflict"
+    first_line = content.lstrip().partition("\n")[0]
+    if len(first_line) > 2048:
+        return "unverified"
+    headings = question_headings(first_line, qualified=True)
+    if headings:
+        observed = headings[0].group("number")
+    else:
+        # OCR also emits qualified labels with a closing parenthesis or
+        # in bold. These are evidence here, never page-splitting boundaries.
+        label = re.match(r"^(?:(\d+(?:\.\d+){2,})[)）]|\*\*(\d+(?:\.\d+){2,})[.、:：)）]?\*\*(?=\s|$))", first_line)
+        if not label:
+            return "unverified"
+        observed = label[1] or label[2]
+    candidates = question_number_candidates(observed, problems)
+    if candidates == [q_id]:
+        return "verified"
+    return "conflict" if q_id not in candidates else "unverified"
 
 
 def mark_question_match_conflicts(student, problems):

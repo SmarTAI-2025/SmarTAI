@@ -106,7 +106,7 @@ export interface PreparationIssue {
   issue_id: string;
   q_id?: string | null;
   field: "stem" | "answer" | "rubric" | "programming_tests" | "source" | "max_score";
-  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review" | "manual_completion_required" | "math_rubric_advisory";
+  code: "low_confidence" | "source_conflict" | "ai_source_conflict" | "ambiguous_question_match" | "unmapped_source_content" | "parse_anomaly" | "generation_failed" | "rubric_step_reference_conflict" | "invalid_test_case" | "reference_solution_failed_case" | "default_max_score_requires_review" | "max_score_not_found" | "recognition_partial" | "recognition_needs_review" | "manual_completion_required" | "math_rubric_advisory" | "material_recognition_review_required" | "material_parser_provider_required";
   severity: "info" | "warning" | "blocking";
   source_ids?: string[];
   details?: Record<string, unknown>;
@@ -274,6 +274,7 @@ export interface ExpertResult {
   raw_output?: string | null;
   duration_ms?: number | null;
   error_kind?: "quota_exhausted" | "transient_llm" | "parse_failed" | "general" | string | null;
+  provider_failure?: import("./progress").ProviderFailure | null;
 }
 
 export interface Correction {

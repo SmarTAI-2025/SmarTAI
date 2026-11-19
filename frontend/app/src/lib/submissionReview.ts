@@ -1,7 +1,7 @@
 import { confidenceNeedsAttention, confidenceValue } from "./confidencePolicy";
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
 import { answerReviewNotes, answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
-import { genericAnswerReviewLabel } from "./reviewLabels";
+import { genericAnswerReviewLabel, isUnclearAnswerFlag } from "./reviewLabels";
 import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
@@ -87,7 +87,10 @@ export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttenti
 export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
   if (!answer || answer.review_status === "confirmed" || answer.review_status === "edited") return false;
   const confidence = confidenceValue(answer.recognition_confidence);
-  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present", "recognition_boundary_uncertain", "recognition_matching_advisory"].includes(flag)))
+  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present",
+    "recognition_boundary_uncertain", "recognition_matching_advisory", "question_identifier_conflict",
+    "question_identifier_mismatch", "identifier_mismatch", "unclear_crossed_out_work", "crossed_out_text_unclear"].includes(flag)
+    || (flag.trim().toLowerCase() !== "recognition_uncertain" && isUnclearAnswerFlag(flag))))
     || confidenceNeedsAttention(confidence);
 
 }

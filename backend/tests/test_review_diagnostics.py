@@ -30,6 +30,25 @@ def test_failed_grading_projection_keeps_pair_identity_and_safe_cause_only():
     assert len(many) == 20 and summary["missing_scores"] == 40
 
 
+def test_expert_failure_keeps_specific_approved_causes_and_provider_evidence():
+    kinds = ["zero_quota", "daily_quota_exhausted", "programming_execution_unavailable",
+             "programming_conflicting_expectations", "shared_pool_weekly_limit_reached", "transient_llm",
+             "PRIVATE_UNKNOWN_CAUSE"]
+    source = SimpleNamespace(student_id="s1", q_id="q1", effective_score=None,
+        requires_review=True, ai_max_score=10, ai_confidence=0,
+        ai_expert_results=[dict(error_kind=kind, provider_failure={
+            "code": "provider_upstream_unavailable" if kind == "transient_llm" else "PRIVATE_INVALID_CODE",
+            "http_status": 503, "raw_response": "PRIVATE_MODEL_RESPONSE",
+        }) for kind in kinds], ai_synthesis_method="all_failed", review_reasons=["llm_failed"],
+        initial_review_reasons=["llm_failed"], teacher_review=None)
+    rows, summary = public_grading_diagnostics([source])
+    experts = rows[0]["expert_results"]
+    assert summary == {"affected": 1, "missing_scores": 1}
+    assert [expert["error_kind"] for expert in experts] == [*kinds[:-1], "general"]
+    assert experts[5]["provider_failure"] == {"code": "provider_upstream_unavailable", "http_status": 503}
+    assert "PRIVATE" not in json.dumps(rows)
+
+
 def test_source_page_failure_does_not_become_confirmable_metadata_only():
     rows = public_answer_diagnostics([dict(q_id="q1", content="present", flag=[
         "recognition_metadata_review", "recognition_failed", "recognition_invalid_fields:type",
