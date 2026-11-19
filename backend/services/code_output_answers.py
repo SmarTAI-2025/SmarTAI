@@ -11,10 +11,14 @@ OUTPUT_LINE = re.compile(r"^[ \t]*(?:output|stdout|输出)[：:][ \t]?(.*)$", re
 FENCED_ANSWER = re.compile(r"\A```[^\r\n]*\r?\n(.*?)^```[ \t]*(?=\r?$)", re.M | re.S)
 _EXPLANATION = re.compile(r"^[ \t]*(?:explanation|reasoning|trace|解释|原因|过程|推理)[：:]", re.I | re.M)
 _PROSE = re.compile(r"(?:[A-Za-z]+\s+[^\n]+[.!?]|[\u3400-\u9fff]{4,}[^\n]*[。！？])$")
-_SELECTION = re.compile(r"^(?:(?:(?:my |final )?answer|options?|(?:i )?(?:choose|select)|答案|选项|(?:我)?选(?:择)?)"
-                        r"(?:\s*[:=]\s*|\s+|(?=[A-Za-z0-9(])))[ \t]*", re.I)
+_SELECTION = re.compile(
+    r"^(?:(?:my |the (?:correct )?|final )?answer|options?|(?:i )?(?:choose|select))"
+    r"(?:\s*(?:[:=]|\bis\b)\s*|\s+)"
+    r"|^(?:(?:正确)?(?:答案|选项)\s*(?:是|为)?|(?:我)?选(?:择)?)\s*[:=]?\s*",
+    re.I,
+)
 _OPTION_NUMBER = rf"(?:(?:minus |negative |负)?{ENGLISH_CARDINAL}|(?:负)?{_NUMBER})"
-_LABEL = re.compile(rf"^\(?([A-Za-z]|{_OPTION_NUMBER})\)?(?![\w'’])", re.I)
+_LABEL = re.compile(rf"^\(?([A-Za-z]|{_OPTION_NUMBER})\)?(?:(?![\w'’])|(?=[和及或]))", re.I)
 _CONNECTOR = re.compile(r"^\s*(?:[,，;；、/&+]|\band\b|和|及)\s*|^\s+", re.I)
 _NUMBER_PREFIX = re.compile(rf"^({_OPTION_NUMBER})(?!\w|\.\d)", re.I)
 
@@ -78,6 +82,9 @@ def _line_choices(line, options):
             if next_key not in options:
                 break
             tail = " " + payload
+        alternative = re.match(r"^\s*(?:\bor\b|或(?:者)?)\s*", tail, re.I)
+        if alternative and (other := _LABEL.match(tail[alternative.end():])) and choice_key(other[1]) in options:
+            raise CodeOutputUnavailable()
         connector = _CONNECTOR.match(tail)
         remaining = tail[connector.end():] if connector else ""
         explicit = bool(connector and connector[0].strip())

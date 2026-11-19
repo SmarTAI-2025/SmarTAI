@@ -492,6 +492,13 @@ def test_annotated_selection_keeps_commas_in_the_selected_literal():
     assert submitted_choices("B. 7, 8", choices) == {"B"}
     assert submitted_choices("B. 7, 8; A", choices) == {"A", "B"}
     assert submitted_choices("B annotation, A", choices) == {"A", "B"}
+    assert submitted_choices("B和A", choices) == {"A", "B"}
+    assert submitted_choices("答案是 b", choices) == {"B"}
+    assert submitted_choices("正确选项为 B", choices) == {"B"}
+    assert submitted_choices("The correct answer is B", choices) == {"B"}
+    from backend.services.code_output_answers import CodeOutputUnavailable
+    with pytest.raises(CodeOutputUnavailable):
+        submitted_choices("B or A", choices)
     assert submitted_choices("A stray note.\n`B`", choices) == {"B"}
 
 
