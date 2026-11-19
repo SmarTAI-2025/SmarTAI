@@ -229,7 +229,10 @@ async def _dispatch(
                 raise RecognitionError("recognition_response_invalid", submission_may_exist=True)
             if candidate.status == "error" and progress:
                 await progress.record_provider_failure(
-                    RecognitionError(candidate.safe_error_code or "recognition_response_invalid"),
+                    RecognitionError(
+                        candidate.safe_error_code or "recognition_response_invalid",
+                        upstream_status_code=candidate.upstream_status_code,
+                    ),
                     pages=failure_pages,
                 )
             if candidate.safe_error_code == "provider_submit_uncertain":
@@ -398,8 +401,12 @@ async def _dispatch_response_only(
     if progress:
         if candidate.status == "error":
             await progress.record_provider_failure(
-                RecognitionError(candidate.safe_error_code or "recognition_response_invalid",
-                                 submission_may_exist=uncertain), pages=failure_pages,
+                RecognitionError(
+                    candidate.safe_error_code or "recognition_response_invalid",
+                    submission_may_exist=uncertain,
+                    upstream_status_code=candidate.upstream_status_code,
+                ),
+                pages=failure_pages,
             )
         await progress.increment_stage_metrics(**{f"recognition_{kind}_calls": 1})
     return RecognitionCallResultV1(candidate=candidate, submission_may_exist=uncertain)

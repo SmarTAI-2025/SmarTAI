@@ -778,6 +778,29 @@ describe("FrontierLiveDemoPage", () => {
     expect(startGrading).not.toHaveBeenCalled();
   });
 
+  it("explains a recorded Gemini 503 in the quick Demo instead of showing an unknown cause", async () => {
+    localStorage.setItem("smartai_locale", "zh-CN");
+    vi.mocked(getTaskState).mockResolvedValue({
+      ...taskState("error"),
+      extract_job_id: "failed",
+      last_failed_job_id: "failed",
+      error: "provider_submit_uncertain",
+      progress: {
+        phase: "error", total_students: 0, total_questions: 4, completed_units: 2, active: [], messages: [],
+        error_detail: "provider_submit_uncertain",
+        provider_failures: [{ code: "provider_upstream_unavailable", http_status: 503 }],
+      },
+    });
+    renderLive("asg_demo123");
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("模型服务暂时不可用");
+    expect(alert).toHaveTextContent("模型服务商暂时无法处理请求（HTTP 503）。请稍后重试。");
+    expect(alert).toHaveTextContent("上次调用是否计费尚无法确认");
+    expect(alert).not.toHaveTextContent("现有记录无法确定具体原因");
+    expect(within(alert).getByRole("button", { name: "重试失败项" })).toBeEnabled();
+    expect(retryQuestionPreparation).not.toHaveBeenCalled();
+  });
+
   it.each(["questions", "submissions"] as const)("retries uncertain %s in the quick Demo without an extra confirmation", async stage => {
     const submissions = stage === "submissions";
     const retry = submissions ? retrySubmissionRecognition : retryQuestionPreparation;
