@@ -70,6 +70,27 @@ def _seed_user(role: str) -> str:
     return uid
 
 
+@pytest.mark.parametrize("first_kind,second_kind", [
+    ("question_preparation", "grading"),
+    ("grading", "submission_recognition"),
+])
+def test_postgres_shared_slot_is_claimed_in_queue_order(pg_database, monkeypatch, first_kind, second_kind):
+    from backend.config import settings
+    from backend.tests.test_execution_admission_postgres import race
+    from backend.tests.test_task_execution_control import claim_workload, seed_queued_workload
+
+    monkeypatch.setattr(settings, "workload_max_in_flight", 2)
+    holder, _, holder_id = seed_queued_workload("problem_extraction")
+    claim_workload("problem_extraction", holder, holder_id)
+    first_owner, _, first_id = seed_queued_workload(first_kind)
+    second_owner, _, second_id = seed_queued_workload(second_kind)
+
+    assert race([
+        lambda: claim_workload(second_kind, second_owner, second_id),
+        lambda: claim_workload(first_kind, first_owner, first_id),
+    ]) == ["server_capacity_full", "running"]
+
+
 def test_postgres_progress_omits_trace_json_and_preserves_checkpoints(pg_database, monkeypatch):
     from backend.services import grading_runs
     from backend.tests.test_task_grading_retry import Registry
