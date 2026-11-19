@@ -49,6 +49,7 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
     return locale === "zh-CN" ? `待核对：${names.join("、") || "部分识别信息"}`
       : `Review needed: ${names.join(", ") || "some recognition details"}`;
   }
+  if (flag === "recognition_matching_advisory") flag = "recognition_matching_review";
   const labels: Record<string, [string, string]> = {
     answer_assignment_conflict: ["同一学生的该题有多份作答，请更正题号。", "This student has multiple answers assigned to this question. Correct the assignments."],
     recognition_matching_review: ["请对照学生作答原文件，确认该题对应的题号。", "Check the student's original submission and confirm the corresponding question number."],

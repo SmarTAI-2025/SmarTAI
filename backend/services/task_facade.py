@@ -1181,7 +1181,7 @@ def _serialize_review_answers(answers, statuses, questions=(), *, diagnostics_on
         **({"has_content": bool(answer.has_content)} if diagnostics_only else {"content": answer.content}),
         "flag": _public_answer_flags(answer.flag, content=None if diagnostics_only else answer.content,
                                     has_content=bool(answer.has_content) if diagnostics_only else None,
-                                    review_status=statuses.get(answer.id))
+                                    answer_type=answer.type, review_status=statuses.get(answer.id))
                 + (["answer_assignment_conflict"] if answer.q_id in duplicates else []),
         "recognition_confidence": _answer_recognition_confidence(answer.flag),
         "review_status": statuses.get(answer.id, "pending"),
@@ -3590,7 +3590,13 @@ async def run_task_submission_parsing(
                     completed_sources.add(result.source_id)
                     if student is not None:
                         from backend.services.review_diagnostics import public_answer_diagnostics
-                        diagnostics = public_answer_diagnostics(student.get("stu_ans", []), limit=None)
+                        diagnostics = public_answer_diagnostics([
+                            {**answer, "flag": _public_answer_flags(answer.get("flag"), content=answer.get("content"),
+                                                                  answer_type=answer.get("type"))}
+                            if _answer_matching_review_is_advisory(answer.get("flag"), answer.get("content"),
+                                                                   answer_type=answer.get("type")) else answer
+                            for answer in student.get("stu_ans", [])
+                        ], limit=None)
                         await save_source_state(result.source_id, result.stored_file_id,
                             answer_diagnostics=diagnostics[:20], answer_diagnostic_count=len(diagnostics),
                             answer_required_diagnostic_count=len(public_answer_diagnostics(diagnostics, limit=None, required_only=True)))
@@ -5160,13 +5166,14 @@ def grading_readiness(
                 answer_reviews = workflow_repository.answer_review_statuses([answer.id for answer in revision.answers])
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
-                recognition_review_ids.extend(answer.id for answer in revision.answers
-                                              if BOUNDARY_REVIEW_FLAG in (answer.flag or [])
-                                              or confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
+                    matching_advisory = _answer_matching_review_is_advisory(answer.flag, answer.content, answer_type=answer.type)
+                    if (matching_advisory or BOUNDARY_REVIEW_FLAG in (answer.flag or [])
+                            or confidence_needs_attention(_answer_recognition_confidence(answer.flag))):
+                        recognition_review_ids.append(answer.id)
                     if _answer_recognition_failures(answer.flag) and not (
-                        answer_reviews.get(answer.id) == "confirmed"
-                        and _answer_matching_confirmation_allowed(answer.flag, answer.content)
+                        matching_advisory or (answer_reviews.get(answer.id) == "confirmed"
+                            and _answer_matching_confirmation_allowed(answer.flag, answer.content))
                     ):
                         issues.append("submission_recognition_blocked")
 
@@ -5228,6 +5235,14 @@ def _answer_matching_confirmation_allowed(flags, content=None, *, has_content=No
                                         "recognition_invalid_fields:")) for flag in flags))
 
 
+def _answer_matching_review_is_advisory(flags, content=None, *, answer_type=None, has_content=None):
+    # Keep the programming gate for original source bindings, including Python
+    # modules uploaded as text that have no explicit source-language flag.
+    return (not is_programming_question_type(answer_type)
+            and SOURCE_LANGUAGE_FLAGS.isdisjoint(flags or ())
+            and _answer_matching_confirmation_allowed(flags, content, has_content=has_content))
+
+
 def _metadata_only_recognition_fields(flags, content=None, *, has_content=None):
     """A teacher may confirm verified text when only bounded metadata failed."""
     flags = list(flags or [])
@@ -5244,18 +5259,21 @@ def _metadata_only_recognition_fields(flags, content=None, *, has_content=None):
     return fields
 
 
-def _public_answer_flags(flags, *, content=None, review_status=None, has_content=None):
+def _public_answer_flags(flags, *, content=None, answer_type=None, review_status=None, has_content=None):
     # Existing clients understand recognition_failed. Preserve the precise
     # source evidence too; projecting it must not mutate the stored answer.
     result = [flag for flag in flags or []
               if flag not in SOURCE_LANGUAGE_FLAGS and not flag.startswith(("recognition_confidence:", "answer_recognition_confidence:"))
-              and flag not in {"recognition_matching_review", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
+              and flag not in {"recognition_matching_review", "recognition_matching_advisory", "answer_assignment_conflict", "recognition_metadata_review", "recognition_low_confidence", "recognition_very_low_confidence",
                                "low_confidence", "very_low_confidence", "recognition_needs_review"}]
     if _metadata_only_recognition_fields(flags, content, has_content=has_content):
         result.append("recognition_metadata_review")
     if _answer_matching_confirmation_allowed(flags, content, has_content=has_content):
         if review_status == "confirmed":
             result = [flag for flag in result if flag != "recognition_manual_pending"]
+        elif _answer_matching_review_is_advisory(flags, content, answer_type=answer_type, has_content=has_content):
+            result = [flag for flag in result if flag != "recognition_manual_pending"]
+            result.append("recognition_matching_advisory")
         else:
             result.append("recognition_matching_review")
     if _answer_recognition_failures(result) and "recognition_failed" not in result:
@@ -6332,7 +6350,8 @@ def update_student_answer(
                 "answer": {
                     "answer_id": target.answer_key,
                     "q_id": target.q_id, "number": target.number, "type": normalize_question_type(target.type),
-                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content, review_status=review.review_status),
+                    "content": target.content, "flag": _public_answer_flags(target.flag, content=target.content,
+                        answer_type=target.type, review_status=review.review_status),
                     "recognition_confidence": _answer_recognition_confidence(target.flag),
                     "review_status": review.review_status,
                 },

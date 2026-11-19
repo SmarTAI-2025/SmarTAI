@@ -396,9 +396,11 @@ async def test_model_review_survives_unit_aggregation_and_explicit_format_retry(
     assert calls.count(['q1']) == 1 and calls.count(['q2']) == 4
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
     assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
-    assert 'recognition_manual_pending' in answers['q2']['flag']
+    assert 'recognition_matching_advisory' in answers['q2']['flag']
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
-    assert 'submission_recognition_blocked' in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert 'submission_recognition_blocked' not in readiness['blocking_issues']
+    assert 'submission_recognition_needs_review' in readiness['warnings']
 
 
 @pytest.mark.asyncio
@@ -488,8 +490,9 @@ async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatc
     assert answers['q1']['content'] == 'Preserved work for q1' and not answers['q1']['flag']
     assert answers['q2']['content'] == 'Preserved work for q2' and answers['q2']['type'] == '概念题'
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q2']['flag'])
-    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
     expected_review = model_review is True
-    assert ('recognition_manual_pending' in answers['q2']['flag'],
-            'submission_recognition_blocked' in blocked) == (expected_review, expected_review)
+    assert ('recognition_matching_advisory' in answers['q2']['flag']) is expected_review
+    assert 'submission_recognition_blocked' not in readiness['blocking_issues']
+    assert ('submission_recognition_needs_review' in readiness['warnings']) is expected_review
     assert restored['recognition']['model_review_question_ids'] == (['q2'] if expected_review else [])

@@ -87,7 +87,7 @@ export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttenti
 export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
   if (!answer || answer.review_status === "confirmed" || answer.review_status === "edited") return false;
   const confidence = confidenceValue(answer.recognition_confidence);
-  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present", "recognition_boundary_uncertain"].includes(flag)))
+  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present", "recognition_boundary_uncertain", "recognition_matching_advisory"].includes(flag)))
     || confidenceNeedsAttention(confidence);
 
 }

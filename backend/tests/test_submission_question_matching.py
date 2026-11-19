@@ -306,11 +306,12 @@ async def test_format_repair_rechecks_retained_answer_matching_before_real_save(
     assert calls == [['q1', 'q2'], ['q1']]
     assert answers['q1']['type'] == known['q1']['type']
     assert answers['q1']['content'] == retained_content
-    assert ('recognition_manual_pending' in answers['q1']['flag']) is (repair_case != 'discarded_conflict')
+    assert ('recognition_matching_advisory' in answers['q1']['flag']) is (repair_case != 'discarded_conflict')
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q1']['flag'])
     assert answers['q2']['content'] == 'Verified answer for q2' and not answers['q2']['flag']
-    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
-    assert ('submission_recognition_blocked' in blocked) is (repair_case != 'discarded_conflict')
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert 'submission_recognition_blocked' not in readiness['blocking_issues']
+    assert ('submission_recognition_needs_review' in readiness['warnings']) is (repair_case != 'discarded_conflict')
 
 
 def test_page_boundaries_use_unique_identity_and_keep_original_alias_text():
@@ -381,9 +382,10 @@ async def test_model_matching_uncertainty_survives_type_repair_and_saved_grading
     assert answers['q1']['content'] == 'The student work has no distinguishing copied question.'
     assert not any(flag.startswith('recognition_invalid_fields:') for flag in answers['q1']['flag'])
     review = first_review or repair_review
-    assert ('recognition_manual_pending' in answers['q1']['flag']) is review
-    blocked = task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
-    assert ('submission_recognition_blocked' in blocked) is review
+    assert ('recognition_matching_advisory' in answers['q1']['flag']) is review
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert 'submission_recognition_blocked' not in readiness['blocking_issues']
+    assert ('submission_recognition_needs_review' in readiness['warnings']) is review
     assert answers['q2']['content'] == 'Verified sibling.' and not answers['q2']['flag']
     if review:
         # The real model/format-repair/save path must have an unchanged-text

@@ -4,7 +4,7 @@ import re
 from backend.domain.confidence_policy import confidence_needs_attention
 
 _ANSWER_FLAGS = frozenset({
-    "answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed",
+    "answer_assignment_conflict", "recognition_matching_review", "recognition_matching_advisory", "recognition_failed", "parse_failed",
     "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete",
     "recognition_partial", "recognition_needs_review", "recognition_metadata_review", "recognition_boundary_uncertain", "recognition_boundary_previous_page_failed",
     "recognition_boundary_next_page_failed",

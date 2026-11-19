@@ -71,3 +71,11 @@ def test_current_confirmed_advisories_disappear_but_required_evidence_is_not_sup
     unresolved = public_answer_diagnostics([dict(q_id="q2", content="", flag=["no_matching_answer"],
         review_status="confirmed")], required_only=True)
     assert unresolved[0]["q_id"] == "q2"
+
+
+def test_matching_advice_is_visible_but_not_counted_as_required():
+    flags = ["recognition_matching_advisory"]
+    matching = dict(q_id="q1", content="1.1.20. Student work", flag=flags)
+    duplicate = dict(q_id="q2", content="Another answer", flag=[*flags, "answer_assignment_conflict"])
+    assert [row["q_id"] for row in public_answer_diagnostics([matching, duplicate])] == ["q2", "q1"]
+    assert [row["q_id"] for row in public_answer_diagnostics([matching, duplicate], required_only=True)] == ["q2"]

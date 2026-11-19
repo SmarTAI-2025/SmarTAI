@@ -13,7 +13,7 @@ async function setup(page: Page, matching = false) {
   }]));
   const answers = [1, 2].map(n => ({ answer_id: `a${n}`, q_id: `q${n}`, number: problems[`q${n}`].number,
     type: problems[`q${n}`].type, content: `Original answer ${n}`, review_status: "pending", flag: matching && n === 1
-      ? ["recognition_manual_pending", "recognition_matching_review", "recognition_failed"] : [] as string[] }));
+      ? ["recognition_matching_advisory"] : [] as string[] }));
   const task = { task_id: "assignment-review", name: "Assignment review", status: "submissions_ready", workflow_revision: 1,
     problem_data: problems, student_data: { S1: { stu_id: "S1", stu_name: "Synthetic student", identity_status: "matched", stu_ans: answers } },
     problem_count: 2, student_count: 1, created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
@@ -36,7 +36,7 @@ async function setup(page: Page, matching = false) {
       if (body.content !== undefined) answer.content = body.content;
       if (body.review_status) {
         answer.review_status = answers.filter(a => a.q_id === answer.q_id).length > 1 ? "pending" : body.review_status;
-        answer.flag = answer.flag.filter(f => !["recognition_manual_pending", "recognition_matching_review", "recognition_failed"].includes(f));
+        answer.flag = answer.flag.filter(f => f !== "recognition_matching_advisory");
       }
       for (const a of answers) {
         a.flag = a.flag.filter(f => f !== "answer_assignment_conflict");
@@ -141,6 +141,20 @@ for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844
     });
   });
 }
+
+test("allows progression with an unconfirmed matching suggestion", async ({ page }, testInfo) => {
+  const { errors, mutations } = await setup(page, true);
+  await page.goto("/tasks/assignment-review/submissions");
+  const queue = page.getByRole("region", { name: "待复核队列" });
+  await expect(queue.getByRole("tab", { name: "需要处理 (0)" })).toBeVisible();
+  await queue.getByRole("tab", { name: "建议处理 (1)" }).click();
+  await expect(queue.getByText("请对照学生作答原文件，确认该题对应的题号。", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("matching-suggestion.png") });
+  await page.getByRole("button", { name: "进入批改设置", exact: true }).click();
+  await expect(page).toHaveURL(/grading-setup$/);
+  expect(mutations).toEqual([]);
+  expect(errors).toEqual([]);
+});
 
 for (const edit of [false, true]) test(`confirm matching doubt with unchanged text: editor=${edit}`, async ({ page }) => {
   const { errors, mutations } = await setup(page, true);
