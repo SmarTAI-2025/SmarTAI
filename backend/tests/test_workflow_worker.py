@@ -85,9 +85,9 @@ async def _noop_handler(ctx):
     return None
 
 
-async def _drain(worker: WorkflowWorker) -> None:
+async def _drain(worker: WorkflowWorker, *, remaining: int = 0) -> None:
     for _ in range(500):
-        if worker.in_flight_count == 0:
+        if worker.in_flight_count == remaining:
             return
         await asyncio.sleep(0.01)
     raise AssertionError("workflow worker did not drain")
@@ -178,6 +178,103 @@ async def test_live_leased_row_is_not_listed_or_dispatched():
     persisted = workflow_repository.get_operation(operation.id, owner_id=owner_id)
     assert persisted.lease_owner == "worker-b"
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_expired_demo_work_does_not_block_last_worker_slot(tmp_path, monkeypatch):
+    from backend.config import settings
+    from backend.services import account_closure, frontier_demo, task_deletion, task_facade
+    from backend.storage.local import LocalStorage
+
+    monkeypatch.setattr(settings, "workload_max_in_flight", 2)
+    monkeypatch.setattr(settings, "frontier_demo_session_cooldown_seconds", 0)
+    storage = LocalStorage(tmp_path / "demo-cleanup")
+    monkeypatch.setattr(task_deletion, "get_storage", lambda: storage)
+
+    def queue_demo_preparation():
+        guest = frontier_demo.issue_user()
+        task_id = task_facade.create_task(
+            owner_id=guest.id, name="Demo", semester_id=None,
+            course_id=None, idempotency_key="prepare-demo",
+        )["task_id"]
+        operation, _ = workflow_repository.create_operation(
+            assignment_id=task_id, owner_id=guest.id,
+            operation_type="question_preparation", input_hash="demo-preparation",
+        )
+        workflow_repository.update_workflow(
+            task_id, owner_id=guest.id,
+            active_job_id=operation.id, active_operation=operation.operation_type,
+        )
+        return guest.id, task_id, operation.id
+
+    old_owner, old_task, old_job = queue_demo_preparation()
+    workflow_repository.claim_operation(
+        old_job, owner_id=old_owner, worker_id="previous-worker", lease_seconds=60,
+    )
+    holder_owner, holder_task, holder_job = _seed_operation("submission_recognition")
+    workflow_repository.update_workflow(
+        holder_task, owner_id=holder_owner,
+        active_job_id=holder_job.id, active_operation=holder_job.operation_type,
+    )
+    keep_running = asyncio.Event()
+    release_preparation = asyncio.Event()
+
+    async def hold_slot(_ctx):
+        await keep_running.wait()
+
+    async def finish_preparation(ctx):
+        await release_preparation.wait()
+        await ctx.complete(status="done")
+
+    worker = WorkflowWorker(handlers={
+        "submission_recognition": hold_slot,
+        "question_preparation": finish_preparation,
+        "task_delete": task_deletion.run_task_deletion,
+    })
+    try:
+        assert await worker.poll_once() == 1
+        assert workflow_repository.get_operation(holder_job.id, owner_id=holder_owner).status == "running"
+
+        assert frontier_demo.queue_cleanup(owner_id=old_owner) == 1
+        assert account_closure.process_one_closure(frontier_only=True, raise_errors=True)
+        assert await worker.poll_once() == 1
+        await _drain(worker, remaining=1)
+
+        def make_cleanup_due(expected_code):
+            with session_scope() as session:
+                operation = workflow_repository.WorkflowOperationRecord
+                result = session.execute(update(operation).where(
+                    operation.assignment_id == old_task,
+                    operation.operation_type == "task_delete",
+                    operation.status == "pending",
+                    operation.error_code == expected_code,
+                ).values(expires_at=0))
+                assert result.rowcount == 1
+
+        _expire_lease(old_job)
+        make_cleanup_due("task_delete_waiting_for_producers")
+        new_owner, _, new_job = queue_demo_preparation()
+
+        assert await worker.poll_once() == 1
+        await _drain(worker, remaining=1)
+        stale = workflow_repository.get_operation(old_job, owner_id=old_owner)
+        assert stale.status == "error"
+        assert stale.error_code == "task_deleted"
+
+        assert await worker.poll_once() == 1
+        assert worker.in_flight_count == 2
+        assert workflow_repository.get_operation(holder_job.id, owner_id=holder_owner).status == "running"
+        assert workflow_repository.get_operation(new_job, owner_id=new_owner).status == "running"
+
+        release_preparation.set()
+        await _drain(worker, remaining=1)
+        make_cleanup_due("task_delete_verifying_storage_empty")
+        assert await worker.poll_once() == 1
+        await _drain(worker, remaining=1)
+        with session_scope() as session:
+            assert session.get(AssignmentRecord, old_task) is None
+    finally:
+        await worker.shutdown()
 
 
 @pytest.mark.asyncio
