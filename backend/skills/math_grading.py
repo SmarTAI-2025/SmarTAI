@@ -893,7 +893,8 @@ def _assessment_validator(plan, answer, problem, *, original=None, diagnostic=No
                 diagnostic.setdefault("validation_failures", []).append(str(exc))
             if not preserved:
                 preserved.update(current)
-            error = StructuredOutputInvalidError("Invalid mathematical evidence or ledger.")
+            error = StructuredOutputInvalidError("Invalid mathematical evidence or ledger.",
+                                                 failure_reason="invalid_scoring_evidence")
             hint = {
                 "omission_requires_original_obligation": "For kind=omission, quote must be empty, "
                     "source_quote must locate the required obligation, and verdict must be refuted or unknown, "
@@ -922,6 +923,10 @@ def _critical_failure(error: BaseException) -> bool:
     from backend.services.grading_checkpoints import CheckpointWriteError
     from backend.services.math_grading_context import _has_critical_plan_failure
     return _has_critical_plan_failure(error, (SQLAlchemyError, DomainError, CheckpointWriteError))
+
+
+def _response_failure_reason(error: Exception) -> str:
+    return error.failure_reason if isinstance(error, StructuredOutputInvalidError) else "invalid_response"
 
 
 def _schedule_checks(draft, problem, answer, plan):
@@ -1683,6 +1688,8 @@ class MathGradingSkill(GradingSkill):
             unit = await report_math_progress(cm.__aenter__)
         chunks, evidence, draft, duration = [], [], None, 0.0
         diagnostic = {}
+        response_failures = {}
+        stage = "assessment"
         try:
             if not (answer.content or "").strip():
                 if any(flag in {"recognition_partial", "parse_failed", "recognition_failed", "recognition_manual_pending", "no_matching_answer"}
@@ -1777,6 +1784,9 @@ class MathGradingSkill(GradingSkill):
                     "zero_quota", "daily_quota_exhausted", "quota_exhausted", "transient_llm"
                 }:
                     raise
+                if kind == "parse_failed":
+                    response_failures[stage] = _response_failure_reason(exc)
+                stage = "recovery"
                 return await self._direct(problem, answer, plan, prompt, unit, chunks,
                     started=started, repair_context=getattr(exc, "repair_context", None),
                     fallback={"reason": "invalid_detailed_assessment", "error_type": type(exc).__name__,
@@ -1876,7 +1886,13 @@ class MathGradingSkill(GradingSkill):
             kind, friendly = classify_skill_error(exc)
             if isinstance(exc, TransientLLMError) and kind == "general":
                 kind = "transient_llm"
-            return self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
+            failed = self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind)
+            if kind == "parse_failed":
+                response_failures[stage] = _response_failure_reason(exc)
+                failed = failed.model_copy(update={"raw_output": _json({
+                    "version": TRACE_VERSION, "plan_id": plan.plan_id, "response_failure": response_failures,
+                })})
+            return failed
         finally:
             if cm:
                 await report_math_progress(cm.__aexit__, None, None, None)
