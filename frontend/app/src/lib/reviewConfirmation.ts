@@ -1,6 +1,7 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
-import { formatSubmissionFlag, hasQuestionType, questionIssueCodeLabel } from "./reviewLabels";
+import { formatSubmissionFlag, genericAnswerReviewLabel, hasQuestionType, incompleteSubmissionLabel, isUnclearAnswerFlag, questionIssueCodeLabel, unclearAnswerLabel } from "./reviewLabels";
+import { isProgrammingProblem } from "./questionPreparation";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -53,6 +54,9 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+  if (issue.details?.reason === "required_programming_tests_missing") return locale === "zh-CN"
+    ? "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。"
+    : "The rubric awards test points, but the test cases are missing. Retry or complete them before grading.";
   if (issue.details?.reason === "alternative_cap_review") {
     const caps = issue.details.alternative_caps;
     const values = Array.isArray(caps) ? caps.filter((cap): cap is { label: string; maximum: number; total: number } =>
@@ -77,10 +81,15 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.details?.rubric_review_draft) return locale === "zh-CN"
     ? "已保留已识别评分项，请核对分值和适用条件后保存。"
     : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.";
+  if (issue.details?.reason === "programming_test_award_unset") return locale === "zh-CN"
+    ? "请在评分标准中保存测试配分。填 0 表示测试不单独计分。"
+    : "Save the test points in the rubric. Enter 0 for no separate test award.";
   if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
     ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
   if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"
     ? "缺少标答（可选），可按需补充。" : "The reference answer is optional; add one if helpful.";
+  if (issue.details?.review_display_reason === "missing_tests") return locale === "zh-CN"
+    ? "测试样例尚未提供，请核对或补充。" : "Test cases have not been provided. Review or add them.";
   if (issue.code === "generation_failed") {
     const labels: Record<string, [string, string]> = {
       stem: ["题干缺失，请对照原件补齐。", "Question text is missing. Complete it against the source."],
@@ -98,7 +107,7 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
       return label;
     }
   }
-  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return issue.details.message;
+  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return locale === "zh-CN" ? "请核对教师评分规则的解读。" : "Check how the teacher’s scoring rule was interpreted.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
@@ -202,11 +211,17 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   if (!problem.criterion?.trim()) add("rubric", "manual_completion_required", "missing_rubric");
   if (problem.rubric_point_summary?.is_valid === false) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
   if (!confirmed && !problem.reference_answer?.trim()) add("answer", "generation_failed", "missing_answer", "warning");
+  if (!confirmed && isProgrammingProblem(problem) && !problem.test_cases?.length) {
+    if (!issues.some(issue => issue.field === "programming_tests")) {
+      add("programming_tests", "generation_failed", "missing_tests", "warning");
+    }
+  }
   return issues.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
 }
 
 /** Detail copy derives missing fields from the current row, not stale failure markers. */
-export function questionReviewNotes(problem: ProblemInfo, locale: string, fallbackLabel: (code: string) => string, splitMissingFields = false) {
+export function questionReviewNotes(problem: ProblemInfo, locale: string, fallbackLabel: (code: string) => string,
+  { splitMissingFields = false, view = "overview" }: { splitMissingFields?: boolean; view?: "overview" | "detail" } = {}) {
   const issues = questionReviewIssues(problem);
   const missing = [
     [!problem.number?.trim(), "题号", "question number"],
@@ -224,13 +239,28 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
       || (issue.field === "answer" && answerMissing))))
     .filter(issue => !((names.length || answerMissing) && (issue.code === "manual_completion_required"
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
-    .map(issue => ({ label: recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
-      severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const }));
-  for (const fields of splitMissingFields ? missingNames.map(name => [name]) : missingNames.length ? [missingNames] : []) {
-    notes.push({ label: locale === "zh-CN"
-      ? `请补齐缺失的${fields.join("、")}。`
-      : `Complete the missing ${fields.join(", ")}.`,
-      severity: "blocking" });
+    .map(issue => {
+      const rubricMessage = view === "detail" && issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation"
+        ? issue.details.message : undefined;
+      return {
+        label: typeof rubricMessage === "string" && rubricMessage.trim()
+          ? rubricMessage : recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
+        severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const,
+      };
+    });
+  if (splitMissingFields) {
+    const labels = locale === "zh-CN" ? {
+      "题号": "请补齐题号。", "题型": "请选择题型。",
+      "题干": "题干缺失，请对照原件补齐。", "评分标准": "评分标准缺失或不完整，请补齐。",
+    } : {
+      "question number": "Enter the question number.", "question type": "Select the question type.",
+      "question text": "Question text is missing. Complete it against the source.",
+      rubric: "The rubric is missing or incomplete. Complete it.",
+    };
+    for (const name of missingNames) notes.push({ label: labels[name]!, severity: "blocking" });
+  } else if (missingNames.length) {
+    notes.push({ label: locale === "zh-CN" ? `请补齐缺失的${missingNames.join("、")}。`
+      : `Complete the missing ${missingNames.join(", ")}.`, severity: "blocking" });
   }
   if (answerMissing && problem.review_status !== "confirmed" && !generatedFields.has("answer")) {
     notes.push({ label: locale === "zh-CN"
@@ -246,7 +276,7 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
 export function questionReviewBlockers(problems: ProblemInfo[], taskId: string, locale: string): ReviewBlocker[] {
   if (!problems.length) return [{ label: locale === "zh-CN" ? "请先建立题目行并填写内容" : "Create question rows and enter their content first", href: `/tasks/${taskId}/questions#question-count` }];
   return problems.flatMap(problem => questionReviewNotes(problem, locale,
-    code => questionIssueCodeLabel(code, locale), true)
+    code => questionIssueCodeLabel(code, locale), { splitMissingFields: true })
     .filter(note => note.severity === "blocking").map(note => ({
       label: `${locale === "zh-CN" ? `第 ${problem.number || problem.q_id} 题` : `Question ${problem.number || problem.q_id}`} · ${note.label}`,
       href: `/tasks/${taskId}/questions/${encodeURIComponent(problem.q_id)}/content#question-${encodeURIComponent(problem.q_id)}`,
@@ -331,7 +361,7 @@ function collectSubmissionBlockers(task: Task | undefined, locale: string, stude
   return [...sourceIssues, ...identities, ...answers];
 }
 
-export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false): Array<{ label: string; severity: "blocking" | "advisory" }> {
+export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale: string, splitInvalidFields = false, compact = false): Array<{ label: string; severity: "blocking" | "advisory" }> {
   const saved = answer?.review_status === "confirmed" || answer?.review_status === "edited";
   if (!answer || (saved && !answerReviewNextBlocked(answer))) return [];
   const confidence = confidenceValue(answer.recognition_confidence);
@@ -347,11 +377,32 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   const required = new Set(["answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed", "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete"]);
   const specificFailure = flags.some(flag => flag.startsWith("recognition_invalid_fields:")
     || ["no_matching_answer", "parse_failed", "recognition_matching_review", "answer_assignment_conflict", "recognition_paused", "recognition_incomplete"].includes(flag));
-  const visibleFlags = flags.filter(flag => !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
+  const blankRecognitionFailure = !answer.content?.trim() && !specificFailure
+    && flags.some(flag => ["recognition_failed", "recognition_manual_pending"].includes(flag));
+  const pageFailure = answerReviewNextBlocked(answer) && (blankRecognitionFailure || flags.includes("recognition_incomplete"));
+  const visibleFlags = flags.filter(flag => !(pageFailure && ["recognition_failed", "recognition_manual_pending", "recognition_incomplete"].includes(flag))
+    && !(flag === "recognition_uncertain" && flags.includes("recognition_boundary_uncertain"))
+    && !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
     && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
     && !(flag === "parse_failed" && flags.some(item => item.startsWith("recognition_invalid_fields:"))));
-  return [
-    ...(!saved && confidenceNeedsAttention(confidence) ? [{ label: locale === "zh-CN" ? `置信度 ${confidence} 较低，建议核对确认。` : `Low confidence (${confidence}); review suggested.`, severity: "advisory" as const }] : []),
-    ...[...new Set(visibleFlags)].map(flag => ({ label: formatSubmissionFlag(flag, locale), severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const })),
-  ].filter(note => !saved || note.severity === "blocking");
+  const lowConfidence = !saved && confidence !== null && confidenceNeedsAttention(confidence);
+  const unclear = visibleFlags.some(isUnclearAnswerFlag);
+  const notes = visibleFlags.filter(flag => !isUnclearAnswerFlag(flag)).map(flag => ({
+    label: flag === "recognition_incomplete" ? incompleteSubmissionLabel(answer, locale, compact) : formatSubmissionFlag(flag, locale),
+    severity: required.has(flag) || flag.startsWith("recognition_invalid_fields:") ? "blocking" as const : "advisory" as const,
+  }));
+  if (pageFailure) notes.unshift({ severity: "blocking", label: incompleteSubmissionLabel(answer, locale, compact) });
+  if (unclear || lowConfidence) {
+    notes.unshift({ severity: "advisory", label: unclear ? unclearAnswerLabel(locale, lowConfidence ? confidence : undefined)
+      : locale === "zh-CN" ? `作答识别置信度较低（${confidence}），建议对照原文件核对。`
+        : `Low confidence in the answer transcription (${confidence}). Check it against the original.` });
+  }
+  const generic = genericAnswerReviewLabel(locale);
+  const unique = new Map<string, typeof notes[number]>();
+  for (const note of notes) {
+    if (saved && note.severity !== "blocking") continue;
+    if (note.label === generic && notes.some(other => other.severity === note.severity && other.label !== generic)) continue;
+    unique.set(`${note.severity}:${note.label}`, note);
+  }
+  return [...unique.values()];
 }

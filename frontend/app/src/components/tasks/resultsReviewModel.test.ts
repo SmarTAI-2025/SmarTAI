@@ -97,8 +97,8 @@ describe("grading review attention", () => {
     const expert = { provider: "high", score: 8, max_score: 10, confidence: .9, comment: "", steps: [] };
     const value = correction({ confidence: .95, expert_results: [expert, { ...expert, provider: "low", confidence: .45 }] });
     expect(correctionReviewAttention(value)).toBe("advisory");
-    expect(correctionReviewNotes(value, "en-US")).toEqual([{ severity: "advisory", label: "low: low confidence (0.45); review suggested." }]);
-    expect(correctionReviewNotes({ ...value, expert_results: [{ ...expert, confidence: .45 }] }, "en-US")[0].label).toBe("Low confidence (0.45); review suggested.");
+    expect(correctionReviewNotes(value, "en-US")).toEqual([{ severity: "advisory", label: "low: low confidence (0.45). Review suggested." }]);
+    expect(correctionReviewNotes({ ...value, expert_results: [{ ...expert, confidence: .45 }] }, "en-US")[0].label).toBe("Low confidence (0.45). Review suggested.");
   });
 
   it("flags unknown confidence separately from real zero and permits teacher confirmation", () => {
@@ -242,7 +242,7 @@ describe("specific math review reasons", () => {
   it("keeps low confidence separate without changing residual-dispute queue priority", () => {
     const value = correction({ confidence: .4, review_reasons: ["math_expert_disagreement"] });
     expect(correctionReviewNotes(value, "zh-CN").map(note => note.label)).toEqual([
-      "置信度 0.4 较低，建议核对确认。", "专家分歧，建议复核。",
+      "置信度较低（0.4），建议核对。", "专家分歧，建议复核。",
     ]);
     const model = buildResultsModel(undefined, { task_id: "T1", status: "graded", timestamp: 0,
       results: [{ student_id: "s1", corrections: [{ ...value, confidence: .95 }] }] } as Parameters<typeof buildResultsModel>[1]);

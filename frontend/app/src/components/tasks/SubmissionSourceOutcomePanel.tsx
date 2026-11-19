@@ -8,9 +8,11 @@ import {
 } from "lucide-react";
 import { useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
-import type { Locale } from "@/i18n/messages";
+import { messages, type Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getSubmissionPageErrorLabel, getSubmissionSourceReasonCopy } from "@/lib/submissionSourceOutcomes";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
+import { isWorkflowTimeout } from "@/lib/workflowTimeouts";
 import type { SubmissionSourceOutcome, SubmissionSourceSummary } from "@/types";
 import { answerReviewNotes } from "@/lib/reviewConfirmation";
 
@@ -138,7 +140,9 @@ function SourceOutcomeRow({ source, locale, requiredOnly }: { source: Submission
   const shown = requiredOnly ? diagnostics.slice(0, 20) : diagnostics;
   const diagnosticCount = requiredOnly ? source.answer_required_diagnostic_count ?? diagnostics.length
     : source.answer_diagnostic_count ?? diagnostics.length;
-  const copy = getSubmissionSourceReasonCopy(source, locale);
+  const limits = useWorkflowTimeouts(source.status !== "manual_review" && source.resolution_status !== "manual_resolved"
+    && isWorkflowTimeout(source.reason_code ?? source.internal_status));
+  const copy = getSubmissionSourceReasonCopy(source, locale, limits);
   const Icon = source.status === "parsed"
     ? CheckCircle2
     : source.status === "identity_needs_review" || source.status === "manual_review"
@@ -168,6 +172,9 @@ function SourceOutcomeRow({ source, locale, requiredOnly }: { source: Submission
             </span>
           </div>
           <p className="mt-1 text-xs font-semibold text-foreground">{copy.title}</p>
+          {source.requires_identity_review ? (
+            <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">{messages[locale].submissionReviewQueueIdentity}</p>
+          ) : null}
           <p className="mt-1 text-[11px] leading-5 text-muted-foreground">{copy.description}</p>
           {copy.nextStep ? (
             <p className="mt-1 text-[11px] font-medium leading-5 text-foreground">

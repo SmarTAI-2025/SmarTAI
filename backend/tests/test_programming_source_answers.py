@@ -291,6 +291,17 @@ def test_real_fences_and_prose_outside_module_still_require_review():
     assert source_answers("work.txt", commentary, known, set(known)) is None
 
 
+def test_only_matching_question_heading_can_precede_one_code_fence():
+    from backend.services.programming_runs import _source
+    code = "import math\n\ndef stable_softmax(xs):\n    return [math.exp(x) for x in xs]\n"
+    answer = f"Q4 — Programming\n\n```python\n{code}```"
+    assert _source(answer, question_number="Q4") == code
+    assert _source("Q4\n" + code, question_number="Q4") == "Q4\n" + code
+    for text in (answer.replace("Q4", "Q3"), answer + "\n```python\npass\n```"):
+        with pytest.raises(ValueError, match="programming_ambiguous_code_blocks"):
+            _source(text, question_number="Q4")
+
+
 def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkeypatch):
     """Real image/upload/storage/review; the visual transcription is a fixed response."""
     import asyncio
@@ -303,7 +314,7 @@ def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkey
     from backend.tests.test_ocr_mounted_routes import headers
     from backend.tools.code_interpreter import run_sandbox
 
-    owner, task = seed(SUM)
+    owner, task = seed(SUM + "\n```python\ndef sum_positive(nums):\n    ...\n```")
     client, registry = client_registry
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     correct = "def sum_positive(nums):\n    return sum(x for x in nums if x > 0)"
@@ -331,6 +342,7 @@ def test_photo_of_code_can_be_reviewed_and_then_executed(client_registry, monkey
     snapshot = client.get(f"/tasks/{task}", headers=headers(owner)).json()
     row, = snapshot["student_data"]["S1"]["stu_ans"]
     vision.assert_awaited_once()
+    assert '"2": "python"' in vision.await_args.args[0]
     assert row["content"] == transcription and row["flag"] == []
     assert row["recognition_confidence"] == .3
     readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)

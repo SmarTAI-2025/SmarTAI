@@ -55,7 +55,7 @@ def recognition_capacity():
 
 
 @asynccontextmanager
-async def recognition_engine(*, owner_id, route, registry):
+async def recognition_engine(*, owner_id, route, registry, programming_questions=None):
     """One reusable engine adapter; the caller freezes and authorizes the route."""
     skill, engine = None, None
     if route is not None and route.is_baidu_ocr:
@@ -64,7 +64,8 @@ async def recognition_engine(*, owner_id, route, registry):
         engine = BaiduRecognitionEngine(skill.client, route_id=route.route_id, fingerprint=fingerprint, max_document_pages=1)
     elif route is not None and route.provider is not None and can_attempt_images(route.provider):
         fingerprint = stage_provider_configuration_fingerprint(owner_id=owner_id, route=route, registry=registry)
-        engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint)
+        engine = LLMRecognitionEngine(route.provider, route_id=route.route_id, fingerprint=fingerprint,
+                                      programming_questions=programming_questions)
     try:
         yield engine
     finally:
@@ -165,7 +166,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
                                extraction_hint="", options=None, purpose="problems", reporter=None, text_reader=None,
                                allow_vision=None, binding=None, retry_key=None, acknowledge_pending_retry=False,
                                timeout_profile=None, execution_scope=None, allow_partial=False, on_pages=None,
-                               media_slot_timeout_seconds: float | None = 10):
+                               media_slot_timeout_seconds: float | None = 10, programming_questions=None):
     from backend.services.source_files import persist_problem_source
 
     scope = question_recognition_options(options, extraction_hint=extraction_hint)
@@ -225,7 +226,8 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
         policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope,
             **({"version": "printed-formula-panels-v2"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
     )
-    async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry) as engine:
+    async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry,
+                                  programming_questions=programming_questions) as engine:
         if media_type.startswith("image/") and engine is None:
             raise RecognitionError("provider_vision_not_supported" if route.provider is not None else "visual_capability_unavailable")
         service = RecognitionRunService(store=RecognitionArtifactStore(get_storage()), capacity=recognition_capacity(),

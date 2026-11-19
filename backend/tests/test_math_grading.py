@@ -240,6 +240,63 @@ async def test_bad_graph_uses_one_direct_llm_fallback(monkeypatch, provider):
 
 
 @pytest.mark.asyncio
+async def test_demo_kernel_proof_accepts_scoring_json_after_math_preface():
+    from backend.services.part_rubric import PartRubric
+    from backend.tests.test_question_material_format_repair import Provider
+
+    p = ProblemInfo(q_id="q3", number="Q3", type="推理题", max_score=7, criterion="7 points",
+                    stem=r"Prove $\ker(A)=\ker(A^\mathsf{T}A)$ and conclude the ranks are equal.")
+    a = StudentAnswerInfo(q_id="q3", number="Q3", type=p.type, content="\n".join([
+        r"If $Ax=0$, then $A^\mathsf{T}Ax=0$.",
+        r"If $A^\mathsf{T}Ax=0$, then $x^\mathsf{T}A^\mathsf{T}Ax=\|Ax\|^2=0$, hence $Ax=0$.",
+        "The kernels are equal, so rank-nullity gives equal ranks.",
+    ]))
+    goals = ["Forward inclusion", "Reverse inclusion", "Apply rank-nullity", "Conclude equal ranks"]
+    rules = PartRubric.model_validate(dict(id="q3", label="Q3", stem=p.stem, total_pts=7, parts=[
+        dict(id="q3", total_pts=7, alternative={"deduct_per_error": 1},
+             steps=[dict(id=f"step_{i}", criterion=goal, total_pts=points)
+                    for i, (goal, points) in enumerate(zip(goals, (2, 2, 2, 1)), 1)]),
+    ]))
+    frozen = fallback_math_rubric_plan(p).model_copy(update={"part_rubric": rules})
+    reply = json.dumps(dict(comment="The proof establishes both inclusions.", confidence=.95,
+        part_decisions=[dict(part_id="q3", target_quote="part:q3", student_quote="student:1, student:2, student:3",
+            relevance="complete", method="reference", progress="Both inclusions and the rank conclusion follow.",
+            inferences=[
+                dict(evidence="student:1", reasoning=goals[0], result="written", step_ids=["step_1"]),
+                dict(evidence="student:2", reasoning=goals[1], result="written", step_ids=["step_2"]),
+                dict(evidence="student:3", reasoning="; ".join(goals[2:]), result="entailed",
+                     step_ids=["step_3", "step_4"]),
+            ])]))
+    raw = r"The reverse direction uses $x^\mathsf{T}A^\mathsf{T}Ax$." + f"\n```json\n{reply}\n```"
+    provider = Provider([raw] * 4)
+    with math_plans_context({"q3": frozen}):
+        result = await ProofSkill(provider).grade(p, a)
+
+    assert not result.error_kind
+    assert len(provider.calls) == 1
+    assert result.score == 7 and [step.score for step in result.steps] == [2, 2, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_exhausted_structured_grading_saves_safe_failure_reasons():
+    from backend.tests.test_question_material_format_repair import Provider
+
+    provider = Provider(["PRIVATE_NO_JSON", "PRIVATE_NO_JSON", '{"PRIVATE_UNKNOWN_FIELD": 100}',
+                         '{"PRIVATE_UNKNOWN_FIELD": 100}'])
+    p, a = problem(), answer()
+    with math_plans_context({"q1": plan_for(p)}):
+        result = await CalculationSkill(provider).grade(p, a)
+
+    assert result.error_kind == "parse_failed" and result.steps == []
+    assert len(provider.calls) == 4
+    trace = grading.read_math_trace(result)
+    assert trace["response_failure"] == {
+        "assessment": "missing_json", "recovery": "schema_mismatch",
+    }
+    assert "PRIVATE" not in result.raw_output
+
+
+@pytest.mark.asyncio
 async def test_real_provider_failure_does_not_fabricate_a_zero_grade(monkeypatch, provider):
     call = AsyncMock(side_effect=TimeoutError("provider timed out"))
     monkeypatch.setattr(grading, "structured_llm_call", call)

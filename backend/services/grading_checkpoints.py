@@ -12,7 +12,7 @@ from backend.db.workflow_repository import GradingRunSetupRecord
 from backend.domain.education import QuestionDTO
 from backend.models import Correction, ExpertResult, ProblemInfo, TaskGradingSetup, is_programming_question_type
 from backend.services.math_grading_context import (
-    MATH_GRADING_ENGINE_VERSION, PLAN_EVENT, expert_matches_plan,
+    ENGINE_EVENT, MATH_GRADING_ENGINE_VERSION, PLAN_EVENT, expert_matches_plan,
     matching_math_plans, plans_from_snapshots, problem_from_question, uses_math_grading,
 )
 
@@ -274,20 +274,20 @@ class GradingCheckpoints:
 
 
 def persist_paused_results(session, run):
-    """Called under the stop transaction's run lock, before revoking its lease.
+    """Build review rows from durable checkpoints under the run lock.
 
-    Completed immutable results are untouched. Every remaining frozen pair gets
-    a review row, including pairs with no model result. Late workers cannot add
-    checkpoints after this transaction commits.
+    Used by stop, interrupted-run recovery and manual handoff. Completed
+    immutable results are untouched. A pair with no valid score stays ungraded.
     """
     from backend.agents.multi_expert import (
         _expert_to_correction, _is_successful_expert, _project_programming_result, _weighted_average_fallback,
     )
     from backend.services.grading_adapter import correction_to_result
     from backend.services.programming_partial_review import apply_partial_review, review_inputs
-    from backend.services.programming_runs import auxiliary_for_handoff
+    from backend.services.programming_runs import AUXILIARY, auxiliary_for_handoff
 
     auxiliary = None
+    failed = run.status in {"failed", "partial_failed"}
     setup = session.get(GradingRunSetupRecord, run.id)
     if setup is None:
         return
@@ -296,6 +296,7 @@ def persist_paused_results(session, run):
     saved = {checkpoint_key(item): item for item in manifest.get("reused_experts", [])}
     events = list(session.scalars(select(GradingRunEventRecord).where(
         GradingRunEventRecord.grading_run_id == run.id,
+        GradingRunEventRecord.message.in_((EVENT, ENGINE_EVENT, PLAN_EVENT, AUXILIARY)),
     ).order_by(GradingRunEventRecord.sequence)))
     for event in events:
         if event.message == EVENT:
@@ -347,7 +348,7 @@ def persist_paused_results(session, run):
                 experts.append(ExpertResult.model_validate(item["result"]) if item else ExpertResult(
                     provider=labels.get(provider, provider) + (f"#sample{index}" if index else ""), provider_id=provider,
                     score=0, max_score=question.max_score, confidence=0,
-                    comment="尚未完成批改", error_kind=("operation_cancelled" if run.status not in {"failed", "partial_failed"} else "not_completed")))
+                    comment="尚未完成批改", error_kind="not_completed" if failed else "operation_cancelled"))
             successes = [item for item in experts if _is_successful_expert(item)]
             if successes:
                 problem = ProblemInfo(q_id=question.q_id, number=question.number, type=question.type,
@@ -358,8 +359,9 @@ def persist_paused_results(session, run):
                         synthesis_method="degraded_to_single" if len(samples) > 1 else "single")
             else:
                 correction = Correction(q_id=question.q_id, type=question.type, score=0,
-                    max_score=question.max_score, confidence=0, comment="已暂停，尚未批改", steps=[],
-                    synthesis_method="paused")
+                    max_score=question.max_score, confidence=0,
+                    comment="尚未完成批改" if failed else "已暂停，尚未批改", steps=[],
+                    synthesis_method="all_failed" if failed else "paused")
             correction.expert_results = experts
             if successes and is_programming_question_type(question.type):
                 correction = _project_programming_result(correction, config.feedback_language)
@@ -370,7 +372,7 @@ def persist_paused_results(session, run):
                     apply_partial_review(correction, inputs, auxiliary.get(inputs[0]), config.feedback_language)
             correction.requires_human_review = True
             correction.review_reasons = list(dict.fromkeys([*correction.review_reasons,
-                "grading_paused" if run.status not in {"failed", "partial_failed"} else "grading_incomplete",
+                "grading_incomplete" if failed else "grading_paused",
                 *(["partial_experts"] if successes and len(successes) < len(experts) else [])]))
             result = correction_to_result(run_id=run.id, revision_id=frozen.submission_revision_id,
                 question=question, student_id=frozen.student_id, correction=correction)

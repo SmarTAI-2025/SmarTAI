@@ -9,10 +9,12 @@ export function useRootStatus() {
   });
 }
 
-export function useHealthStatus(options: { refetchInterval?: number | false } = {}) {
+export function useHealthStatus(options: { refetchInterval?: number | false; refetchOnWindowFocus?: boolean; enabled?: boolean } = {}) {
   return useQuery({
     queryKey: healthKeys.status,
     queryFn: healthApi.getHealthStatus,
     refetchInterval: options.refetchInterval,
+    refetchOnWindowFocus: options.refetchOnWindowFocus,
+    enabled: options.enabled,
   });
 }

@@ -21,7 +21,7 @@ async def test_knowledge_timeout_retains_saved_page_and_resume_gets_fresh_clock(
     original_timeout = asyncio.timeout
     def capture(seconds):
         deadline = original_timeout(seconds)
-        if seconds is not None and 7100 < seconds <= 7200:
+        if seconds is not None and limits.KNOWLEDGE_WALL_SECONDS - 100 < seconds <= limits.KNOWLEDGE_WALL_SECONDS:
             deadlines.append(deadline)
         return deadline
     monkeypatch.setattr(asyncio, "timeout", capture)
@@ -53,8 +53,13 @@ async def test_knowledge_timeout_retains_saved_page_and_resume_gets_fresh_clock(
     assert summary["processed_pages"] == 1 and summary["searchable_pages"] == 1
     assert summary["execution_deadline"]["completed_at"] >= summary["execution_deadline"]["started_at"]
     assert [page["state"] for page in manifest["pages"]] == ["searchable", "unprocessed"]
+    _, _, earlier_job_id = queued()
     repo.resume(document, owner)
-    retried = repo.claim_next(job_id=job_id)
+    earlier = repo.claim_next()
+    assert earlier.id == earlier_job_id
+    repo.release(earlier, status="paused")
+    retried = repo.claim_next()
+    assert retried.id == job_id
     assert retried.configuration[limits.CHECKPOINT_KEY]["started_at"] > summary["execution_deadline"]["started_at"]
     assert repo.manifest(document, owner)["summary"]["searchable_pages"] == 1
     repo.release(retried)
@@ -67,7 +72,8 @@ def test_knowledge_queue_is_free_but_batch_release_and_reclaim_keep_deadline():
                         .values(created_at=time.time() - 86400))
     first = repo.claim_next(job_id=job_id)
     clock = first.configuration[limits.CHECKPOINT_KEY]
-    assert clock["deadline_at"] > time.time() + 7190
+    assert clock["deadline_at"] == clock["started_at"] + limits.KNOWLEDGE_WALL_SECONDS
+    assert clock["started_at"] >= first.created_at + 86400
     repo.release(first)
     second = repo.claim_next(job_id=job_id)
     assert second.configuration[limits.CHECKPOINT_KEY] == clock
@@ -81,8 +87,8 @@ def test_knowledge_queue_is_free_but_batch_release_and_reclaim_keep_deadline():
 
 @pytest.mark.asyncio
 async def test_no_active_work_cutoff_or_periodic_timing_save(monkeypatch):
-    # Advance active work well past the removed 2.5h cap while the 3.5h owner
-    # still permits work. No timer/task is created by active-work bookkeeping.
+    # Advance past the former active-work cap. The bookkeeping itself does not
+    # create another timer or task.
     from backend.services.submission_work_budget import active_work
     original = asyncio.get_running_loop().time
     offset = [0]
@@ -150,7 +156,7 @@ async def test_synchronous_source_timeout_preserves_checkpoint_and_allows_retry(
     original_timeout = asyncio.timeout
     def capture(seconds):
         deadline = original_timeout(seconds)
-        if seconds is not None and 8900 < seconds <= 9000:
+        if seconds is not None and limits.QUESTION_WALL_SECONDS - 100 < seconds <= limits.QUESTION_WALL_SECONDS:
             deadlines.append(deadline)
         return deadline
     monkeypatch.setattr(asyncio, "timeout", capture)

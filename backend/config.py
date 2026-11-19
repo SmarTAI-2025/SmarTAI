@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # Shared durable admission across recognition/preparation and grading.
     # Raise only after measuring file-processing memory under concurrent load.
     workload_max_in_flight: int = Field(default=2, ge=1)
+    # Whole-workflow limits, measured after the worker first claims the job.
+    question_preparation_timeout_minutes: int = Field(default=30, ge=1)
+    submission_recognition_timeout_minutes: int = Field(default=60, ge=1)
+    grading_timeout_minutes: int = Field(default=90, ge=1)
+    knowledge_ingestion_timeout_minutes: int = Field(default=30, ge=1)
     # Automatic model concurrency = ceil(RPM * healthy mean seconds / 60),
     # initially 120s, bounded by these operator caps and the host-wide hard 50.
     # RPM 0 has no extra rate gate. Legacy saved concurrency is not a manual cap.

@@ -1,6 +1,7 @@
 import { confidenceNeedsAttention, confidenceValue } from "./confidencePolicy";
 import type { ProblemInfo, StudentAnswerInfo, StudentSubmission } from "@/types";
 import { answerReviewNotes, answerReviewBlocked, answerReviewNextBlocked, studentIdentityReviewBlocked, type ReviewAttention } from "./reviewConfirmation";
+import { genericAnswerReviewLabel } from "./reviewLabels";
 import type { Locale } from "@/i18n/messages";
 
 export type SubmissionAnswerState = "recognized" | "reviewed" | "flagged" | "empty" | "missing";
@@ -86,7 +87,7 @@ export function answerReviewAttention(answer?: StudentAnswerInfo): ReviewAttenti
 export function answerHasOptionalAdvice(answer?: StudentAnswerInfo): boolean {
   if (!answer || answer.review_status === "confirmed" || answer.review_status === "edited") return false;
   const confidence = confidenceValue(answer.recognition_confidence);
-  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present"].includes(flag)))
+  return Boolean(answer.flag?.some(flag => ["authorship_uncertain", "external_annotation_present", "recognition_boundary_uncertain"].includes(flag)))
     || confidenceNeedsAttention(confidence);
 
 }
@@ -265,8 +266,14 @@ function naturalCompare(a: string, b: string) {
   return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
 }
 
-export function answerReviewLabels(answer: StudentAnswerInfo | undefined, locale: Locale): string[] {
-  return answerReviewNotes(answer, locale).map(issue => issue.label);
+export function answerReviewQueueReason(answer: StudentAnswerInfo | undefined, locale: Locale, severity = answerReviewAttention(answer)): string | undefined {
+  const attention = answerReviewAttention(answer);
+  if (attention === "none" || severity === "none") return undefined;
+  const notes = answerReviewNotes(answer, locale, true, true);
+  const labels = notes.filter(note => note.severity === severity).map(note => note.label);
+  if (labels.length) return labels.join(" · ");
+  if (notes.length || attention !== severity) return undefined;
+  return genericAnswerReviewLabel(locale);
 }
 
 export { answerReviewNotes } from "./reviewConfirmation";

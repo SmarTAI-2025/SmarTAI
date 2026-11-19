@@ -47,6 +47,35 @@ def test_verification_verdict_still_requires_original_complete_json():
         extract_and_parse_json('{"valid":true', Verdict, require_complete=True)
 
 
+@pytest.mark.parametrize("preface", [
+    r"The reverse implication uses $A^\mathsf{T}A$.",
+    r"\[x^\mathsf{T}A^\mathsf{T}Ax = \|Ax\|^{2}.\]",
+    r"$$x^\mathsf{T}A^\mathsf{T}Ax = \|Ax\|^{2}.$$",
+])
+def test_math_prose_does_not_hide_the_structured_value(preface):
+    from pydantic import BaseModel
+
+    class GradingResponse(BaseModel):
+        score: int
+        comment: str
+
+    payload = {"score": 7, "comment": r"Both kernels agree by $\|Ax\|^2=0$."}
+    raw = f'{preface}\n\n```json\n{json.dumps(payload)}\n```'
+    assert extract_and_parse_json(raw, GradingResponse).model_dump() == payload
+    with pytest.raises(ValueError):
+        extract_and_parse_json(raw, GradingResponse, require_complete=True)
+
+
+def test_math_preface_detection_preserves_a_json_object_between_currency_signs():
+    from pydantic import BaseModel
+
+    class GradingResponse(BaseModel):
+        comment: str
+
+    raw = 'The initial price was $10. {"comment": "The unit price is $2."}'
+    assert extract_and_parse_json(raw, GradingResponse).comment == "The unit price is $2."
+
+
 @pytest.mark.parametrize("invalid_escape", [r"\uffa", r"\u4f", r"\u鍚ng"])
 def test_invalid_unicode_cannot_turn_a_whole_response_into_literal_escapes(invalid_escape):
     # The test1 incident mixed valid Chinese/TeX escapes with malformed Unicode.

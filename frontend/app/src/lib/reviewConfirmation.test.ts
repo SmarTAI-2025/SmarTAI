@@ -7,6 +7,33 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("keeps missing funded tests blocking and visible even on a previously confirmed question", () => {
+    const required = issue({ field: "programming_tests", code: "generation_failed", severity: "blocking",
+      details: { reason: "required_programming_tests_missing" } });
+    const row = question({ type: "编程题", test_cases: [], preparation_issues: [required] });
+    for (const review_status of ["needs_review", "confirmed"] as const) {
+      expect(questionReviewIssues({ ...row, review_status })).toHaveLength(1);
+      expect(questionReviewNextBlocked({ ...row, review_status })).toBe(true);
+      expect(questionReviewNotes({ ...row, review_status }, "zh-CN", code => code)).toEqual([
+        { severity: "blocking", label: "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。" },
+      ]);
+    }
+  });
+  it("uses the same missing-test advisory for the matrix, queue and detail without blocking", () => {
+    const row = question({ type: "编程题", test_cases: [] });
+    const issues = questionReviewIssues(row);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ field: "programming_tests", severity: "warning" });
+    expect(questionReviewNotes(row, "zh-CN", code => code)).toEqual([
+      { severity: "advisory", label: "测试样例尚未提供，请核对或补充。" },
+    ]);
+    expect(questionReviewNextBlocked(row)).toBe(false);
+    expect(questionReviewBlocked(row)).toBe(false);
+    expect(questionReviewIssues({ ...row, review_status: "confirmed" })).toEqual([]);
+    expect(questionReviewIssues(question())).toEqual([]);
+    const persisted = issue({ field: "programming_tests", code: "generation_failed" });
+    expect(questionReviewIssues({ ...row, preparation_issues: [persisted] })).toHaveLength(1);
+  });
   it("shows an unexplained alternative cap as a numerical advisory", () => {
     const warning = issue({ field: "rubric", code: "math_rubric_advisory", details: {
       reason: "alternative_cap_review", alternative_caps: [{ label: "(1)", maximum: .15625, total: 1.25 }] } });
@@ -69,7 +96,7 @@ describe("review hard failures", () => {
     expect(blockers).toHaveLength(4);
     const fields = locale === "zh-CN" ? ["题号", "题型", "题干", "评分标准"] : ["question number", "question type", "question text", "rubric"];
     blockers.forEach((blocker, index) => {
-      expect(blocker.label).toContain(fields[index]);
+      expect(blocker.label.toLowerCase()).toContain(fields[index].toLowerCase());
       expect(blocker.label).not.toMatch(/标答|reference answer|置信度|confidence|确认|confirm/i);
       expect(blocker.href).toContain("/questions/q1/content#question-q1");
     });
@@ -81,8 +108,8 @@ describe("review hard failures", () => {
     const task = { task_id: "T1", student_data: { S1: { stu_id: "S1", stu_name: "Sample", stu_ans: [answer] } } } as unknown as Task;
     const blockers = submissionReviewBlockers(task, locale);
     expect(blockers).toHaveLength(2);
-    expect(blockers[0].label).toMatch(/同一题号|Multiple answers/);
-    expect(blockers[1].label).toMatch(/解析失败|parsing failed/);
+    expect(blockers[0].label).toMatch(/有多份作答|multiple answers/i);
+    expect(blockers[1].label).toMatch(/解析未完成|parsing did not complete/);
     for (const blocker of blockers) expect(blocker.label).not.toMatch(/置信度|confidence|笔迹|writing|确认|confirm/i);
     answer.flag = ["authorship_uncertain"];
     answer.content = "Saved transcription";

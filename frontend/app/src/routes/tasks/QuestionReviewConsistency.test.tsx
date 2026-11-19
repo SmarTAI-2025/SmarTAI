@@ -21,7 +21,7 @@ it.each(["zh-CN", "en-US"])("lists current missing fields on confirmation and dr
   } as ProblemInfo;
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const { result } = renderHook(() => useQuestionReview("T", 1, locale), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-  const fields = locale === "zh-CN" ? ["题型", "题干", "评分标准"] : ["question type", "question text", "rubric"];
+  const fields = locale === "zh-CN" ? ["题型", "题干", "评分标准"] : ["question type", "Question text", "rubric"];
   for (const [index, field] of (["type", "stem", "criterion"] as const).entries()) {
     await act(async () => { result.current.clearBlocked(); expect(await result.current.confirm([problem])).toBe(false); });
     expect(result.current.blocked).toHaveLength(3 - index);

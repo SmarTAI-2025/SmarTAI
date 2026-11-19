@@ -122,7 +122,9 @@ def test_material_import_shares_source_ocr_clock_but_explicit_retry_starts_fresh
         payload={"preparation_started_at": source_started})
     assert retried.attempt == 2
     renewed = flows.claim_operation(op.id, owner_id=owner, worker_id="retry", lease_seconds=60)
-    assert renewed.checkpoint[limits.CHECKPOINT_KEY]["deadline_at"] > time.time() + 8990
+    retry_clock = renewed.checkpoint[limits.CHECKPOINT_KEY]
+    assert retry_clock["started_at"] > source_started
+    assert retry_clock["deadline_at"] == retry_clock["started_at"] + limits.QUESTION_WALL_SECONDS
 
 @pytest.mark.asyncio
 async def test_timeout_after_suppressed_cancellation_cannot_be_success():
@@ -316,9 +318,9 @@ async def test_grading_final_persistence_cannot_publish_success_after_total_dead
 
 def test_whole_task_policies_cover_auxiliary_question_entrypoints():
     for kind in limits.QUESTION_TYPES:
-        assert limits.policy(kind) == (9000, "question_preparation")
-    assert limits.policy("submission_recognition") == (12600, "submission")
-    assert limits.policy("grading") == (12600, "grading")
-    assert limits.policy("knowledge_ingestion") == (7200, "knowledge")
+        assert limits.policy(kind) == (1800, "question_preparation")
+    assert limits.policy("submission_recognition") == (3600, "submission")
+    assert limits.policy("grading") == (5400, "grading")
+    assert limits.policy("knowledge_ingestion") == (1800, "knowledge")
     with pytest.raises(ValueError):
         limits.policy("source_cleanup")

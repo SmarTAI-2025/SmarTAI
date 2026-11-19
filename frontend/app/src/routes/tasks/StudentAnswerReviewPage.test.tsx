@@ -227,7 +227,7 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
   it("keeps ordinary recognition advice beside confirmation without blocking continuation", async () => {
     Object.assign(taskData.student_data.S001.stu_ans[0], { flag: [], recognition_confidence: .4 });
     renderPage();
-    const advice = await screen.findByText("置信度 0.4 较低，建议核对确认。");
+    const advice = await screen.findByText("作答识别置信度较低（0.4），建议对照原文件核对。");
     expect(within(advice.closest("header")!).getByRole("button", { name: /待确认/ })).toBeEnabled();
     expect(screen.queryByTitle(/置信度偏低，可选核对，可继续/)).not.toBeInTheDocument();
   });
@@ -239,7 +239,7 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
     await user.click(within(document.querySelector('[data-question-id="Q1"]') as HTMLElement).getByRole("button", { name: /待确认/ }));
     expect(mutations.answer).toHaveBeenCalledWith(expect.objectContaining({ qId: "Q1", reviewStatus: "confirmed" }));
     await user.click(screen.getByRole("button", { name: "进入批改设置" }));
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent("识别失败");
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("作答内容缺失");
   });
   it("opens the editable identity form from the queue and confirms unchanged values", async () => {
     taskData.student_data.S001.identity_status = "needs_review";
@@ -270,8 +270,8 @@ describe("StudentAnswerReviewPage review shortcuts", () => {
       const dialog = screen.getByRole("alertdialog");
       const rows = within(dialog).getAllByRole("listitem");
       expect(rows).toHaveLength(2);
-      expect(rows[0]).toHaveTextContent("同一题号");
-      expect(rows[1]).toHaveTextContent("解析失败");
+      expect(rows[0]).toHaveTextContent("有多份作答");
+      expect(rows[1]).toHaveTextContent("作答解析未完成");
       expect(dialog).not.toHaveTextContent(/笔迹|建议|请先修正本题识别结果|学生实际留白/);
       await user.click(within(dialog).getByRole("button", { name: "返回" }));
     }

@@ -59,9 +59,9 @@ def test_programming_evidence_remains_a_mandatory_reason_in_safe_diagnostics():
     source = SimpleNamespace(student_id="s1", q_id="q1", effective_score=8, requires_review=True,
         ai_max_score=10, ai_confidence=1, ai_synthesis_method="single", review_reasons=[], initial_review_reasons=[],
         teacher_review=None, ai_expert_results=[dict(provider="test", score=8, programming_evidence={
-            "contract": "smartai.programming_evidence", "score_status": "provisional", "execution_status": "executed"})])
+            "contract": "smartai.programming_evidence", "score_status": "provisional", "execution_status": "unsupported"})])
     rows, _ = public_grading_diagnostics([source])
-    assert rows[0]["review_reasons"] == ["programming_ai_only"]
+    assert rows[0]["review_reasons"] == ["programming_code_review_only"]
     assert "programming_evidence" not in rows[0]["expert_results"][0]
 
 

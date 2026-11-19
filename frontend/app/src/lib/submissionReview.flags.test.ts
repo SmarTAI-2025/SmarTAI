@@ -1,7 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
+import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, answerReviewQueueReason, formatSubmissionFlag, getAnswerState, getSubmissionReviewStats, selectSubmissionReview, studentNeedsAttention } from "./submissionReview";
+
+import { answerReviewNextBlocked } from "./reviewConfirmation";
 
 describe("OCR review labels", () => {
+  it("shows a page-boundary doubt as one optional review message", () => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .95,
+      flag: ["recognition_uncertain", "recognition_boundary_uncertain"] };
+    expect(answerReviewAttention(answer)).toBe("advisory");
+    expect(answerReviewNextBlocked(answer)).toBe(false);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([
+      { label: "作答可能未识别完整，请对照原文件核对。", severity: "advisory" },
+    ]);
+    expect(answerReviewNotes({ ...answer, review_status: "confirmed" }, "zh-CN")).toEqual([]);
+  });
+
+  it.each([
+    ["  ", "作答内容缺失", "Answer content is missing"],
+    ["Partial text", "作答识别不完整", "Answer transcription is incomplete"],
+  ])("describes an already-blocking recognition failure according to the displayed answer", (content, chinese, english) => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content,
+      flag: ["recognition_failed", "recognition_failed_pages:2", "recognition_manual_pending", "recognition_incomplete"] };
+    expect(answerReviewNextBlocked(answer)).toBe(true);
+    expect(answerReviewQueueReason(answer, "zh-CN")).toBe(`第 2 页识别失败，${chinese}。`);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([
+      { label: `第 2 页识别失败，${chinese}，请对照原文件补全。`, severity: "blocking" },
+    ]);
+    expect(answerReviewNotes(answer, "en-US")[0].label).toContain(english);
+  });
+
+  it("combines synonymous recognition labels and localizes unknown flags", () => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", flag: [
+      "unclear_text", "recognition_unclear", "recongnition_unreadable", "unreadable_text", "unreadable", "unknown_model_flag",
+    ] };
+    const chinese = answerReviewQueueReason({ ...answer, recognition_confidence: .58 }, "zh-CN");
+    expect(chinese).toContain("作答");
+    expect(chinese).not.toMatch(/[a-z]/i);
+    expect(answerReviewNotes(answer, "zh-CN")).toHaveLength(1);
+    expect(answerReviewNotes(answer, "en-US")).toHaveLength(1);
+  });
+
   it.each(["edited", "confirmed"] as const)("clears yellow advice after %s while retaining an unresolved red issue", review_status => {
     const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .2,
       flag: ["authorship_uncertain"], review_status };
@@ -40,9 +78,10 @@ describe("OCR review labels", () => {
   });
   it("distinguishes required review from a claim of low accuracy", () => {
     expect(formatSubmissionFlag("recognition_needs_review", "zh-CN")).toBe("识别结果需对照原件核对");
+    expect(formatSubmissionFlag("recognition_matching_review", "zh-CN")).toBe("请对照学生作答原文件，确认该题对应的题号。");
     expect(formatSubmissionFlag("external_annotation_present", "en-US")).toContain("not student answers");
     expect(formatSubmissionFlag("authorship_uncertain", "zh-CN")).toContain("归属不明");
-    expect(formatSubmissionFlag("unfamiliar observation", "zh-CN")).toBe("unfamiliar observation");
+    expect(formatSubmissionFlag("unfamiliar observation", "zh-CN")).toBe("建议对照原文件核对作答。");
   });
 
   it("retains source flags after review without keeping the cell pending", () => {

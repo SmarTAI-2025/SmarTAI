@@ -1,4 +1,5 @@
 import asyncio
+import time
 import uuid
 from collections import Counter
 from types import SimpleNamespace
@@ -46,6 +47,76 @@ def seed_grade(owner, task):
     with session_scope() as session:
         session.add(GradingRunRecord(id=run_id, assignment_id=task, teacher_id=owner, status="queued"))
     return run_id
+
+
+def seed_queued_workload(kind):
+    if kind == "grading":
+        owner, task, _ = _seed_operation("test_placeholder")
+        return owner, task, grades.create_run(task, teacher_id=owner, total_submissions=1).id
+    owner, task, op = _seed_operation(kind)
+    activate(owner, task, op)
+    return owner, task, op.id
+
+
+def claim_workload(kind, owner, job_id):
+    if kind == "grading":
+        return grades.claim_lease(job_id, worker_id="grader", lease_seconds=60)
+    return flows.claim_operation(job_id, owner_id=owner, worker_id="execution-test", lease_seconds=60)
+
+
+@pytest.mark.parametrize("first_kind,second_kind", [
+    ("question_preparation", "grading"),
+    ("grading", "submission_recognition"),
+])
+def test_earlier_workload_gets_next_shared_slot(monkeypatch, first_kind, second_kind):
+    monkeypatch.setattr(settings, "workload_max_in_flight", 2)
+    holder, holder_task, holder_id = seed_queued_workload("problem_extraction")
+    claim_workload("problem_extraction", holder, holder_id)
+    first_owner, _, first_id = seed_queued_workload(first_kind)
+    second_owner, _, second_id = seed_queued_workload(second_kind)
+
+    with pytest.raises(LeaseLost, match="earlier queued workload"):
+        claim_workload(second_kind, second_owner, second_id)
+    assert claim_workload(first_kind, first_owner, first_id).status == "running"
+    with pytest.raises(LeaseLost, match="slots are occupied"):
+        claim_workload(second_kind, second_owner, second_id)
+
+    revision = flows.get_workflow(holder_task, owner_id=holder).workflow_revision
+    stop_task_run(task_id=holder_task, owner_id=holder, job_id=holder_id, expected_revision=revision)
+    assert claim_workload(second_kind, second_owner, second_id).status == "running"
+
+
+def test_older_workload_of_busy_owner_does_not_block_other_lane(monkeypatch):
+    monkeypatch.setattr(settings, "workload_max_in_flight", 2)
+    busy_owner, busy_task, active_run = seed_queued_workload("grading")
+    claim_workload("grading", busy_owner, active_run)
+    waiting_task, waiting_op = another_task(busy_owner, busy_task)
+    activate(busy_owner, waiting_task, waiting_op)
+    free_owner, _, free_run = seed_queued_workload("grading")
+    assert claim_workload("grading", free_owner, free_run).status == "running"
+
+
+def test_resumed_operation_uses_new_queue_position():
+    owner, task, op = _seed_operation("material_import")
+    workflow = activate(owner, task, op)
+    stop_task_run(task_id=task, owner_id=owner, job_id=op.id, expected_revision=workflow.workflow_revision)
+    grader, _, run_id = seed_queued_workload("grading")
+    revision = flows.get_workflow(task, owner_id=owner).workflow_revision
+    continue_auxiliary_run(task_id=task, owner_id=owner, job_id=op.id, expected_revision=revision)
+
+    with pytest.raises(LeaseLost, match="earlier queued workload"):
+        claim(owner, op)
+    assert claim_workload("grading", grader, run_id).status == "running"
+    assert claim(owner, op).attempt == op.attempt + 1
+
+
+def test_deleted_or_unpublished_workflow_operations_do_not_hold_shared_priority():
+    _seed_operation("question_preparation")
+    _, deleted_task, _ = seed_queued_workload("submission_recognition")
+    with session_scope() as session:
+        session.get(AssignmentRecord, deleted_task).deletion_requested_at = time.time()
+    grader, _, run_id = seed_queued_workload("grading")
+    assert claim_workload("grading", grader, run_id).status == "running"
 
 
 def test_one_user_cannot_overlap_recognition_and_grading_but_other_users_can(monkeypatch):

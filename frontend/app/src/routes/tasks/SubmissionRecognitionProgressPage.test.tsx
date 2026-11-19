@@ -57,7 +57,7 @@ describe("submission recognition completion", () => {
     show();
     expect(screen.getByRole("heading", { name: wallTime ? "本次识别已达到总时限" : "本次识别已达到处理时限" })).toBeVisible();
     expect(screen.getByRole("button", { name: "重试失败项" })).toBeInTheDocument();
-    expect(screen.getByText(wallTime ? /3.5 小时总时限，自首次开始运行起，之后等待计入。已完成的识别和结构化作答已保留/ : /2.5 小时，排队不计时。已完成的识别和结构化作答已保留/)).toBeVisible();
+    expect(screen.getByText(wallTime ? /总时限，自首次开始运行起，之后等待计入。已完成的识别和结构化作答已保留/ : /有效处理时限，排队不计时。已完成的识别和结构化作答已保留/)).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "人工继续处理" }));
     expect(await screen.findByRole("heading", { name: "作答校对页面" })).toBeVisible();
   });

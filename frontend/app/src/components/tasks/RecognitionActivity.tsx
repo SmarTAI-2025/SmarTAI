@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { JobProgress, ProgressEvent, RecognitionRequestState } from "@/types/progress";
 import type { Locale } from "@/i18n/messages";
+import type { WorkflowTimeoutMinutes } from "@/types/health";
+import { isWorkflowTimeout, workflowTimeoutNote } from "@/lib/workflowTimeouts";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
 
-export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean, preparation = false): string {
+export function recognitionEventText(event: ProgressEvent | undefined, zh: boolean, preparation = false, limits?: WorkflowTimeoutMinutes): string {
   const labels: Record<string, string> = {
     saved_text_recovery_retired: zh ? "此旧整理任务已停用，请新建任务" : "This older organization task is retired. Create a new task",
     question_preparation_artifact_invalid: zh ? "题目结果保存或恢复未完成，已保存的识别内容仍保留" : "Question results could not be saved or restored; saved recognition content is retained",
@@ -15,10 +18,10 @@ export function recognitionEventText(event: ProgressEvent | undefined, zh: boole
     activity_completed: zh ? "本次识别已完成" : "Recognition completed",
     activity_failed: zh ? "一项内容未完成，请查看失败提示" : "An item did not finish; see the failure details",
     activity_stopped: zh ? "本次识别已停止" : "Recognition stopped",
-    question_preparation_time_limit_reached: zh ? "题目处理已达到 1.5 小时有效处理时限，已保存结果会保留" : "Question preparation reached its 1.5-hour active processing limit; saved results are retained",
-    question_preparation_wall_time_limit_reached: zh ? "题目处理已达到 2.5 小时总时限（首次运行后开始计时），已保存结果会保留" : "Question preparation reached its 2.5-hour total time limit, counted from the first start, including later waits; saved results are retained",
-    submission_time_limit_reached: zh ? "作答识别已达到 2.5 小时有效处理时限，已保存结果会保留" : "Submission recognition reached its 2.5-hour active processing limit; saved results are retained",
-    submission_wall_time_limit_reached: zh ? "作答识别已达到 3.5 小时总时限（首次运行后开始计时），已保存结果会保留" : "Submission recognition reached its 3.5-hour total time limit, counted from the first start, including later waits; saved results are retained",
+    question_preparation_time_limit_reached: zh ? "题目处理已达到有效处理时限，已保存结果会保留" : "Question preparation reached its active processing limit; saved results are retained",
+    question_preparation_wall_time_limit_reached: zh ? "题目处理已达到总时限（首次运行后开始计时），已保存结果会保留" : "Question preparation reached its total time limit, counted from the first start, including later waits; saved results are retained",
+    submission_time_limit_reached: zh ? "作答识别已达到有效处理时限，已保存结果会保留" : "Submission recognition reached its active processing limit; saved results are retained",
+    submission_wall_time_limit_reached: zh ? "作答识别已达到总时限（首次运行后开始计时），已保存结果会保留" : "Submission recognition reached its total time limit, counted from the first start, including later waits; saved results are retained",
     operation_cancelled: zh ? "本次识别已停止" : "Recognition stopped",
     activity_queued: zh ? "等待请求名额" : "Waiting for request capacity",
     activity_responding: zh ? "请求已发出，等待模型响应" : "Request sent; awaiting model response",
@@ -32,7 +35,8 @@ export function recognitionEventText(event: ProgressEvent | undefined, zh: boole
     : event && labels[event.message];
   const detail = event?.recognition;
   const fallback = event?.level === "error" ? (zh ? "处理未完成，请查看失败提示" : "Processing did not finish; see the failure details") : (zh ? "等待进度更新" : "Waiting for a progress update");
-  return `${text ?? fallback}${detail?.state === "retrying" ? retryText(detail, zh) : ""}`;
+  const limit = workflowTimeoutNote(event?.message, zh ? "zh-CN" : "en-US", limits);
+  return `${text ?? fallback}${limit}${detail?.state === "retrying" ? retryText(detail, zh) : ""}`;
 }
 
 function retryText(request: RecognitionRequestState, zh: boolean) {
@@ -80,6 +84,7 @@ export function RecognitionRequestStatus({ progress, locale, stale = false }: { 
 
 /** Uses the existing bounded, durable progress messages; no new polling API. */
 export function RecognitionActivity({ progress, locale, incomplete = false, fill = false, summary }: { progress: JobProgress | null; locale: Locale; incomplete?: boolean; fill?: boolean; summary?: ReactNode }) {
+  const limits = useWorkflowTimeouts(progress?.messages?.some((event) => isWorkflowTimeout(event.message)) ?? false);
   const list = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const zh = locale === "zh-CN";
@@ -88,7 +93,7 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
   const preparation = Boolean(progress?.preparation_counts);
   const latestText = incomplete ? (progress?.error_detail === "operation_cancelled"
     ? (zh ? "本次处理已停止" : "Processing stopped")
-    : (zh ? "本次处理未完成" : "Processing did not complete")) : recognitionEventText(latest, zh, preparation);
+    : (zh ? "本次处理未完成" : "Processing did not complete")) : recognitionEventText(latest, zh, preparation, limits);
   useEffect(() => { stickToBottom.current = true; }, [progress?.job_id]);
   useEffect(() => {
     if (stickToBottom.current && list.current) list.current.scrollTop = list.current.scrollHeight;
@@ -104,7 +109,7 @@ export function RecognitionActivity({ progress, locale, incomplete = false, fill
         : ` · Saved: question text ${progress.preparation_counts.stems} · Reference answers ${progress.preparation_counts.reference_answers} · Rubrics ${progress.preparation_counts.rubrics}`) : ""}</p>
       <ol className="space-y-2">{events.map((event, index) => <li key={`${event.ts}:${index}`} className="flex gap-3 leading-5">
         <time className="shrink-0 tabular-nums">{Number.isFinite(event.ts) && event.ts > 0 ? new Date(event.ts * (event.ts > 1e12 ? 1 : 1000)).toLocaleTimeString(locale) : "—"}</time>
-        <span className="min-w-0 break-words">{recognitionEventText(event, zh, preparation)}</span>
+        <span className="min-w-0 break-words">{recognitionEventText(event, zh, preparation, limits)}</span>
       </li>)}</ol>
       {!events.length && <p>{zh ? "暂无动态记录" : "No activity recorded yet"}</p>}
     </div>

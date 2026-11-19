@@ -60,12 +60,14 @@ from backend.db.models import (
     UserRecord,
     TagRecord,
 )
+from backend.db.execution_admission import WORKLOAD_TYPES
 from backend.db.file_repository import get_file
 from backend.db.session import session_scope
 from backend.domain import education
 from backend.domain.grading_review import result_score_review_reason, teacher_resolved_review
 from backend.domain.confidence_policy import confidence_needs_attention, confidence_value, question_issue_blocks_progress
 from backend.domain.question_types import normalize_question_type
+from backend.services.question_preparation_diagnostics import current_programming_test_issues
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
@@ -120,8 +122,10 @@ from backend.services.question_structure import (
     validate_rubric_points,
 )
 from backend.services.submission_source_pipeline import (
+    BOUNDARY_REVIEW_FLAG,
     PreparedSubmissionSource,
     attach_submission_recognition,
+    failed_pdf_without_identity,
     failure_phase_for_code,
     prepare_submission_sources,
 )
@@ -147,7 +151,7 @@ SYSTEM_COURSE_NAME = "SmarTAI Workspace"
 _SAFE_ERROR_CODES = SAFE_BACKGROUND_ERROR_CODES
 _AUXILIARY_QUESTION_OPERATION_TYPES = {"material_import", "ai_completion"}
 _OPERATION_PUBLICATION_TTL_SECONDS = 60
-_OPERATION_RUNTIME_TTL_SECONDS = 2 * 60 * 60
+_MATERIAL_PLAN_REVIEW_TTL_SECONDS = 2 * 60 * 60
 logger = logging.getLogger(__name__)
 
 _QUESTION_PREPARATION_RETRY_FROZEN_FIELDS = (
@@ -698,6 +702,7 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             "size_bytes": result.source.size_bytes,
             "status": external_status,
             "internal_status": internal_status,
+            "requires_identity_review": failed_pdf_without_identity(result),
             "reason_code": (
                 None
                 if outcome
@@ -1067,16 +1072,22 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             structure_source="legacy_single_question",
             review_status="needs_review",
         ).model_dump()
-    rubric_summary = summarize_rubric_points(
-        question.criterion or "", max_score, structure, rubric_draft=presentation.get("rubric_draft")
-    ).model_dump()
     from backend.services.part_rubric import alternative_text
     from backend.services.rubric_display import rubric_display, alternative_display, show_alternative, alternative_cap_issue
     from backend.services.math_grading_context import problem_from_question
     from backend.services.rubric_drafts import saved_draft
-    if math_plan is None and presentation.get("rubric_draft"):
+    programming = is_programming_question_type(question.type)
+    verified = None
+    if (programming or math_plan is None) and presentation.get("rubric_draft"):
         verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
-        math_plan = verified.plan if verified else None
+        if math_plan is None and verified:
+            math_plan = verified.plan
+    rubric_draft = presentation.get("rubric_draft")
+    if programming and verified is None:
+        rubric_draft = None  # A stale or invalid contract is projected as a review issue below.
+    rubric_summary = summarize_rubric_points(
+        question.criterion or "", max_score, structure, rubric_draft=rubric_draft,
+    ).model_dump()
     alternatives = []
     display_plan = (presentation.get("rubric_draft") or {}).get("display_plan")
     cap_issues = alternative_cap_issue(question.q_id, math_plan.part_rubric) if math_plan and math_plan.part_rubric else []
@@ -1085,6 +1096,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     effective_issues = [issue for issue in _effective_question_issues(presentation, question.type)
         if (issue.get("details") or {}).get("reason") != "alternative_cap_review"
         or issue.get("issue_id") in current_cap_ids]
+    effective_issues = current_programming_test_issues(
+        effective_issues, {**presentation, "type": question.type, "test_cases": question.test_cases}, question.q_id,
+    )
     if math_plan and math_plan.part_rubric:
         alternatives = [{"id": part.id, "label": part.label,
                          "text": alternative_text(part, zh=feedback_language == "zh"),
@@ -1096,6 +1110,21 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         from backend.services.rubric_drafts import pending_alternatives
         alternatives = [{"id": key, "label": rule["label"], "text": rule.get("binding_text", rule["text"])}
                         for key, rule in pending_alternatives(presentation["alternative_rules"], structure).items()]
+    programming_fields = {}
+    programming_criterion = None
+    if programming:
+        from backend.services.programming_rubric import programming_scoring_for_review, test_award_review_issue
+
+        programming_fields["programming_scoring"] = programming_scoring_for_review(question, verified)
+        if issue := test_award_review_issue(question, verified, effective_issues):
+            effective_issues.append(issue)
+        if verified and verified.programming_scoring is not None:
+            points = verified.programming_scoring.test_points
+            programming_criterion = question.criterion
+            if points:
+                test_rule = (f"测试占 {points:g} 分，按有效样例的通过比例计分。" if feedback_language == "zh"
+                             else f"Tests are worth {points:g} points, scored in proportion to valid cases passed.")
+                programming_criterion = f"{test_rule}\n\n{question.criterion}"
     # Give the editor valid old function-only rows in its existing text fields.
     # Invalid legacy data must remain visible so the teacher can correct it.
     cases = question.test_cases
@@ -1121,7 +1150,9 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ),
         "question_structure": structure,
         "alternative_rules": alternatives,
-        **({"effective_criterion": rubric_display(math_plan.part_rubric, question.stem, feedback_language,
+        **programming_fields,
+        **({"effective_criterion": programming_criterion if programming_criterion is not None else rubric_display(
+                                                 math_plan.part_rubric, question.stem, feedback_language,
                                                  display_plan=display_plan, expected_truth=math_plan.expected_truth_by_part,
                                                  semantic_policy_checks=(presentation.get("rubric_draft") or {}).get("semantic_policy_checks", ())),
             "rubric_version": math_plan.part_rubric.rubric_version}
@@ -1293,7 +1324,7 @@ def _operation_is_retryable(operation, *, now: float | None = None) -> bool:
             return False
         return True
     if (
-        operation.operation_type == "question_preparation"
+        operation.operation_type in WORKLOAD_TYPES
         and operation.status in {"pending", "running"}
     ):
         # Published work is reclaimed by the durable worker through its lease,
@@ -1496,7 +1527,7 @@ def activate_workflow_operation_atomic(
     replacement_file_ids: tuple[str, ...] = (),
     replacement_keep_file_ids: tuple[str, ...] = (),
 ) -> int:
-    """Publish a fully persisted operation to the durable worker queue."""
+    """Publish a persisted operation. The first worker claim sets its deadline."""
     validated_payload = workflow_repository._validate_json_object(
         operation_payload,
         field="payload",
@@ -1523,7 +1554,7 @@ def activate_workflow_operation_atomic(
             changes={
                 "status": "pending", "payload": validated_payload,
                 "error_code": None,
-                "expires_at": now + _OPERATION_RUNTIME_TTL_SECONDS,
+                "expires_at": None,
             },
         )
         claimed = session.execute(
@@ -1987,7 +2018,7 @@ def publish_checkpointed_operation_atomic(
             operation.terminal_summary = None
             operation.error_code = None
             operation.completed_at = None
-            operation.expires_at = now + _OPERATION_RUNTIME_TTL_SECONDS
+            operation.expires_at = None
             operation.lease_owner = None
             operation.lease_token = None
             operation.lease_expires_at = None
@@ -3438,6 +3469,16 @@ async def run_task_submission_parsing(
                 raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
             vision = provider if can_attempt_images(provider) else None
             source_states = {}
+            from backend.services.question_matching import question_number_aliases
+            aliases = question_number_aliases(problem_data)
+            programming_questions = {
+                aliases[q.q_id][0]: (
+                    "python" if re.search(r"^\s*```(?:python|py)[ \t]*$|\b(?:write|implement|code)\b[^.\n]{0,60}\bin Python\b",
+                                          q.stem, re.I | re.M)
+                    else "code"
+                )
+                for q in questions if is_programming_question_type(q.type) and aliases[q.q_id]
+            }
 
             async def save_source_state(source_id, stored_file_id, **changes):
                 if leased_operation is None:
@@ -3489,6 +3530,7 @@ async def run_task_submission_parsing(
                         execution_scope=frozen.get("recognition_execution_scope"),
                         allow_partial=True,
                         media_slot_timeout_seconds=None,
+                        programming_questions=programming_questions,
                         on_pages=lambda pages: on_saved_pages(raw, stored_file_id, pages),
                     )
                 except DomainError as exc:
@@ -3514,7 +3556,8 @@ async def run_task_submission_parsing(
                     saved = retry_results.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
                     if saved is not None and saved.student is not None:
                         good_ids = {answer["q_id"] for answer in saved.student.get("stu_ans", [])
-                                    if "content" in answer and not _answer_recognition_failures(answer.get("flag"))}
+                                    if "content" in answer and not _answer_recognition_failures(answer.get("flag"))
+                                    and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}
                         targets = [q.q_id for q in questions if q.q_id not in good_ids]
                         # Global missing-page evidence cannot prove which answer
                         # is complete when there are no per-question boundaries.
@@ -3527,6 +3570,7 @@ async def run_task_submission_parsing(
                 return True
 
             from backend.services.submission_incremental import (
+                answer_boundaries_on_read_pages,
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
             )
             from backend.agents.question_preparation_agent import _major_question_generation_concurrency
@@ -3740,7 +3784,8 @@ async def run_task_submission_parsing(
                     await save_source_state(source_id, stored_file_id,
                         invalidated_question_ids=sorted(boundary_invalidations[source_id]))
                 for unit in source_page_groups(saved_pages, source_complete=complete,
-                                               source_end_page=end_page, numbered=False, number_key=number_ids.get):
+                                               source_end_page=end_page, numbered=False, check_opening=True,
+                                               number_key=number_ids.get):
                     headings = list(QUESTION_HEADING.finditer(unit.text))
                     if any(match.group("number") not in number_ids for match in headings):
                         # Ambiguous or unknown labels cannot prove an independent
@@ -3777,6 +3822,13 @@ async def run_task_submission_parsing(
                 requested = coverage.get("requested_pages") or []
                 await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
                     complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
+                closed, openings, boundary_reviews = answer_boundaries_on_read_pages(
+                    page_texts.get(source.source_id, {}), problem_data, coverage)
+                invalid = boundary_invalidations.get(source.source_id, set())
+                if closed or openings or boundary_reviews:
+                    source = replace(source, closed_question_ids=frozenset(closed - invalid),
+                        opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid},
+                        boundary_review_ids=frozenset(boundary_reviews - invalid))
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their
@@ -3800,7 +3852,8 @@ async def run_task_submission_parsing(
                 previous = partials.get(source.source_id)
                 verified = (set(dispatched) | {answer["q_id"] for answer in
                     (previous.student.get("stu_ans", []) if previous else [])
-                    if not _answer_recognition_failures(answer.get("flag"))}) - invalid
+                    if not _answer_recognition_failures(answer.get("flag"))
+                    and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}) - invalid
                 result = attach_submission_recognition([result], [source], verified_question_ids=verified)[0]
                 # Count a source once after all of its units and repairs finish,
                 # including failed outcomes; a saved page alone is not a file.
@@ -4140,7 +4193,11 @@ def apply_question_patches_atomic(
             expected_statuses=(required_operation_status,),
             expected_lease_token=expected_lease_token,
         )
-        if operation.expires_at is not None and operation.expires_at <= now:
+        if (
+            expected_lease_token is None
+            and operation.expires_at is not None
+            and operation.expires_at <= now
+        ):
             raise InvalidTransition("The workflow job expired.", code="stale_revision")
 
         workflow = session.scalar(
@@ -4339,7 +4396,11 @@ def complete_planning_operation_atomic(
             expected_statuses=("running",),
             expected_lease_token=expected_lease_token,
         )
-        if operation.expires_at is not None and operation.expires_at <= now:
+        if (
+            expected_lease_token is None
+            and operation.expires_at is not None
+            and operation.expires_at <= now
+        ):
             _raise_stale_revision()
         workflow = session.scalar(
             select(workflow_repository.AssignmentWorkflowRecord)
@@ -4366,6 +4427,8 @@ def complete_planning_operation_atomic(
             workflow.presentation_status = "problems_ready"
         workflow.updated_at = now
         operation.status = final_status
+        if final_status == "ready":
+            operation.expires_at = now + _MATERIAL_PLAN_REVIEW_TTL_SECONDS
         operation.payload = validated_payload
         operation.progress = validated_progress
         operation.error_code = None
@@ -5095,7 +5158,8 @@ def grading_readiness(
                 if {question.q_id for question in questions} - {answer.q_id for answer in revision.answers}:
                     issues.append("submission_recognition_blocked")
                 recognition_review_ids.extend(answer.id for answer in revision.answers
-                                              if confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
+                                              if BOUNDARY_REVIEW_FLAG in (answer.flag or [])
+                                              or confidence_needs_attention(_answer_recognition_confidence(answer.flag)))
                 for answer in revision.answers:
                     if _answer_recognition_failures(answer.flag) and not (
                         answer_reviews.get(answer.id) == "confirmed"
@@ -5202,14 +5266,19 @@ def _question_review_blockers(questions) -> list[str]:
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
-        review_issues = _effective_question_issues(presentation, question.type)
+        problem = _serialize_problem(question)
+        review_issues = problem["preparation_issues"]
         if (any(issue.get("code") == "manual_completion_required" and (issue.get("details") or {}).get("required_fields") for issue in review_issues)
                 and _manual_question_fields_missing(question, presentation)):
             issues.append("question_manual_completion_required")
-        problem = _serialize_problem(question)
         if (not str(question.number or "").strip() or not normalize_question_type(question.type)
                 or not str(question.stem or "").strip() or not str(question.criterion or "").strip()
                 or not problem["rubric_point_summary"]["is_valid"]
+                or (is_programming_question_type(question.type) and any(
+                    issue.get("status") == "open" and issue.get("severity") == "blocking"
+                    and (issue.get("details") or {}).get("reason") in {
+                        "programming_test_award_unset", "required_programming_tests_missing",
+                    } for issue in problem["preparation_issues"]))
                 or (uses_math_grading(question.type) and saved_draft(problem_from_question(question)) is None)
                 or any(question_issue_blocks_progress(issue, presentation)
                        for issue in review_issues if issue.get("code") != "manual_completion_required")):
@@ -5719,7 +5788,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
     now = time.time()
     substantive = bool({
         "number", "type", "stem", "criterion", "max_score", "reference_answer",
-        "solution_code", "test_cases", "alternative_rule_edits",
+        "solution_code", "test_cases", "alternative_rule_edits", "programming_scoring",
     }.intersection(patch))
     with session_scope() as session:
         workflow_row = workflow_repository.lock_workflow_revision(
@@ -5770,15 +5839,41 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         presentation = dict(source.get("presentation") or {})
         presentation["preparation_issues"] = _effective_question_issues(presentation, patch.get("type", question.type))
         candidate_type = normalize_question_type(patch.get("type", question.type))
+        from backend.services.programming_rubric import (
+            compile_programming_scoring, has_saved_scoring_contract, test_award_review_issue,
+        )
+        from backend.services.rubric_drafts import ProgrammingScoringPolicy
+
+        programming = is_programming_question_type(candidate_type)
+        prior_programming_draft = saved_draft(problem_from_question(question)) if programming else None
         programming_draft = None
-        if (is_programming_question_type(candidate_type)
+        programming_policy = None
+        if "programming_scoring" in patch:
+            if not programming:
+                raise ValidationError("Test allocation is only available for programming questions.",
+                                      code="invalid_programming_test_award")
+            try:
+                programming_policy = ProgrammingScoringPolicy.model_validate(patch["programming_scoring"])
+            except ValueError as exc:
+                raise ValidationError("Select the test points and provide the separate input rules.",
+                                      code="invalid_programming_test_award") from exc
+        elif programming and (
+            ("criterion" in patch and (patch["criterion"] != question.criterion or prior_programming_draft is None))
+            or patch.get("max_score", question.max_score) != question.max_score
+        ):
+            raise ValidationError("Save the test allocation with the code rubric.", code="programming_test_award_required")
+        if (programming and programming_policy is None
                 and candidate_type == normalize_question_type(question.type)
                 and all(patch.get(key, getattr(question, key)) == getattr(question, key)
                         for key in ("stem", "criterion", "max_score"))
                 and not patch.get("alternative_rule_edits")):
-            # Confirmation and reference-answer edits do not change the frozen
-            # test/code budgets. Verify the old binding before retaining it.
-            programming_draft = saved_draft(problem_from_question(question))
+            # Confirmations and reference-answer edits retain only an existing
+            # verified rule. They do not infer a missing test allocation.
+            programming_draft = prior_programming_draft
+        if programming and programming_draft is None and has_saved_scoring_contract(presentation):
+            presentation["programming_scoring_required"] = True
+        elif not programming:
+            presentation.pop("programming_scoring_required", None)
         if candidate_type and not uses_math_grading(candidate_type) and programming_draft is None:
             for key in ("rubric_draft", "alternative_rules", "rubric_schema_version"):
                 presentation.pop(key, None)
@@ -5860,6 +5955,13 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 and (issue.get("details") or {}).get("reason") == "invalid_structured_rubric"
                 else issue for issue in presentation.get("preparation_issues", [])
             ]
+        # A saved or echoed diagnostic cannot decide confirmation after the
+        # rubric or its evidence changes. Match the review page's current view.
+        presentation["preparation_issues"] = current_programming_test_issues(
+            presentation.get("preparation_issues", []),
+            {**presentation, "type": candidate_type, "test_cases": patch.get("test_cases", question.test_cases)},
+            question.q_id,
+        )
         if patch.get("review_status") == "confirmed":
             fields = {"stem", "answer", "rubric", "programming_tests", "source", "max_score"}
             issues = presentation.get("preparation_issues", [])
@@ -5950,11 +6052,31 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                                   previous=previous_problem, allow_pending=changed_rule)
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
+        if programming_policy is not None:
+            try:
+                programming_draft = compile_programming_scoring(
+                    problem_from_question(question), programming_policy,
+                    previous=prior_programming_draft.plan if prior_programming_draft else None,
+                )
+            except ValueError as exc:
+                raise ValidationError(
+                    "Enter the test points separately and write a code rubric for the remaining points.",
+                    code="invalid_programming_test_award",
+                ) from exc
         if programming_draft is not None:
             presentation["rubric_draft"] = retarget_draft(
                 programming_draft, problem_from_question(question),
             ).model_dump(mode="json")
             question.source = {**source, "presentation": presentation}
+        if programming_policy is not None:
+            if saved_draft(problem_from_question(question)) is None:
+                raise ValidationError("The test allocation could not be bound to this rubric.",
+                                      code="invalid_programming_test_award")
+            if presentation.pop("programming_scoring_required", None):
+                question.source = {**source, "presentation": presentation}
+        if (patch.get("review_status") == "confirmed" and programming
+                and test_award_review_issue(question, programming_draft)):
+            raise ValidationError("Fix the failed recognition or required material before confirming.", code="question_review_blocked")
         if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
             candidate = problem_from_question(question)
             prior = saved_draft(prior_problem, allow_incomplete_alternative=True)

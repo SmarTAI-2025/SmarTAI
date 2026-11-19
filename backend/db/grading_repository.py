@@ -17,10 +17,12 @@ and a teacher decision for provisional programming grades.
 """
 from __future__ import annotations
 
+import logging
+import math
 import time
 import uuid
-import math
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import JSON, case, exists, func, literal, select, update
 
 from backend.db.models import (
@@ -47,6 +49,10 @@ from backend.domain.errors import (
     ValidationError,
     VersionConflict,
 )
+
+
+GRADING_INTERRUPTED = "grading_execution_interrupted"
+logger = logging.getLogger(__name__)
 
 
 def _new_run_id() -> str:
@@ -826,6 +832,17 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             # task cannot acquire new result state while deletion is draining.
             raise LeaseLost("task_deleted")
 
+        if error_message == GRADING_INTERRUPTED:
+            from backend.services.grading_checkpoints import CheckpointWriteError, persist_paused_results
+
+            try:
+                with session.begin_nested():
+                    persist_paused_results(session, record)
+            except (CheckpointWriteError, PydanticValidationError) as exc:
+                # Incompatible evidence must not keep the dead run active.
+                logger.warning("Could not recover interrupted grading results; run=%s type=%s",
+                               run_id, type(exc).__name__)
+
         workflow_values = {
             "presentation_status": (
                 "error"
@@ -1422,7 +1439,8 @@ def list_results_for_review(assignment_id: str) -> list[education.GradeResultDTO
             .order_by(GradeResultRecord.created_at)
         ).all()
         reviews = _latest_reviews_by_result(session, [r.id for r in records])
-        return [_result_to_dto(r, reviews.get(r.id)) for r in records]
+        results = [_result_to_dto(r, reviews.get(r.id)) for r in records]
+        return [result for result in results if result.result_status in education.REVIEW_QUEUE_RESULT_STATUSES]
 
 
 def _review_to_dto(record: TeacherReviewRecord) -> education.TeacherReviewDTO:
@@ -1461,6 +1479,14 @@ def _result_to_dto(record: GradeResultRecord,
 
     ai_score = round_ai_score(record.ai_score, record.ai_max_score, record.ai_steps)
     review_dto = _review_to_dto(review) if review is not None else None
+    # Keep stored votes intact. The obsolete source-only flag no longer
+    # makes a valid result pending in the current review policy.
+    retired = "programming_ai_only"
+    reasons = [reason for reason in record.review_reasons or [] if reason != retired]
+    initial_reasons = [reason for reason in record.initial_review_reasons or [] if reason != retired]
+    retired_only = (ai_score is not None and retired in (record.review_reasons or [])
+                    and not reasons and record.result_status == education.GradeResultStatus.NEEDS_REVIEW.value)
+    retired_initial = retired in (record.initial_review_reasons or []) and not initial_reasons
     return education.GradeResultDTO(
         id=record.id,
         grading_run_id=record.grading_run_id,
@@ -1475,11 +1501,11 @@ def _result_to_dto(record: GradeResultRecord,
         ai_confidence=record.ai_confidence,
         ai_expert_results=list(record.ai_expert_results or []),
         ai_synthesis_method=record.ai_synthesis_method,
-        requires_review=record.requires_review,
-        review_reasons=list(record.review_reasons or []),
-        initial_requires_review=record.initial_requires_review,
-        initial_review_reasons=list(record.initial_review_reasons or []),
-        result_status=record.result_status,
+        requires_review=record.requires_review and not retired_only,
+        review_reasons=reasons,
+        initial_requires_review=record.initial_requires_review and not retired_initial,
+        initial_review_reasons=initial_reasons,
+        result_status=education.GradeResultStatus.GRADED.value if retired_only else record.result_status,
         effective_score=review.new_score if review is not None else ai_score,
         effective_comment=review.new_comment if review is not None else (record.ai_comment or ""),
         teacher_review=review_dto.model_dump() if review_dto is not None else None,

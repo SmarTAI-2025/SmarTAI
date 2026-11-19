@@ -18,7 +18,7 @@ import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { MatrixStatusCell, type MatrixStatusTone } from "@/components/tasks/MatrixStatusCell";
 import { getMatrixIdentityLayout, MATRIX_ACTION_COLUMN_WIDTH, MATRIX_QUESTION_COLUMN_WIDTH } from "@/components/tasks/matrixLayout";
-import { correctionReviewReasonIds, pendingScoreReview, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
+import { correctionReviewReasonIds, pendingScoreReview, programmingAdvisoryReasons, reviewReasonLabel, buildResultsModel, hasPartialExperts, hasUnknownConfidence, effectiveCorrectionScore, formatConfidence, formatPercent, mathReviewLabels, type QuestionSummary, type ResultsModel, type StudentSummary } from "@/components/tasks/resultsModel";
 import { collectOverviewReviewItems, correctionReviewNotes, type ReviewItem } from "@/components/tasks/resultsReviewModel";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale } from "@/i18n/messages";
@@ -430,20 +430,28 @@ function ReviewCell({ locale, href, correction, item, annotated, confirmed, ques
   const scoreDetail = displayScore !== null && correction.max_score > 0
     ? `${formatPercent((displayScore / correction.max_score) * 100)} · `
     : "";
-  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}${item ? ` · ${queueReason(locale, item)}` : ""}`;
+  const reason = state === "hard" || state === "review"
+    ? correctionQueueReason(correction, locale, state === "hard" ? "blocking" : "advisory", item) : undefined;
+  const detail = `${question?.label ?? correction.q_id} · ${scoreDetail}${formatConfidence(correction.confidence)}${reason ? ` · ${reason}` : ""}`;
   const tone: MatrixStatusTone = state === "hard" ? "error" : state === "confirmed" ? "reviewed" : state === "review" ? "warning" : "ok";
   return <MatrixStatusCell to={href} label={`${label} · ${detail}`} tone={tone} />;
 }
 
+function correctionQueueReason(correction: Correction, locale: Locale, severity: "blocking" | "advisory", item?: ReviewItem) {
+  const notes = correctionReviewNotes(correction, locale, true);
+  const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
+  if (reasons.length) return reasons.join(" · ");
+  if (!notes.length && item?.severity === severity) return queueReason(locale, item);
+}
+
 function ReviewQueue({ locale, taskId, items, returnTo, confirmation }: { confirmation: React.ReactNode; locale: Locale; taskId: string; items: ReviewItem[]; returnTo: string }) {
   return <ReviewQueuePanel locale={locale} confirmation={confirmation} items={items.flatMap(item => {
-    const notes = correctionReviewNotes(item.correction, locale);
     return (["blocking", "advisory"] as const).flatMap(severity => {
-      const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
-      if (!reasons.length && (notes.length || item.severity !== severity)) return [];
+      const reason = correctionQueueReason(item.correction, locale, severity, item);
+      if (!reason) return [];
       return [{
         key: `${reviewCellKey(item.student.id, item.question.id)}:${severity}`, title: `${item.student.name} · ${item.question.label}`,
-        reason: reasons.length ? reasons.join(" · ") : queueReason(locale, item), severity,
+        reason, severity,
         href: reviewDetailHref(taskId, item.student.id, item.question.id, returnTo),
       }];
     });
@@ -469,7 +477,8 @@ function PageState({ title, description, busy = false, action, href, onAction }:
 function queueReason(locale: Locale, item: ReviewItem): string {
   const pendingScore = pendingScoreReview(item.correction);
   if (pendingScore) return reviewReasonLabel(pendingScore, locale);
-  if (item.severity === "advisory" && correctionReviewReasonIds(item.correction).includes("programming_extra_boundary")) return reviewReasonLabel("programming_extra_boundary", locale);
+  const [programmingAdvisory] = programmingAdvisoryReasons(item.correction);
+  if (item.severity === "advisory" && programmingAdvisory) return reviewReasonLabel(programmingAdvisory, locale);
   if (correctionReviewReasonIds(item.correction).includes("grading_paused") && effectiveCorrectionScore(item.correction) === null)
     return locale === "zh-CN" ? "已暂停尚未批改 · 请人工补齐" : "Paused, ungraded · complete manually";
   if (effectiveCorrectionScore(item.correction) === null) return locale === "zh-CN" ? "缺少有效分数 · 需处理" : "Missing valid score · action required";

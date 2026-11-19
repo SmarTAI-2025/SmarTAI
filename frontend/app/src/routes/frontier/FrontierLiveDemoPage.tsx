@@ -47,6 +47,9 @@ import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { SyntaxHighlightedCode } from "@/components/ui/SyntaxHighlightedCode";
 import { PdfDocumentPreview } from "@/components/tasks/PdfDocumentPreview";
 import { recognitionEventText } from "@/components/tasks/RecognitionActivity";
+import type { WorkflowTimeoutMinutes } from "@/types/health";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
+import { isWorkflowTimeout } from "@/lib/workflowTimeouts";
 import { gradingActivityText } from "@/components/tasks/GradingActivity";
 import { buildResultsModel, formatPercent, formatScore, problemLabel } from "@/components/tasks/resultsModel";
 import { useI18n } from "@/i18n/I18nProvider";
@@ -54,7 +57,7 @@ import type { Locale } from "@/i18n/messages";
 import { cn } from "@/lib/cn";
 import { getFrontierGeneration, isFrontierExitPending, isFrontierTaskPath, rememberFrontierTask } from "@/lib/frontierSession";
 import { answerReviewNextBlocked, submissionReviewBlockers, questionReviewBlockers, type ReviewBlocker } from "@/lib/reviewConfirmation";
-import { formatSubmissionFlag } from "@/lib/submissionReview";
+import { answerReviewQueueReason } from "@/lib/submissionReview";
 import { gradingProgressText } from "@/lib/gradingProgressCopy";
 import { DemoContentTabs, type DemoContentStage } from "./DemoContentTabs";
 import "./frontier.css";
@@ -99,6 +102,7 @@ export function FrontierLiveDemoPage() {
   const taskIdFromUrl = safeTaskId(searchParams.get("taskId"));
   const [taskId, setTaskId] = useState<string | null>(taskIdFromUrl);
   const [snapshot, setSnapshot] = useState<TaskStateSnapshot | null>(null);
+  const limits = useWorkflowTimeouts(isWorkflowTimeout(snapshot?.progress?.messages?.at(-1)?.message));
   const [steps, setSteps] = useState<RunStep[]>(() => initialSteps(locale));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string | null } | null>(null);
@@ -631,7 +635,13 @@ export function FrontierLiveDemoPage() {
           ) : error ? (
             <RecoverableActionState locale={locale} className="mt-5"
               info={{
-                ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, { locale, taskId: taskId ?? undefined, jobId: snapshot?.grading_job_id ?? undefined, phase: snapshot?.progress?.current_step ?? undefined }),
+                ...classifyRecoverableError(error.code ?? snapshot?.error ?? error.message, {
+                  locale,
+                  taskId: taskId ?? undefined,
+                  jobId: snapshot?.grading_job_id ?? undefined,
+                  phase: snapshot?.progress?.current_step ?? undefined,
+                  providerFailures: snapshot?.progress?.provider_failures,
+                }),
               }}
               primaryAction={{ label: tx(locale, "重试失败项", "Retry failed items"), onClick: () => void retryFailedItems(), busy }}
             />
@@ -682,7 +692,7 @@ export function FrontierLiveDemoPage() {
               <div role="progressbar" aria-label={tx(locale, "当前处理进度", "Current processing progress")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={progressPercent(snapshot)} className="mt-3 h-2 overflow-hidden rounded-full bg-muted">
                 <span className="block h-full rounded-full bg-primary transition-[width] duration-500" style={{ width: `${progressPercent(snapshot)}%` }} />
               </div>
-              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale)}</p>
+              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-muted-foreground">{latestProgressMessage(snapshot, locale, limits)}</p>
             </div>
           ) : null}
 
@@ -771,7 +781,7 @@ function SubmissionRecognitionReview({ task, locale, busy, blocked, canStart, on
                 <div key={answer.q_id} className="rounded-md bg-muted/45 px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-primary">{studentAnswerLabel(answer)}</span>
-                    {answerReviewNextBlocked(answer) ? <span className="text-[10px] font-medium text-warning">{answer.flag.map(flag => formatSubmissionFlag(flag, locale)).join(" · ")}</span> : null}
+                    {answerReviewNextBlocked(answer) ? <span className="text-[10px] font-medium text-warning">{answerReviewQueueReason(answer, locale, "blocking")}</span> : null}
                   </div>
                   <MarkdownMath className="mt-1 max-h-28 overflow-auto text-[11px] leading-5 text-foreground">{answer.content}</MarkdownMath>
                 </div>
@@ -830,7 +840,7 @@ function DemoResultInsights({ result, taskId, locale }: { result: TaskResultResp
       <LiveResultCarousel model={model} locale={locale} />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-[10px] bg-muted/60 px-4 py-3 text-xs text-foreground">
-        <span>{tx(locale, `有 ${model.reviewCount} 个题次需要关注，可查看复核详情。`, `${model.reviewCount} responses need attention. See the review details.`)}</span>
+        <span>{tx(locale, `${model.reviewCount} 个题次待复核。`, `${model.reviewCount} responses to review.`)}</span>
         <span className="font-semibold text-primary">{tx(locale, `班级平均 ${formatScore(model.classAverageScore)} 分`, `Class mean ${formatScore(model.classAverageScore)} points`)}</span>
       </div>
     </section>
@@ -1213,14 +1223,14 @@ function progressPercent(snapshot: TaskStateSnapshot) {
   return total > 0 ? Math.max(4, Math.min(100, Math.round((progress.completed_units / total) * 100))) : progress.phase === "done" ? 100 : 8;
 }
 
-function latestProgressMessage(snapshot: TaskStateSnapshot, locale: Locale) {
+function latestProgressMessage(snapshot: TaskStateSnapshot, locale: Locale, limits?: WorkflowTimeoutMinutes) {
   const progress = snapshot.progress;
   if (isTaskPaused(snapshot.status)) return tx(locale, "本次处理已停止", "This run has stopped");
   if (snapshot.status === "graded" || snapshot.status === "finalized") return gradingProgressText(locale, "completed");
   if (progress?.activity_latest || snapshot.status === "grading") {
     return gradingActivityText(progress?.activity_latest, progress?.model_progress ?? [], locale === "zh-CN");
   }
-  return recognitionEventText(progress?.messages?.at(-1), locale === "zh-CN");
+  return recognitionEventText(progress?.messages?.at(-1), locale === "zh-CN", false, limits);
 }
 
 function stepsFromSnapshot(snapshot: TaskStateSnapshot, locale: Locale): RunStep[] {

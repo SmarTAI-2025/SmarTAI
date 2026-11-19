@@ -188,9 +188,10 @@ describe("QuestionPreparationOverviewPage smart search", () => {
     renderPage("/tasks/task-1/questions");
 
     expect(screen.getByRole("columnheader", { name: "满分" })).toBeInTheDocument();
-    expect(screen.getByTitle("系统默认，需确认")).toHaveTextContent("10 分");
+    const scoreCell = screen.getByRole("cell", { name: "10 分" });
+    const defaultScore = within(scoreCell).getByTitle(/^当前使用默认 10 分，请确认题目满分/);
     expect(screen.getByText(/作业总分 16/)).toBeInTheDocument();
-    expect(screen.getByTitle("系统默认，需确认")).toHaveClass("bg-amber-100");
+    expect(defaultScore).toHaveClass("bg-amber-100");
     expect(screen.getByRole("region", { name: "待复核队列" })).toHaveTextContent("建议处理 (2)");
     expect(screen.getAllByRole("row")).toHaveLength(3);
     expect(screen.queryByRole("row", { name: /\(a\)/ })).not.toBeInTheDocument();

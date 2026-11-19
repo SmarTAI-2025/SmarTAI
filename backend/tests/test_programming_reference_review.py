@@ -137,12 +137,15 @@ def test_dictionary_value_order_is_not_erased_by_input_identity():
 def test_rounded_test_award_obeys_the_existing_full_credit_contract():
     from backend.services.programming_rubric import settle_test_award
     from backend.skills.programming import ProgrammingGradingOutput, _validate_awards
+    from backend.tools.code_interpreter import ExecutionReport, TestResult as Observation
     rows = [(SimpleNamespace(id="p1"), SimpleNamespace(id="tests", test_suite=True, total_pts=.01)),
             (SimpleNamespace(id="p1"), SimpleNamespace(id="code", test_suite=False, total_pts=.99))]
     output = ProgrammingGradingOutput(steps=[
         dict(step_no=1, score=.01, max_points=.01, is_correct=True, desc="Tests"),
         dict(step_no=2, score=.99, max_points=.99, is_correct=True, desc="Code")], max_score=1, confidence=.9)
-    settle_test_award(output, rows, SimpleNamespace(report=SimpleNamespace(passed_count=9, total_count=10)), "zh")
+    report = ExecutionReport(9, 10, .9, [Observation(TestCase(), i < 9, "", "", 1,
+        exit_reason="success" if i < 9 else "wrong_answer") for i in range(10)])
+    settle_test_award(output, rows, SimpleNamespace(report=report), "zh")
     _validate_awards(output, 1)
     assert output.score == 1 and output.steps[0].is_correct
     assert "9/10" in output.steps[0].desc

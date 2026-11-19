@@ -137,6 +137,12 @@ def create_app() -> FastAPI:
             "engine": engine,
             "memory_usage_mb": round(memory_info.rss / 1024 / 1024, 2),
             "cpu_percent": process.cpu_percent(),
+            "workflow_timeout_minutes": {
+                "question_preparation": settings.question_preparation_timeout_minutes,
+                "submission_recognition": settings.submission_recognition_timeout_minutes,
+                "grading": settings.grading_timeout_minutes,
+                "knowledge_ingestion": settings.knowledge_ingestion_timeout_minutes,
+            },
         }
 
     @app.get("/ready")

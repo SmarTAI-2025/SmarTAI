@@ -1,28 +1,28 @@
 """Settle an explicitly frozen aggregate test award without another model call."""
 from decimal import Decimal, ROUND_HALF_UP
 
+from backend.models import ScoreAward
 from backend.services.rubric_drafts import saved_draft
 from backend.tools.structured_llm import StructuredOutputInvalidError
 
 
 def domain_criterion(problem):
     draft = saved_draft(problem)
-    if draft and draft.plan.part_rubric and any(
-        step.test_suite for part in draft.plan.part_rubric.parts for step in part.steps
-    ):
-        # The server-rendered score formula is not an input constraint. Only
-        # the original teacher rubric may constrain inputs beyond the stem.
+    if draft and draft.programming_scoring is not None:
+        return draft.programming_scoring.input_rules
+    if draft and verified_test_points(draft.plan) is not None:
         return draft.plan.part_rubric.teacher_rubric or ""
     return problem.criterion
 
 
 def frozen_programming_steps(problem):
     draft = saved_draft(problem)
-    if not draft or not draft.plan.part_rubric:
+    if not draft:
         presentation = (getattr(problem, "_math_rubric_source", {}) or {}).get("presentation") or {}
-        rules = ((presentation.get("rubric_draft") or {}).get("plan") or {}).get("part_rubric") or {}
-        if any(step.get("test_suite") is True for part in rules.get("parts", []) for step in part.get("steps", [])):
+        if has_saved_scoring_contract(presentation):
             raise ValueError("programming_case_configuration_invalid")
+        return []
+    if not draft.plan.part_rubric:
         return []
     rows = [(part, step) for part in draft.plan.part_rubric.parts for step in part.steps]
     if not any(step.test_suite for _, step in rows):
@@ -73,9 +73,35 @@ def distinct_scoring_cases(problem, originals, cases):
 
 
 def suite_award(maximum, report):
+    return float(_suite_points(maximum, report.passed_count, report.total_count))
+
+
+def _suite_points(maximum, passed, total):
     budget = Decimal(str(maximum))
-    return float(min(budget, (budget * report.passed_count / report.total_count).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP)))
+    return min(budget, (budget * passed / total).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _suite_case_awards(maximum, run, language):
+    from backend.skills.programming_evidence import _failure_reason, _STUDENT_FAILURES
+
+    report = run.report
+    positions = (getattr(run, "domain_review", None) or {}).get("positions")
+    subtotal, passed = Decimal(0), 0
+    awards, failed = [], []
+    for index, result in enumerate(report.results):
+        number = positions[index] if positions else index + 1
+        label = f"样例 {number}" if language == "zh" else f"Case {number}"
+        passed += int(result.passed)
+        points = _suite_points(maximum, passed, report.total_count)
+        if not result.passed:
+            reason = _STUDENT_FAILURES[_failure_reason(result)][0 if language == "zh" else 1]
+            label = f"{label}（{reason}）" if language == "zh" else f"{label} ({reason})"
+            failed.append(label)
+        # Allocate display rounding cumulatively so the case awards match the suite subtotal.
+        awards.append(ScoreAward(item_id=f"case-{number}", desc=label,
+                                 points=float(points - subtotal), is_correct=result.passed))
+        subtotal = points
+    return awards, failed
 
 
 def settle_test_award(output, rows, run, language):
@@ -89,6 +115,7 @@ def settle_test_award(output, rows, run, language):
         if award.max_points != step.total_pts:
             raise StructuredOutputInvalidError("Preserve each frozen programming item budget.")
         award.part_id, award.item_id = part.id, step.id
+        award.awards = award.deductions = None
         if step.test_suite:
             award.score = suite_award(step.total_pts, run.report)
             award.is_correct = award.score == step.total_pts
@@ -96,5 +123,122 @@ def settle_test_award(output, rows, run, language):
             award.desc = (f"测试通过 {run.report.passed_count}/{run.report.total_count}，本项得 {award.score:g}/{step.total_pts:g} 分。"
                           if language == "zh" else
                           f"Tests passed {run.report.passed_count}/{run.report.total_count}; awarded {award.score:g}/{step.total_pts:g} points.")
+            award.awards, failed = _suite_case_awards(step.total_pts, run, language)
+            if failed:
+                award.desc += (" 失败样例：" + "、".join(failed) if language == "zh"
+                               else " Failed cases: " + ", ".join(failed) + ".")
     output.steps = [awards[index] for index in sorted(awards)]
     output.score = float(sum((Decimal(str(step.score)) for step in output.steps), Decimal(0)))
+
+
+def verified_test_points(plan):
+    rules = plan.part_rubric if plan else None
+    if not rules or any(part.deductions for part in rules.parts):
+        return None
+    steps = [step for part in rules.parts for step in part.steps]
+    suites = [step.total_pts for step in steps if step.test_suite]
+    return suites[0] if len(suites) == 1 and len(steps) > 1 else None
+
+
+def compile_programming_scoring(problem, policy, *, previous=None):
+    """Compile the selected suite budget and the code rubric atomically."""
+    from backend.services.math_rubric_plan import MathRubricRoute, _source_requirements
+    from backend.services.rubric_drafts import RubricDefinition, generated_rubric
+
+    raw = {**problem._math_rubric_source.get("presentation", {}), **problem.model_dump()}
+    if not (problem.criterion or "").strip():
+        raise ValueError("A programming rubric requires code scoring rules.")
+    if not policy.test_points:
+        # Preserve code-only rules such as deductions in the existing prose
+        # scoring path. No executable suite award is needed for a zero budget.
+        definition = RubricDefinition(routes=(MathRubricRoute(
+            id="code", description="Apply the original code scoring rules.",
+            applies_when="always", mode="holistic",
+        ),))
+        _, draft = generated_rubric(raw, definition)
+        return type(draft).model_validate({**draft.model_dump(), "programming_scoring": policy})
+    code_budget = Decimal(str(problem.max_score)) - Decimal(str(policy.test_points))
+    if code_budget <= 0 or (raw.get("question_structure") or {}).get("subparts"):
+        raise ValueError("A programming rubric requires a positive code allocation for the question.")
+
+    # Point items in the text are code items. A prose-only code rubric uses
+    # the entire remaining budget as one item. The suite comes from the field.
+    floors, awards = _source_requirements(raw)
+    if floors or any(mode != "points" or points <= 0 for _, mode, points in awards):
+        raise ValueError("Use positive code point items.")
+    if awards and sum((points for _, _, points in awards), Decimal(0)) != code_budget:
+        raise ValueError("The code items must add up to the remaining code points.")
+    steps = [{"id": "tests", "criterion": "Test suite", "total_pts": policy.test_points, "test_suite": True}]
+    steps.extend(
+        {"id": f"code-{index}", "criterion": quote, "source_quote": quote, "total_pts": float(points)}
+        for index, (quote, _, points) in enumerate(awards, 1)
+    )
+    if not awards:
+        steps.append({"id": "code-1", "criterion": problem.criterion.strip(), "total_pts": float(code_budget)})
+
+    old_rules = previous.part_rubric if previous else None
+    rate = old_rules.parts[0].alternative.deduct_per_error if old_rules else None
+    definition = RubricDefinition.model_validate({"part_rubric": {
+        "id": problem.q_id, "label": problem.number, "stem": problem.stem, "total_pts": problem.max_score,
+        "rubric_version": old_rules.rubric_version + 1 if old_rules else 1,
+        "parts": [{"id": "p1", "total_pts": problem.max_score, "steps": steps,
+                   "alternative": {"deduct_per_error": min(rate or 1, problem.max_score)}}]}})
+    _, draft = generated_rubric(raw, definition)
+    return type(draft).model_validate({**draft.model_dump(), "programming_scoring": policy})
+
+
+def programming_scoring_for_review(question, draft):
+    if draft and draft.programming_scoring is not None:
+        return {**draft.programming_scoring.model_dump(), "code_criterion": question.criterion}
+    points = verified_test_points(draft.plan if draft else None)
+    if points is not None:
+        rules = draft.plan.part_rubric
+        # Old generated rubrics contain the suite in the editor text.
+        # Prefill its verified amount and the remaining code items.
+        code_criterion = "\n".join(
+            step.source_quote or f"- [{step.total_pts:g} points] {step.criterion}"
+            for part in rules.parts for step in part.steps if not step.test_suite
+        )
+        return {"test_points": points, "code_criterion": code_criterion, "input_rules": ""}
+    # No trustworthy split yet. Show the old text in the code editor for
+    # review, without automatically using it as the new input contract.
+    return {"test_points": None, "code_criterion": question.criterion or "", "input_rules": ""}
+
+
+def has_saved_scoring_contract(presentation):
+    if presentation.get("programming_scoring_required"):
+        return True
+    draft = presentation.get("rubric_draft") or {}
+    if not isinstance(draft, dict):
+        return False
+    if draft.get("programming_scoring") is not None:
+        return True
+    plan = draft.get("plan")
+    rules = plan.get("part_rubric") if isinstance(plan, dict) else None
+    parts = rules.get("parts") if isinstance(rules, dict) else None
+    return isinstance(parts, list) and any(
+        isinstance(step, dict) and step.get("test_suite") is True
+        for part in parts if isinstance(part, dict) and isinstance(part.get("steps"), list)
+        for step in part["steps"]
+    )
+
+
+def test_award_review_issue(question, draft, issues=()):
+    plan = draft.plan if draft else None
+    if verified_test_points(plan) is None:
+        if draft and draft.programming_scoring is not None and draft.programming_scoring.test_points == 0:
+            return None
+        presentation = (question.source or {}).get("presentation") or {}
+        if not has_saved_scoring_contract(presentation):
+            return None
+        field, reason = "rubric", "programming_test_award_unset"
+    elif not question.test_cases:
+        if any(issue.get("field") == "programming_tests" and issue.get("status") == "open"
+               and issue.get("severity") == "blocking" for issue in issues):
+            return None
+        field, reason = "programming_tests", "required_programming_tests_missing"
+    else:
+        return None
+    return {"issue_id": f"programming-{field}:{question.q_id}", "q_id": question.q_id,
+            "field": field, "code": "generation_failed", "status": "open", "severity": "blocking",
+            "source_tokens": [], "details": {"reason": reason}}

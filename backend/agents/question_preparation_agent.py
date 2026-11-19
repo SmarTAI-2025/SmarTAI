@@ -951,6 +951,8 @@ async def prepare_question_packages(
                 "generated_at": now,
                 "updated_at": now,
             }
+            if candidate.input_review_fingerprint:
+                provenance[candidate.target]["input_review_fingerprint"] = candidate.input_review_fingerprint
             problem["ai_completion_provenance"] = provenance
         for target in requested_targets:
             if target["target_id"] in generated_target_ids:

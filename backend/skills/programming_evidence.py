@@ -6,6 +6,7 @@ import re
 import signal
 from collections import Counter
 
+from backend.domain.grading_review import programming_interface_only
 from backend.models import ProblemInfo, ProgrammingEvidence, ProgrammingTestCounts
 from backend.services.programming_test_contract import required_function_name
 
@@ -290,14 +291,9 @@ def describe_run(run, language, problem: ProblemInfo):
             for d in representatives[:_MAX_CASE_EXAMPLES]
         )
         fragments.append(("失败示例：" if language == "zh" else "Failed cases: ") + failures)
-    ai_only = not teachers.total
-    if ai_only:
-        fragments.append("仅有 AI 生成用例，建议教师复核" if language == "zh"
-                         else "Only AI-generated expectations were tested. Teacher review recommended.")
     # An entry/argument error can verify the interface deduction but gives no
     # observed result for the algorithm. Preserve the teacher's process credit.
-    interface_only = not passed and bool(teachers.total) and set(failure_counts) <= {"target_function_missing", "signature_mismatch"}
-    if interface_only:
+    if programming_interface_only(failure_counts, teachers.passed + generated.passed):
         fragments.append("所有样例都未能调用指定函数，请核对实现思路应得的分数" if language == "zh"
                          else "No test could call the required function. Review any credit for the implementation.")
     first = next((d for d in representatives if d["source"] == "teacher"),
@@ -307,9 +303,9 @@ def describe_run(run, language, problem: ProblemInfo):
         primary = "teacher_case_failed"
     return ProgrammingEvidence(
         evidence_id=run.evidence_id, mapping_status="valid", execution_status="executed",
-        score_status="provisional" if ai_only or interface_only else "final", isolation_mode=modes.pop(),
+        score_status="final", isolation_mode=modes.pop(),
         teacher_tests=teachers, generated_tests=generated, failure_counts=dict(failure_counts),
-        primary_reason=primary, requires_human_review=ai_only or interface_only, safe_summary=" · ".join(fragments),
+        primary_reason=primary, requires_human_review=False, safe_summary=" · ".join(fragments),
     ), (representatives + repeated + passed)[:_MAX_CASE_EXAMPLES]
 
 

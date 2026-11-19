@@ -12,6 +12,8 @@ import type { Locale } from "@/i18n/messages";
 import type { RecoverableErrorInfo } from "@/lib/taskActionGuards";
 import { cn } from "@/lib/cn";
 import { ProviderUsageLink, type ProviderUsageContext } from "@/components/models/ProviderUsageLink";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
+import { workflowTimeoutNote } from "@/lib/workflowTimeouts";
 
 export interface RecoveryAction {
   label: string;
@@ -46,6 +48,7 @@ export function RecoverableActionState({
   locale?: Locale;
   className?: string;
 }) {
+  const limits = useWorkflowTimeouts(Boolean(info.workflowTimeoutCode));
   const stopped = info.technicalDetails.some((item) => item.value === "operation_cancelled");
   // Diagnostic values still drive recovery above; only useful limits appear in the UI.
   const detailLabels = locale === "en-US"
@@ -97,7 +100,7 @@ export function RecoverableActionState({
             ) : null}
           </div>
           <p className={cn("text-muted-foreground", compact ? "mt-1 text-xs leading-5" : "mt-2 max-w-2xl text-sm leading-6")}>
-            {info.description}
+            {info.description}{workflowTimeoutNote(info.workflowTimeoutCode, locale, limits)}
           </p>
 
           {info.showUsageLinks && usageContext ? <ProviderUsageLink context={usageContext} locale={locale} /> : null}
