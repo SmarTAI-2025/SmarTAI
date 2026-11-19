@@ -414,6 +414,7 @@ export function mathReviewLabels(correction: Correction, locale: Locale): string
 
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   const english: Record<string, string> = {
+    code_output_unavailable: "The program output or its score could not be verified. Please grade this answer manually.",
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",
     high_indecisiveness: "Experts disagree", low_confidence: "Low confidence", score_spread_high: "Large score difference",
     confidence_unavailable: "Confidence not provided; review suggested.",
@@ -436,6 +437,7 @@ export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
   };
   if (locale === "en-US") return english[reason] ?? "Please review this item";
   const labels: Record<string, string> = {
+    code_output_unavailable: "无法核实程序输出或对应得分，请人工评分。",
     grading_paused: "已暂停，批改未完成",
     partial_experts: "部分专家完成",
     high_indecisiveness: "专家分歧较大",

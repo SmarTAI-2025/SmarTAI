@@ -503,6 +503,8 @@ def score_assessment(assessment: MathAssessment, plan, answer: str, *, problem_t
     if plan.part_rubric is not None:
         if assessment.route_id != "parts" or assessment.awards or assessment.deductions:
             raise ValueError("Use the frozen parts only, without a second question-level ledger.")
+        from backend.services.code_output_grading import apply_output_step
+        apply_output_step(assessment, plan)
         return settle_parts(plan.part_rubric, assessment.part_decisions, answer, problem_text)
     claims = _claim_map(assessment, answer, plan, problem_text=problem_text)
     if answer.strip() and not claims:
@@ -1596,13 +1598,15 @@ class MathGradingSkill(GradingSkill):
     def _prompt(self, problem, answer, plan, context):
         # There is one maintained prompt per specialization, no embedded old
         # prompt or legacy scoring branch to become a silent fallback.
+        from backend.services.code_output_grading import output_step_instruction
         from backend.services.count_witnesses import marked_counts, submitted_count_checks
         from backend.services.growth_order import ordered_growth_classes
         checks = marked_counts(problem.stem)
         growth = ordered_growth_classes(problem.stem)
         template = (Path(__file__).resolve().parents[1] / "prompts" /
                     f"{self.template_name}.txt").read_text(encoding="utf-8")
-        return ("" if plan.part_rubric else template + "\n" + LEDGER_INSTRUCTION) + _generated_proof_guidance(problem) + "\nINPUT DATA:\n" + _json({
+        guidance = output_step_instruction(plan) or _generated_proof_guidance(problem)
+        return ("" if plan.part_rubric else template + "\n" + LEDGER_INSTRUCTION) + guidance + "\nINPUT DATA:\n" + _json({
             "problem": problem.stem, "reference_answer": problem.reference_answer,
             "student_answer": answer.content,
             **({"source_supplied_correspondence": notation}

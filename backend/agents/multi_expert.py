@@ -159,8 +159,44 @@ async def run_multi_expert(**kwargs) -> Correction:
             await review_partial_score(correction, state=state, problem=kwargs["problem"], answer=kwargs["answer"],
                                        student_id=kwargs["student_id"], language=language, reporter=kwargs.get("reporter"))
             return correction
+    from backend.domain.code_output import code_output_data
+
+    problem = kwargs["problem"]
     with math_review_scope():
-        return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=kwargs["problem"])
+        if code_output_data(problem):
+            return await _grade_code_output(**kwargs)
+        return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=problem)
+
+
+async def _grade_code_output(**kwargs):
+    from backend.services.code_output_answers import explanation_stdout
+    from backend.services.code_output_grading import (
+        CodeOutputUnavailable, _output_correction, grade_blanks, grade_choices,
+        observed_output, output_step, unavailable_output,
+    )
+    from backend.services.math_grading_context import scoring_plan
+    from backend.services.programming_runs import programming_run
+    from backend.tools.code_interpreter import compare_stdout
+
+    problem, answer = kwargs["problem"], kwargs["answer"]
+    language = kwargs.get("language", "en")
+    try:
+        with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
+            source, stdout = await observed_output(state, problem, kwargs.get("reporter"))
+        if not answer.content.strip() and answer.flag:
+            raise CodeOutputUnavailable()
+        if source.form == "choice":
+            return grade_choices(problem, source, stdout, answer.content, language)
+        if source.form == "blank":
+            return grade_blanks(problem, source, stdout, answer.content, language)
+        if not answer.content.strip():
+            return _output_correction(problem, [(0, False, "")], language)
+        value, evidence = explanation_stdout(answer.content, stdout)
+        plan = scoring_plan(problem, kwargs.get("grading_setup"))
+        with output_step(plan, correct=compare_stdout(stdout, value), evidence=evidence, language=language):
+            return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=problem)
+    except CodeOutputUnavailable:
+        return unavailable_output(problem, language)
 
 
 def _project_programming_result(correction: Correction, language: str) -> Correction:

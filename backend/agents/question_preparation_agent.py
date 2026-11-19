@@ -554,7 +554,7 @@ def requested_major_question_materials(
         material_provenance = problem.get("material_provenance") or {}
         # A teacher answer may contain only the final result. Ask the bounded
         # generator to preserve it and expand it into reviewable steps.
-        if (
+        if not problem.get("code_output") and (
             not str(problem.get("reference_answer") or "").strip()
             or ("reference_answer" in material_provenance and not supplied_code)
         ):

@@ -87,6 +87,8 @@ class Criterion(Frozen):
 
 
 class PointStep(Criterion):
+    code_output: bool = Field(default=False, strict=True, exclude_if=lambda value: not value,
+                              description="Independent stdout result step for given-program explanations; the server also uses it for multi-selection awards.")
     test_suite: bool = Field(default=False, strict=True, exclude_if=lambda v: not v,
                             description="Programming only: one aggregate award computed from the frozen test pass ratio.")
     required_conditions: tuple[Text, ...] = Field(default=(), max_length=20, exclude_if=lambda v: not v, description=(
@@ -886,6 +888,9 @@ def bind_parts(rubric: PartRubric, problem: dict, *, previous: PartRubric | None
                              if language == "zh" else "Give a result equivalent to the adopted answer for this "
                              "part over the stated domain, in the requested form and precision.")
                 step = step.model_copy(update={"criterion": criterion})
+            if step.code_output and (p.id, step.id) not in teacher_follow_through:
+                normalized_steps.append(step.model_copy(update={"follow_through_pts": 0, "follow_through_keep": None}))
+                continue
             award = step.follow_through_award(ai_default=not teacher_primary)
             if rubric.follow_through_strictness is not None and (p.id, step.id) not in teacher_follow_through:
                 award = Fraction((Decimal(str(step.total_pts)) * (100 - rubric.follow_through_strictness) / 100)

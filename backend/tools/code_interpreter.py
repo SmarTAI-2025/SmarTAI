@@ -463,25 +463,31 @@ async def _run_case(code: str, tc: TestCase, timeout: float, memory_mb: int, *, 
             raise ValueError("Missing function result channel")
         raw.actual_output = raw.return_value
         raw.passed = _values_match(raw.return_value, tc.expected_return, mode, abs_tol, rel_tol)
-    elif mode == "numeric":
-        raw.passed = _numeric_text_match(raw.actual_output, tc.expected_output, abs_tol, rel_tol)
-    elif mode == "trimmed":
-        def trimmed(value):
-            return "\n".join(line.rstrip() for line in value.replace("\r\n", "\n").split("\n")).rstrip("\n")
-        raw.passed = trimmed(raw.actual_output) == trimmed(tc.expected_output)
-    elif mode == "json":
-        raw.passed = _json_match(raw.actual_output, tc.expected_output)
-    elif mode == "tokens":
-        raw.passed = raw.actual_output.split() == tc.expected_output.split()
-    elif mode == "exact" or tc.expected_output == "":
-        raw.passed = raw.actual_output.replace("\r\n", "\n") == tc.expected_output.replace("\r\n", "\n")
-    elif mode == "default":
-        raw.passed = raw.actual_output.strip() == tc.expected_output.strip()
     else:
-        raise ValueError("Unsupported comparison mode")
+        raw.passed = compare_stdout(raw.actual_output, tc.expected_output, mode, abs_tol, rel_tol)
     if not raw.passed:
         raw.exit_reason = "wrong_answer"
     return raw
+
+
+def compare_stdout(actual, expected, mode="default", abs_tol=1e-9, rel_tol=0.0):
+    """Compare literal stdout under the existing programming comparison policies."""
+    if mode == "numeric":
+        return _numeric_text_match(actual, expected, abs_tol, rel_tol)
+    elif mode == "trimmed":
+        def trimmed(value):
+            return "\n".join(line.rstrip() for line in value.replace("\r\n", "\n").split("\n")).rstrip("\n")
+        return trimmed(actual) == trimmed(expected)
+    elif mode == "json":
+        return _json_match(actual, expected)
+    elif mode == "tokens":
+        return actual.split() == expected.split()
+    elif mode == "exact" or expected == "":
+        return actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+    elif mode == "default":
+        return actual.strip() == expected.strip()
+    else:
+        raise ValueError("Unsupported comparison mode")
 
 
 def _json_match(actual_text, expected_text):

@@ -38,10 +38,12 @@ from backend.tools.structured_llm import (
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
+QUESTION_OUTPUT = grading_repository.QUESTION_OUTPUT_OBSERVED
 AUXILIARY = grading_repository.PROGRAMMING_AUXILIARY_CHECK
 STARTED = grading_repository.PROGRAMMING_PREPARATION_STARTED
 PARTIAL = grading_repository.PROGRAMMING_EXECUTION_PARTIAL
 COMPLETED = grading_repository.PROGRAMMING_EXECUTION_COMPLETED
+_REUSABLE = (PREPARED, PARTIAL, COMPLETED, AUXILIARY, QUESTION_OUTPUT)
 _current = ContextVar("programming_run", default=None)
 
 
@@ -79,7 +81,7 @@ def _saved(run_id, manifest, owner, *, auxiliary_events=None):
     # and every case observation exactly once, in the originating run.
     records = {}
     references = manifest.get("programming_artifacts") or {}
-    kinds = (PREPARED, PARTIAL, COMPLETED, AUXILIARY)
+    kinds = _REUSABLE
     if auxiliary_events is not None:
         kinds = (AUXILIARY,)
         references = {key: ref for key, ref in references.items() if ref.get("kind") == AUXILIARY}
@@ -118,7 +120,7 @@ def artifacts_for_retry(run_id, manifest, owner):
     # An interrupted preparation has unknown submission status and is never
     # inherited as a success. Only an explicit retry may start it again.
     return {k: {field: row[field] for field in ("origin_run", "kind", "digest")}
-            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in {PREPARED, PARTIAL, COMPLETED, AUXILIARY}}
+            for k, row in _saved(run_id, manifest, owner).items() if row.get("kind") in _REUSABLE}
 
 
 def runtime_identity():

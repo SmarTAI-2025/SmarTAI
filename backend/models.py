@@ -10,6 +10,7 @@ from typing import Annotated, List, Optional, Literal, Dict, Any
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
 
 from backend.domain.confidence_policy import confidence_value
+from backend.domain.code_output import CodeOutputQuestion
 from backend.domain.question_types import normalize_question_type
 from backend.services.question_structure import (
     MajorQuestionStructureV1,
@@ -257,6 +258,8 @@ class ProblemInfo(BaseModel):
     # Internal provenance for the frozen rubric interpreter; absent from both
     # serialization and the public API/LLM schema.
     _math_rubric_source: dict[str, Any] = PrivateAttr(default_factory=dict)
+    # Set by source extraction after validating the literal code and input.
+    code_output: CodeOutputQuestion | None = Field(default=None, exclude_if=lambda value: value is None)
     q_id: str = Field(description="Unique question ID, starting from 'q1'")
     number: str = Field(description="Display question number, e.g. '1', '2.3', 'III.'")
     type: str = Field(default="", description="Grading meaning: 计算题/概念题/推理题/编程题/其他; reasoning includes proofs. Choice/blank/short answer are response forms, not types; empty if unknown")
