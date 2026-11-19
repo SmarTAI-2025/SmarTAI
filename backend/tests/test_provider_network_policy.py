@@ -316,15 +316,17 @@ async def test_relay_http_failures_expose_only_stable_codes(
     expected_code,
 ):
     monkeypatch.setattr(settings, "runtime_environment", "development")
+    # Each mocked response owns its quota bucket. The 429 cooldown must not delay the next case.
+    secret = f"secret-must-not-leak-{status_code}"
     provider = build_provider(ProviderConfig(
         provider_type="deepseek",
-        api_key="secret-must-not-leak",
+        api_key=secret,
         model="relay-model",
         base_url="https://relay.example.com/v1",
         wire_protocol="openai_chat_completions",
     ))
     provider._safe_async_client = _FakeRelayClient(
-        {"raw": "secret-must-not-leak"},
+        {"raw": secret},
         status_code=status_code,
     )
 
