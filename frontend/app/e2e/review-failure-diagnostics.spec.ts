@@ -48,7 +48,7 @@ for (const stage of ["submissions", "grading"] as const) test(`${stage}: failure
     const issues = page.getByRole("region", { name: "批改问题明细" });
     await expect(issues).toContainText("样例学生（S1） · 第 1.10 题");
     await expect(issues).toContainText("Gemini：模型返回的评分格式无法读取");
-    await expect(issues).toContainText("1 份缺少有效分数");
+    await expect(issues.getByRole("heading")).toHaveText("1 个题次需处理，其中 1 个缺少有效分数。");
   }
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);

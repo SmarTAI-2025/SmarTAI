@@ -85,10 +85,14 @@ test(`missing type and materials stay visible without duplicate failure notes ($
   await expect(card.locator('[data-review-issue-notes] .text-amber-700')).toHaveText('标答未生成，可重试或人工补充（可选）。');
   await page.screenshot({ path: testInfo.outputPath("specific-missing-fields.png"), fullPage: true });
   const dialog = page.getByRole("alertdialog");
-  async function checkDialog(fields: string[]) {
+  const issueMessages = {
+    评分标准: "评分标准未生成或不完整，请重试或补齐。",
+    题型: "请选择题型。",
+    题干: "题干缺失，请对照原件补齐。",
+  };
+  async function checkDialog(fields: (keyof typeof issueMessages)[]) {
     await expect(dialog).toBeVisible();
-    const ordered = [...fields.filter(field => field === "评分标准"), ...fields.filter(field => field !== "评分标准")];
-    await expect(dialog.getByRole("listitem")).toHaveText(ordered.map(field => `第 1 题 · ${field === "评分标准" ? "评分标准未生成或不完整，请重试或补齐。" : `请补齐缺失的${field}。`}`));
+    await expect(dialog.getByRole("listitem")).toHaveText(fields.map(field => `第 1 题 · ${issueMessages[field]}`));
     await expect(dialog).not.toContainText(/标答|请确认|学生实际留白|识别或批改失败/);
     await dialog.getByRole("button", { name: "前往问题位置", exact: true }).click();
     await expect(dialog).toHaveCount(0);
@@ -99,7 +103,7 @@ test(`missing type and materials stay visible without duplicate failure notes ($
     await page.getByRole("button", { name, exact: true }).click();
     await expect(dialog.getByRole("listitem")).toHaveCount(3);
     await page.screenshot({ path: testInfo.outputPath(`required-issues-${name}.png`), fullPage: true });
-    await checkDialog(["题型", "题干", "评分标准"]);
+    await checkDialog(["评分标准", "题型", "题干"]);
   }
   await card.getByRole("button", { name: "题型 · 修改" }).click();
   const select = card.getByRole("combobox", { name: "题型" });
@@ -114,7 +118,7 @@ test(`missing type and materials stay visible without duplicate failure notes ($
   ]);
   expect(mutations).toEqual(["/tasks/type-review/problems/q1"]);
   await page.getByRole("button", { name: "全部确认", exact: true }).click();
-  await checkDialog(["题干", "评分标准"]);
+  await checkDialog(["评分标准", "题干"]);
   await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
   await card.getByRole("textbox", { name: "题目", exact: true }).fill("Compute 2 + 2.");
   await card.getByRole("button", { name: "保存", exact: true }).click();

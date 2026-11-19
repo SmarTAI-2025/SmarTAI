@@ -66,8 +66,11 @@ for (const stage of ["submissions", "grading"] as const) for (const locale of ["
     async function inspectDialog(count: number, target: string) {
       await expect(dialog.getByRole("listitem")).toHaveCount(count);
       await expect(dialog).not.toContainText(/置信度|confidence|笔迹|authorship|学生实际留白|Genuine blank/);
+      const issueText = stage === "submissions"
+        ? (zh ? "作答解析未完成，请重试或对照原文件补齐。" : "Answer parsing did not complete. Retry or complete the answer using the original.")
+        : (zh ? /分数|最终分|模型返回的评分格式无法读取/ : /score|parse result/);
       for (const row of await dialog.getByRole("listitem").all()) {
-        await expect(row).toContainText(stage === "submissions" ? (zh ? "解析失败" : "parsing failed") : (zh ? /分数|最终分|模型返回的评分格式无法读取/ : /score|parse result/));
+        await expect(row).toContainText(issueText);
       }
       await dialog.getByRole("button", { name: zh ? /前往问题位置|直接前往填写分数/ : /Go to issue|Go to the missing score/ }).click();
       await expect(dialog).toHaveCount(0);

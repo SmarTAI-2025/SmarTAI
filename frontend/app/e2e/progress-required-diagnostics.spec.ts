@@ -68,6 +68,12 @@ for (const stage of ["problems", "submissions", "grading"] as const) {
       }
       if (stage === "problems") await expect(panel).not.toContainText("9.9");
       if (stage === "problems") await expect(panel).toContainText(zh ? `需要处理 ${requiredCount} 题` : `${requiredCount} questions need action`);
+      else if (stage === "grading") {
+        await expect(panel.getByRole("heading")).toHaveText(zh
+          ? `${requiredCount} 个题次需处理，其中 ${requiredCount} 个缺少有效分数。`
+          : `${requiredCount} responses need action, including ${requiredCount} with no valid score.`);
+        await expect(panel.getByRole("listitem")).toHaveCount(Math.min(20, requiredCount));
+      }
       else await expect(panel).toContainText(zh ? `${requiredCount} 份作答需要关注` : `${requiredCount} responses need attention`);
       const list = panel.locator(stage === "submissions" ? "ol" : "ul").first();
       const dimensions = await list.evaluate(el => ({ height: el.clientHeight, scroll: el.scrollHeight }));
