@@ -5,7 +5,7 @@ from backend.services.proof_rubric import use_proof_steps
 from backend.services.rubric_drafts import RubricAllocationError, generated_rubric, saved_draft
 from backend.tests.test_generated_step_granularity import proposal
 from backend.tests.test_manual_proof_completion import complete
-from backend.tests.test_proof_rubric import STEM, REFERENCE, audit, initial, rubric
+from backend.tests.test_proof_rubric import STEM, REFERENCE, audit, bundled_rubric, initial, split_reply
 from backend.tests.test_question_material_format_repair import Provider
 
 
@@ -23,15 +23,9 @@ def test_total_variants_do_not_bypass_granularity_or_proof_audit(marker):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("marker", ["本题共10分。", "This question is worth 10 points."])
-async def test_total_variants_audit_without_retrying_an_optional_split(monkeypatch, marker):
-    rules = rubric()
-    part = rules.parts[0]
-    bundled = part.steps[1].model_copy(update={"total_pts": 5,
-        "criterion": "Prove the square equals 1 and prove the element is not the identity."})
-    rules = rules.model_copy(update={"parts": (part.model_copy(update={
-        "steps": (part.steps[0], bundled, part.steps[3])}),)})
-    provider = Provider([initial(rules), audit(bundled_steps=["square"])])
+async def test_total_variants_reach_bundle_audit_and_targeted_repair(monkeypatch, marker):
+    provider = Provider([initial(bundled_rubric()), audit(bundled_steps=["square"]), split_reply(), audit()])
     job, data = await complete(monkeypatch, provider, stem=marker + " " + STEM)
-    assert not job.payload["skipped_target_ids"] and len(provider.calls) == 2
+    assert not job.payload["skipped_target_ids"] and len(provider.calls) == 4
     assert data.reference_answer == REFERENCE
-    assert [s.total_pts for s in saved_draft(data).plan.part_rubric.parts[0].steps] == [3, 5, 2]
+    assert [s.total_pts for s in saved_draft(data).plan.part_rubric.parts[0].steps] == [3, 3, 2, 2]

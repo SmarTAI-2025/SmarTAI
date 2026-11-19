@@ -10,7 +10,7 @@ from backend.services import task_facade
 from backend.services.math_grading_context import problem_from_question
 from backend.services.rubric_drafts import saved_draft
 from backend.tests.test_auxiliary_operation_recovery import _claim_auxiliary_operation
-from backend.tests.test_proof_rubric import POINTS, STEM, REFERENCE, audit, initial
+from backend.tests.test_proof_rubric import STEM, REFERENCE, audit, bundled_rubric, initial, split_reply
 from backend.tests.test_question_material_format_repair import Provider
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _seed_task
 from backend.tools.structured_llm import PermanentLLMError
@@ -96,16 +96,20 @@ async def test_indivisible_proof_keeps_one_award_without_repair(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_optional_bundle_keeps_valid_rubric_without_retry(monkeypatch):
-    provider = Provider([initial(), audit(reason="square: two independently earnable goals",
-        bundled_steps=["square"])])
+async def test_reported_bundle_retries_only_rubric_with_unchanged_total(monkeypatch):
+    provider = Provider([initial(bundled_rubric()), audit(reason="square: two independently earnable goals",
+        bundled_steps=["square"]), split_reply(), audit()])
     job, data = await complete(monkeypatch, provider)
     assert job.status == "done" and not job.payload["skipped_target_ids"]
     assert data.reference_answer == REFERENCE
-    accepted = saved_draft(data).plan.part_rubric
-    assert accepted.total_pts == 10
-    assert [(s.id, s.total_pts, s.criterion) for s in accepted.parts[0].steps] == POINTS
-    assert len(provider.calls) == 2
+    assert saved_draft(data).plan.part_rubric.total_pts == 10
+    assert len(provider.calls) == 4
+    request = json.loads(provider.calls[2][-1].content)
+    target, = request["targets"]
+    assert (target["part_id"], target["step_id"], target["points"]) == ("p1", "square", 5)
+    assert request["source"]["reference_answer"] == REFERENCE
+    assert [step.id for step in saved_draft(data).plan.part_rubric.parts[0].steps] == [
+        "normal", "square", "nonidentity", "generate"]
 
 
 @pytest.mark.asyncio

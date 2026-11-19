@@ -2932,9 +2932,21 @@ async def generate_missing_question_materials(
         reference = next((s.text_value for s in parsed.candidates
                           if s.q_id == candidate.q_id and s.target == "reference_answer"),
                          original.get("reference_answer") or "")
+        material = {**original, "q_id": candidate.q_id}
+        if reference:
+            material["reference_answer"] = reference
+
+        def bind_proof_rubric(rules):
+            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": rules})
+            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
+                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks],
+                verified_policy_checks=current.semantic_policy_checks)
+            return proposal, rendered, draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
+
         try:
             verified = await prepare_proof_steps(provider, original["stem"], current.plan.part_rubric,
-                                                reference_answer=reference, language=generation_language or "zh")
+                                                reference_answer=reference, language=generation_language or "zh",
+                                                validate_refinement=bind_proof_rubric)
         except ProofRubricUnverified as exc:
             if not allow_partial:
                 raise
@@ -2944,16 +2956,8 @@ async def generate_missing_question_materials(
                 repair_feedback[candidate.target_id] = str(exc)
             continue
         if verified is not None:
-            # Audit preserves the original steps. Rebind only to include a
-            # reference returned in this response before sealing the draft.
-            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": verified})
-            material = {**original, "q_id": candidate.q_id}
-            if reference:
-                material["reference_answer"] = reference
-            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
-                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks],
-                verified_policy_checks=current.semantic_policy_checks)
-            draft = draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
+            # Rebind the accepted steps with any reference returned in this response.
+            proposal, rendered, draft = bind_proof_rubric(verified)
             candidate.text_value = rendered
             candidate.rubric_definition = proposal
             candidate.rubric_draft = draft.model_dump(mode="json")
