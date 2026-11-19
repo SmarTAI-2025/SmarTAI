@@ -39,10 +39,10 @@ from backend.services.background_errors import (
     is_retryable_background_error,
 )
 from backend.services.programming_test_contract import (
-    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups, literal_programming_case_pair,
+    ProgrammingCaseError, adapt_programming_cases, has_function_only_contract,
+    literal_programming_case_groups, literal_programming_case_pair, required_function_name,
 )
 from backend.services.question_structure import annotate_major_question_structures
-from backend.services.programming_test_contract import required_function_name
 from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
@@ -2259,6 +2259,7 @@ class AICompletionCandidateOutput(BaseModel):
     test_cases: Optional[List[TestCase]] = None
     rubric_definition: RubricDefinition | None = Field(default=None, exclude=True)
     rubric_draft: dict | None = None
+    input_review_fingerprint: str | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class AICompletionOutput(BaseModel):
@@ -2551,11 +2552,25 @@ async def generate_missing_question_materials(
         if not isinstance(raw, dict) or raw.get("target_id") not in expected_targets:
             return raw
         item = dict(raw)
+        # Only the server can certify a successfully reviewed test suite.
+        item.pop("input_review_fingerprint", None)
         target = expected_targets[item["target_id"]]
         # target_id uniquely identifies both fields. Contradictions supplied
         # by a provider still fail the identity check in validate_targets.
         item.setdefault("q_id", target["q_id"])
         item.setdefault("target", target["target"])
+        if target["target"] == "test_cases" and isinstance(item.get("test_cases"), list):
+            stem = problems_data[target["q_id"]].get("stem") or ""
+            if required_function_name(stem) and has_function_only_contract(stem, []):
+                # Models sometimes return the literal list in the display
+                # input field. Preserve it as JSON text and let the existing
+                # signature and domain checks bind and validate the case.
+                item["test_cases"] = [
+                    {**case, "input": json.dumps(case["input"], ensure_ascii=False, allow_nan=False)}
+                    if isinstance(case, dict) and isinstance(case.get("input"), list)
+                    and case.get("io_mode") in (None, "function") else case
+                    for case in item["test_cases"]
+                ]
         if item["target_id"] not in part_targets and item["target_id"] not in interpret_with_answer:
             if item.get("target") == "reference_answer" and any(row["q_id"] == item.get("q_id")
                     and row["target"] == "criterion" for row in target_rows):
@@ -2898,7 +2913,10 @@ async def generate_missing_question_materials(
         if reporter:
             await reporter._emit_message("Running the reference implementation to prepare test outputs.")
         try:
-            candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases)
+            review_evidence = {}
+            candidate.test_cases = await resolve_generated_outputs(source, candidate.test_cases,
+                provider=provider, reporter=reporter, review_evidence=review_evidence)
+            candidate.input_review_fingerprint = review_evidence.get("input_review_fingerprint")
         except (ValueError, HostCodeExecutionDisabled, IsolatedRunnerUnavailable, TimeoutError) as exc:
             if not allow_partial:
                 raise

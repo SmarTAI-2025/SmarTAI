@@ -30,6 +30,9 @@ from backend.services.programming_test_contract import has_function_only_contrac
 from backend.services.python_source_encoding import PythonSourceEncodingError, python_execution_source
 from backend.tools.code_interpreter import ExecutionReport, TestResult, HostCodeExecutionDisabled
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable, NativeBuildUnavailable
+from backend.tools.structured_llm import (
+    PermanentLLMError, StructuredOutputBoundsError, StructuredOutputInvalidError, TransientLLMError,
+)
 
 VERSION = "programming_run_v1"
 PREPARED = grading_repository.PROGRAMMING_CASES_PREPARED
@@ -43,6 +46,13 @@ _current = ContextVar("programming_run", default=None)
 def digest(data):
     payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def input_review_fingerprint(problem, cases):
+    from backend.services.programming_rubric import domain_criterion
+
+    return digest(["programming_input_review_v1", problem.stem, domain_criterion(problem) or "",
+                   [case.model_dump(mode="json") for case in cases]])
 
 
 def source_hash(code):
@@ -301,14 +311,32 @@ def _domain_review(state, plan_key):
     return state.domain_reviews[plan_key]
 
 
-def _checked_case_inputs(state, plan_key, problem, originals, cases):
+async def _checked_case_inputs(state, plan_key, problem, originals, cases, provider=None, reporter=None):
     from backend.services.programming_input_domain import input_domain
+    from backend.services.programming_rubric import frozen_programming_steps
+    domains = ["teacher" if problem.test_cases and c.source == "teacher" else input_domain(problem, c)
+               for c in cases]
+    presentation = (problem._math_rubric_source or {}).get("presentation") or {}
+    generated = (presentation.get("ai_completion_provenance") or {}).get("test_cases") or {}
+    # Preparation can also add tests to an existing teacher rubric that has no
+    # funded suite item. Apply the same review there; legacy grading-time test
+    # proposals retain their separate admission path.
+    approved = generated.get("input_review_fingerprint")
+    if ("unknown" in domains and generated.get("source_kind") == "ai_generated"
+            and approved and approved == input_review_fingerprint(problem, cases)):
+        # Reuse the exact prepared suite and rules. A current deterministic
+        # rejection still takes precedence over a stored semantic decision.
+        domains = ["allowed" if domain == "unknown" else domain for domain in domains]
+    elif ("unknown" in domains and provider is not None
+          and (frozen_programming_steps(problem) or generated.get("source_kind") == "ai_generated")):
+        from backend.services.programming_input_review import review_input_domains
+        from backend.progress.grading_activity import observe_auxiliary_request
+        state.store(STARTED, plan_key, {"q_id": problem.q_id})
+        async with observe_auxiliary_request(reporter, provider):
+            domains = await review_input_domains(problem, cases, domains, provider, reporter=reporter)
     candidates, kept, positions = [], [], []
-    for position, (original, case) in enumerate(zip(originals, cases, strict=True), 1):
-        if problem.test_cases and case.source == "teacher":
-            status = "teacher"
-        else:
-            status = input_domain(problem, case)
+    for position, (original, case, status) in enumerate(zip(originals, cases, domains, strict=True), 1):
+        if status != "teacher":
             candidates.append({"position": position, "domain": status,
                                "original": original.model_dump(mode="json", exclude_unset=True)})
         if status in {"allowed", "teacher"}:
@@ -334,7 +362,7 @@ def _checked_case_inputs(state, plan_key, problem, originals, cases):
 
 async def _prepare(state, problem, provider, generate, execute, reporter):
     from backend.services.programming_test_contract import ProgrammingCaseError, adapt_programming_cases, bind_stdin_cases, required_function_name
-    from backend.skills.programming import _scan_complexity_keywords
+    from backend.skills.programming import _error_kind, _scan_complexity_keywords
     runtime = _reference_execution_identity(problem)
     key = _question_key(state, problem, runtime=runtime)
     async with state.lock(key):
@@ -383,7 +411,13 @@ async def _prepare(state, problem, provider, generate, execute, reporter):
                 raise ValueError("programming_cases_unavailable")
             from backend.services.programming_rubric import distinct_scoring_cases
             originals, cases = distinct_scoring_cases(problem, originals, cases)
-            cases = _checked_case_inputs(state, key, problem, originals, cases)
+            try:
+                cases = await _checked_case_inputs(state, key, problem, originals, cases, state.provider or provider, reporter)
+            except (PermanentLLMError, TransientLLMError, StructuredOutputInvalidError, StructuredOutputBoundsError) as exc:
+                # Preparation runs before per-student fan-out. Reuse the
+                # programming failure policy, including critical write errors.
+                state.failures[key] = _error_kind(exc)
+                return key, [], state.failures[key]
             data = [c.model_dump(mode="json") for c in cases]
             if len(json.dumps(data, ensure_ascii=False, allow_nan=False).encode()) > 256 * 1024:
                 raise ValueError("programming_cases_unavailable")

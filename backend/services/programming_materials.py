@@ -8,6 +8,7 @@ from backend.services.programming_reference_inputs import ReferenceInputCase, ex
 from backend.services.programming_test_contract import (
     adapt_programming_cases, bind_programming_cases, bind_stdin_cases, case_input_key, native_standard_supported,
 )
+from backend.tools.structured_llm import llm_attempt_budget
 
 GENERATED_TEST_COUNT = 10
 
@@ -40,8 +41,11 @@ def input_probes(cases):
     return probes
 
 
-async def resolve_generated_outputs(source, cases, *, execute=None):
-    from backend.services.programming_runs import _reference, _reference_language, _source, _validate_report
+async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None,
+                                    review_evidence=None):
+    from backend.services.programming_runs import (
+        _reference, _reference_language, _source, _validate_report, input_review_fingerprint,
+    )
     from backend.services.programming_input_domain import input_domain
     from backend.services.python_source_encoding import python_execution_source
     from backend.tools.code_interpreter import run_sandbox
@@ -88,8 +92,20 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
     identities = {case_input_key(problem.stem, c, reference=executable) for c in probes}
     if len(identities) != len(probes):
         raise ValueError("Supply distinct test inputs; repeated inputs must not change their scoring weight.")
-    if any(not c.sandbox_feasible or input_domain(problem, c) != "allowed" for c in probes):
+    if any(not c.sandbox_feasible for c in probes):
         raise ValueError("Use only runnable test inputs verifiably inside the question's stated domain.")
+    domains = [input_domain(problem, c) for c in probes]
+    feedback = {}
+    if provider is not None and "unknown" in domains and "outside" not in domains:
+        from backend.services.programming_input_review import review_input_domains
+        # Input review is required before executing otherwise valid proposals.
+        # A successful last generation attempt must still be able to reach it.
+        with llm_attempt_budget(independent=True):
+            domains = await review_input_domains(problem, probes, domains, provider, reporter=reporter, feedback=feedback)
+    if any(domain != "allowed" for domain in domains):
+        rejected = "; ".join(f"{i}: {domain}" + (f" — {feedback[i]}" if i in feedback else "")
+                             for i, domain in enumerate(domains, 1) if domain != "allowed")
+        raise ValueError("Test inputs outside or not supported by the question's domain (" + rejected + "). Repair only these inputs; preserve the question's constraints.")
     reference_cases = bind(probes)
     if all(case.io_mode == "stdin" for case in reference_cases):
         if language == "python":
@@ -110,4 +126,7 @@ async def resolve_generated_outputs(source, cases, *, execute=None):
         raise ReferenceExecutionError("The reference failed to produce complete, usable outputs for the proposed inputs.") from exc
     if all(case.io_mode == "stdin" for case in reference_cases) and not any(row.stdout for row in report.results):
         raise ReferenceExecutionError("The reference produced no stdout for the entire suite. Check its entry/input/output wiring and include an observable-output input; do not invent outputs.")
-    return adapt_programming_cases(problem.stem, resolved)
+    resolved = adapt_programming_cases(problem.stem, resolved)
+    if review_evidence is not None:
+        review_evidence["input_review_fingerprint"] = input_review_fingerprint(problem, resolved)
+    return resolved

@@ -3824,6 +3824,8 @@ async def _run_ai_completion(
                 patch["presentation"]["solution_code"] = value
             else:
                 patch["fields"][candidate.target] = value
+            if candidate.input_review_fingerprint:
+                provenance["input_review_fingerprint"] = candidate.input_review_fingerprint
             patch["presentation"]["ai_completion_provenance"][candidate.target] = provenance
             if candidate.rubric_draft:
                 patch["presentation"]["rubric_draft"] = candidate.rubric_draft
