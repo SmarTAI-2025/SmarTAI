@@ -212,6 +212,16 @@ def validate_teacher_point_items(rules, ordinary):
 
     if not ordinary.strip():
         return {}
+    from backend.domain.code_output import independent_output_steps, multiple_choice, selection_awards
+
+    # Only a server-marked, single-output selection item can use alternative
+    # outcomes in one funded step. Validate the complete teacher policy.
+    if len(rules.parts) == 1 and len(rules.parts[0].steps) == 1:
+        step, = rules.parts[0].steps
+        if step.code_output and step.criterion.strip() == ordinary.strip() and multiple_choice(rules.stem):
+            independent_output_steps(rules, 1, allow_output_marker=True)
+            selection_awards(ordinary, rules.total_pts)
+            return {}
     parts = rules.parts
     scope = parts
     labels = [(p, re.compile(_allocation_marker_pattern(p.label), re.I)) for p in parts if p.label]

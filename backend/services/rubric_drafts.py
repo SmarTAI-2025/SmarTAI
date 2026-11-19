@@ -321,21 +321,41 @@ def generated_rubric(problem: dict, definition: RubricDefinition, *, language="z
     if follow_through_strictness is None:
         follow_through_strictness = (previous_rules.follow_through_strictness if previous_rules and previous_rules.follow_through_strictness is not None else
                                 context.get("rubric_generation_preferences", {}).get("follow_through_strictness"))
+    from backend.domain.code_output import (
+        code_output_rubric_context, independent_output_steps, ordered_blank_steps, selection_awards,
+    )
+    output_context = code_output_rubric_context(problem)
+    form = output_context.get("code_output_form")
+    multi_select = output_context.get("code_output_multi_select", False)
+    if form == "blank" and definition.part_rubric is None:
+        raise RubricAllocationError("Use one independent structured point step per blank.")
     if definition.part_rubric is not None:
-        from backend.domain.code_output import code_output_form
         output_steps = [step for part in definition.part_rubric.parts for step in part.steps if step.code_output]
-        if output_steps and (len(output_steps) != 1 or code_output_form(problem) != "explanation"):
-            raise RubricAllocationError("Only a given-program explanation can mark one independent code_output step.")
+        if output_steps and (len(output_steps) != 1 or not (form == "explanation" or multi_select)):
+            raise RubricAllocationError("A given-program explanation or multi-selection can mark one independent code_output step.")
         from backend.models import is_programming_question_type
         if (not is_programming_question_type(problem.get("type")) and any(
                 step.test_suite for part in definition.part_rubric.parts for step in part.steps)):
             raise RubricAllocationError("Only programming rubrics can allocate an aggregate test_suite award.")
-        definition = definition.model_copy(update={"part_rubric": definition.part_rubric.model_copy(
-            update={"follow_through_strictness": follow_through_strictness})})
+        proposed = definition.part_rubric.model_copy(update={"follow_through_strictness": follow_through_strictness})
         try:
-            rules = bind_parts(definition.part_rubric, {**problem, "criterion_source": context["criterion_source"]},
+            if multi_select:
+                part = independent_output_steps(proposed, 1, allow_output_marker=True)
+                step, = part.steps
+                rule = original if original and context["criterion_source"] != "ai" else step.criterion
+                selection_awards(rule, proposed.total_pts)
+                # The same frozen output step owns mutually exclusive selection
+                # awards. A subset award is not a second funded step.
+                step = step.model_copy(update={"criterion": rule, "code_output": True})
+                proposed = proposed.model_copy(update={"parts": (part.model_copy(update={"steps": (step,)}),)})
+            rules = bind_parts(proposed, {**problem, "criterion_source": context["criterion_source"]},
                                previous=previous_rules, language=language, verified_policy_ids=verified_policy_ids,
                                verified_policy_checks=verified_policy_checks)
+            if form == "blank":
+                count = output_context.get("code_output_blank_count")
+                if count is None:
+                    raise ValueError("The stated blank count conflicts with the source markers.")
+                ordered_blank_steps(rules, count)
             from backend.services.part_rubric import validate_generated_step_granularity
             if check_step_granularity:
                 validate_generated_step_granularity(rules)
@@ -1032,9 +1052,9 @@ async def compile_parts_draft(problem, provider, *, grading_setup=None, reporter
 
     previous_rules = previous.plan.part_rubric if previous else None
     request = dict(context)
-    from backend.domain.code_output import RUBRIC_INSTRUCTION, code_output_form
-    if form := code_output_form(problem):
-        request["code_output_form"] = form
+    from backend.domain.code_output import RUBRIC_INSTRUCTION, code_output_rubric_context
+    if output_context := code_output_rubric_context(problem):
+        request.update(output_context)
         request["code_output_instruction"] = RUBRIC_INSTRUCTION
     binding_source = context
     if binding_source["criterion_source"] != "ai":

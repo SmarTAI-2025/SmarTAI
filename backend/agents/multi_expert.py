@@ -169,9 +169,10 @@ async def run_multi_expert(**kwargs) -> Correction:
 
 
 async def _grade_code_output(**kwargs):
+    from backend.services.code_output_answers import explanation_stdout
     from backend.services.code_output_grading import (
-        CodeOutputUnavailable, observed_output, output_only_correction,
-        output_step, submitted_output, unavailable_output,
+        CodeOutputUnavailable, _output_correction, grade_blanks, grade_choices,
+        observed_output, output_step, unavailable_output,
     )
     from backend.services.math_grading_context import scoring_plan
     from backend.services.programming_runs import programming_run
@@ -182,18 +183,17 @@ async def _grade_code_output(**kwargs):
     try:
         with programming_run(kwargs["registry"], kwargs.get("grading_setup")) as state:
             source, stdout = await observed_output(state, problem, kwargs.get("reporter"))
-        if source.form == "choice" and sum(compare_stdout(stdout, option) for option in source.choices.values()) != 1:
-            raise CodeOutputUnavailable()
         if not answer.content.strip() and answer.flag:
             raise CodeOutputUnavailable()
+        if source.form == "choice":
+            return grade_choices(problem, source, stdout, answer.content, language)
+        if source.form == "blank":
+            return grade_blanks(problem, source, stdout, answer.content, language)
         if not answer.content.strip():
-            return output_only_correction(problem, False, language)
-        value = submitted_output(answer.content, source)
-        correct = value is not None and compare_stdout(stdout, value)
-        if source.form != "explanation":
-            return output_only_correction(problem, correct, language)
+            return _output_correction(problem, [(0, False, "")], language)
+        value, evidence = explanation_stdout(answer.content, stdout)
         plan = scoring_plan(problem, kwargs.get("grading_setup"))
-        with output_step(plan, answer, correct=correct, language=language):
+        with output_step(plan, correct=compare_stdout(stdout, value), evidence=evidence, language=language):
             return _apply_math_review_advisory(await _run_multi_expert(**kwargs), problem=problem)
     except CodeOutputUnavailable:
         return unavailable_output(problem, language)

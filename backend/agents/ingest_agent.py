@@ -25,7 +25,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from backend.config import settings
-from backend.domain.code_output import RUBRIC_INSTRUCTION, bind_code_output, code_output_form
+from backend.domain.code_output import RUBRIC_INSTRUCTION, bind_code_output, code_output_rubric_context
 from backend.models import (
     StudentSubmission,
     ProblemInfo,
@@ -172,7 +172,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 5. **Recognition Confidence**: For EACH major question, return `recognition_confidence` as a number from 0 to 1: your confidence that this question was faithfully and completely extracted from the supplied source text, including its formulas, conditions, code and question boundaries. Assess each question independently using its own evidence and any [unclear] markers; uncertainty in another question must not lower this one. This is not confidence in solving the question or in whether its statements are correct. Preserve source mistakes. Do not pretend to have inspected an original image when only text was supplied. Return null when the available evidence cannot support an assessment.
 
-6. **Given-program output reasoning**: If the task asks what one complete given program prints with a single specified stdin, classify it as 推理题 because of what the student is asked to do. Return the optional `code_output_candidate` only for this intent, even if some material is missing or unusable. Never apply it to implementation, code repair, complexity, proofs, or multipart questions. Use an object with form (choice, blank, or explanation), language (python, c, cpp, or the stated unsupported language), code (one verbatim standalone program, including its trailing newline), stdin (literal input bytes as text), input_quote (verbatim input statement or block including its label or delimiters), and choices (only for single-choice, a mapping of A/B/... to their literal single-line stdout, with no surrounding Markdown backticks). Put the exact program inside one unindented fenced block in stem. Copy the full input line or block verbatim into stem (e.g. Input: 3, stdin: 3, or 输入：3), and copy each option verbatim. Never fill missing code or input, change indentation, add a test, execute code, or predict any output. If the intent is clear but the program or input is absent, return an empty object. Omit the field for other questions.
+6. **Given-program output reasoning**: If the task asks what one complete given program prints with a single specified stdin, classify it as 推理题 because of what the student is asked to do. Return the optional `code_output_candidate` only for this intent, even if some material is missing or unusable. Never apply it to implementation, code repair, complexity, proofs, or multipart questions. Use an object with form (choice, blank, or explanation), language (python, c, cpp, or the stated unsupported language), code (one verbatim standalone program, including its trailing newline), stdin (literal input bytes as text), input_quote (verbatim input statement or block including its label or delimiters), and choices (for choice only, map each original option label to its literal output text, without surrounding Markdown backticks). Put the exact program inside one unindented fenced block in stem. Copy the full input line or block verbatim into stem (e.g. Input: 3, stdin: 3, or 输入：3), and copy each option verbatim. Never fill missing code or input, change indentation, add a test, execute code, or predict any output. If the intent is clear but the program or input is absent, return an empty object. Omit the field for other questions.
 
 7. **Formatted Output**: Return a JSON object with key "problems" containing an array of objects with fields: "q_id", "number", "type", "stem", "criterion", "recognition_confidence". Text fields must be strings; recognition_confidence must be a number or null. Example shape:
 {"problems": [
@@ -2394,7 +2394,7 @@ async def generate_missing_question_materials(
             "follow_through_strictness": follow_through_strictness if follow_through_strictness is not None else _question_input(problem).get("rubric_generation_preferences", {}).get("follow_through_strictness", 50),
             "teacher_subpart_points": dict(problem.get("teacher_subpart_points") or {}),
             **({"parallel_part_budgets": budgets} if (budgets := parallel_part_budgets(problem)) else {}),
-            **({"code_output_form": form} if (form := code_output_form(problem)) else {}),
+            **code_output_rubric_context(problem),
             "existing_criterion": str(problem.get("criterion") or ""),
             "existing_criterion_source": _question_input(problem)["criterion_source"],
             "existing_reference_answer": str(

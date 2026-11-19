@@ -305,7 +305,10 @@ def ensure_run_math_version(*, run_id, worker_id, questions, frozen_setup):
     from backend.db import grading_repository as repository
     from backend.domain.errors import VersionConflict
 
-    math_qids = {q.q_id for q in questions if uses_math_grading(q.type)}
+    from backend.domain.code_output import code_output_data, code_output_form
+
+    math_qids = {q.q_id for q in questions if uses_math_grading(q.type)
+                 and (not code_output_data(q) or code_output_form(q) == "explanation")}
     if not math_qids:
         return
     manifest = (frozen_setup.input_manifest if frozen_setup else {}) or {}

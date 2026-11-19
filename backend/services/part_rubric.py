@@ -88,7 +88,7 @@ class Criterion(Frozen):
 
 class PointStep(Criterion):
     code_output: bool = Field(default=False, strict=True, exclude_if=lambda value: not value,
-                              description="Independent stdout result step for a given-program explanation question only.")
+                              description="Independent stdout result step for given-program explanations; the server also uses it for multi-selection awards.")
     test_suite: bool = Field(default=False, strict=True, exclude_if=lambda v: not v,
                             description="Programming only: one aggregate award computed from the frozen test pass ratio.")
     required_conditions: tuple[Text, ...] = Field(default=(), max_length=20, exclude_if=lambda v: not v, description=(

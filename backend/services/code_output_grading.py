@@ -2,23 +2,24 @@
 
 from contextlib import contextmanager
 from contextvars import ContextVar
+from decimal import Decimal
 import re
 
 from backend.config import settings
-from backend.domain.code_output import CodeOutputQuestion, bind_code_output, code_output_data, stem_digest
+from backend.domain.code_output import (
+    CodeOutputQuestion, bind_code_output, blank_count, choice_key, choice_output_items, code_output_data,
+    independent_output_steps, multiple_choice, ordered_blank_steps, selection_awards, stem_digest,
+)
 from backend.models import Correction, StepScore, TestCase
+from backend.services.code_output_answers import (
+    CodeOutputUnavailable, same_choice_value, submitted_choices, submitted_stdout,
+)
 from backend.services.programming_runs import QUESTION_OUTPUT, _validate_report, digest, runtime_identity
-from backend.tools.code_interpreter import HostCodeExecutionDisabled, run_sandbox
+from backend.tools.code_interpreter import HostCodeExecutionDisabled, compare_stdout, run_sandbox
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
 UNAVAILABLE = "code_output_unavailable"
-_OUTPUT_LINE = re.compile(r"^[ \t]*(?:output|stdout|输出)[：:][ \t]?(.*)$", re.I | re.M)
-_FENCED_ANSWER = re.compile(r"\A```[^\r\n]*\r?\n(.*?)^```[ \t]*(?=\r?$)", re.M | re.S)
 _result_step = ContextVar("code_output_result_step", default=None)
-
-
-class CodeOutputUnavailable(ValueError):
-    pass
 
 
 def _question_key(state, problem, descriptor):
@@ -69,24 +70,6 @@ async def observed_output(state, problem, reporter):
         return source, row.stdout
 
 
-def submitted_output(text, source):
-    text = text.strip()
-    if source.form == "choice":
-        match = re.fullmatch(r"(?:(?:answer|option|答案|选项)[：:]\s*)?(?:[（(]\s*)?([A-Z])(?:\s*[）)])?[.、]?",
-                             text, re.I)
-        return source.choices.get(match[1].upper()) if match else None
-    fenced = _FENCED_ANSWER.match(text)
-    if fenced and (source.form == "explanation" or not text[fenced.end():].strip()):
-        return fenced[1]
-    if source.form == "explanation":
-        matches = _OUTPUT_LINE.findall(text)
-        if len(matches) > 1 or (not matches and "\n" in text):
-            raise CodeOutputUnavailable()
-        if matches:
-            text = matches[0].rstrip("\r")
-    return text[1:-1] if re.fullmatch(r"`[^`]*`", text) else text
-
-
 def output_feedback(correct, language):
     if language == "zh":
         return "作答与程序实际输出一致。" if correct else "作答与程序实际输出不一致。"
@@ -102,22 +85,106 @@ def unavailable_output(problem, language):
                                "The program output or its score could not be verified. Review the question, answer, and rubric to grade it."))
 
 
-def output_only_correction(problem, correct, language):
+def _output_correction(problem, awards, language, *, part=None):
+    # Keep the same precision and item IDs as the frozen score rows.
+    steps = [
+        StepScore(step_no=index, part_id=part.id if part else None,
+                  item_id=part.steps[index - 1].id if part else None, score=score,
+                  is_correct=correct, desc=description or output_feedback(correct, language))
+        for index, (score, correct, description) in enumerate(awards, 1)
+    ]
+    total = float(sum(Decimal(str(step.score)) for step in steps))
+    complete = all(step.is_correct for step in steps)
+    if len(steps) == 1:
+        comment = steps[0].desc
+    elif 0 < total < problem.max_score:
+        comment = "按评分标准给予部分分。" if language == "zh" else "Partial credit was awarded under the rubric."
+    else:
+        comment = output_feedback(complete, language)
+    return Correction(q_id=problem.q_id, type=problem.type, score=total, max_score=problem.max_score,
+                      confidence=1, comment=comment, steps=steps, synthesis_method="code_output_verified")
+
+
+def _frozen_rules(problem):
+    from backend.services.math_grading_context import get_math_plan
     from backend.services.rubric_drafts import saved_draft
 
-    comment = output_feedback(correct, language)
-    score = problem.max_score if correct else 0
-    draft = saved_draft(problem)
-    rules = draft.plan.part_rubric if draft else None
-    # Retain the same hundredth-point precision as this frozen written rubric.
-    part_id = rules.parts[0].id if rules and len(rules.parts) == 1 else None
-    step = StepScore(step_no=1, part_id=part_id, score=score, is_correct=correct, desc=comment)
-    return Correction(q_id=problem.q_id, type=problem.type, score=score, max_score=problem.max_score,
-                      confidence=1, comment=comment, steps=[step], synthesis_method="code_output_verified")
+    plan = get_math_plan(problem)
+    if plan is None and (draft := saved_draft(problem)) is not None:
+        plan = draft.plan
+    return plan.part_rubric if plan else None
+
+
+def _require_unambiguous_legacy_rule(problem):
+    from backend.services.binary_scoring import whole_question_policy
+    from backend.services.math_rubric_plan import _scoring_amounts
+
+    if _scoring_amounts(problem.criterion) and not whole_question_policy(problem.criterion, problem.max_score):
+        raise CodeOutputUnavailable()
+
+
+def grade_blanks(problem, source, stdout, text, language):
+    try:
+        count = blank_count(problem.stem, source.input_quote)
+        rules = _frozen_rules(problem)
+        part = ordered_blank_steps(rules, count) if rules is not None or count != 1 else None
+        if part is None:
+            _require_unambiguous_legacy_rule(problem)
+    except ValueError as exc:
+        raise CodeOutputUnavailable() from exc
+    if count == 1:
+        correct = bool(text.strip()) and compare_stdout(stdout, submitted_stdout(text))
+        return _output_correction(problem, [(problem.max_score if correct else 0, correct, "")], language, part=part)
+
+    expected = stdout.split()
+    provided = submitted_stdout(text).split() if text.strip() else [""] * count
+    if len(expected) != count or len(provided) != count:
+        raise CodeOutputUnavailable()
+    awards = []
+    for index, (value, target, step) in enumerate(zip(provided, expected, part.steps), 1):
+        correct = compare_stdout(target, submitted_stdout(value))
+        description = (f"第 {index} 空。" if language == "zh" else f"Blank {index}. ")
+        awards.append((step.total_pts if correct else 0, correct, description + output_feedback(correct, language)))
+    return _output_correction(problem, awards, language, part=part)
+
+
+def grade_choices(problem, source, stdout, text, language):
+    multiple = multiple_choice(problem.stem)
+    outputs = choice_output_items(problem.stem, stdout) if multiple else [stdout]
+    expected = {choice_key(key) for key, value in source.choices.items()
+                if any(same_choice_value(output, value) for output in outputs)}
+    if not expected or (not multiple and len(expected) != 1):
+        raise CodeOutputUnavailable()
+    selected = submitted_choices(text, source.choices) if text.strip() else set()
+    rules = _frozen_rules(problem)
+    try:
+        part = independent_output_steps(rules, 1, allow_output_marker=True) if rules else None
+    except ValueError as exc:
+        raise CodeOutputUnavailable() from exc
+    if multiple:
+        criterion = (rules.teacher_rubric or part.steps[0].criterion) if part else problem.criterion
+        try:
+            wrong_points, partial_points = selection_awards(criterion, problem.max_score)
+        except ValueError as exc:
+            raise CodeOutputUnavailable() from exc
+    elif part is None:
+        _require_unambiguous_legacy_rule(problem)
+    correct = selected == expected
+    award = problem.max_score if correct else 0
+    description = ""
+    if multiple and selected and not correct:
+        subset = selected < expected
+        award = partial_points if subset else wrong_points
+        description = (
+            ("少选" if subset else "含错选") + f"，按评分标准得 {award:g} 分。"
+            if language == "zh" else
+            ("Some correct options were omitted." if subset else "An incorrect option was selected.") + f" Rubric award: {award:g}."
+        )
+    return _output_correction(problem, [(award, award == problem.max_score, description)], language, part=part)
 
 
 @contextmanager
-def output_step(plan, answer, *, correct, language):
+def output_step(plan, *, correct, evidence, language):
     """Bind one independent result step without letting a model allocate points."""
     rules = plan.part_rubric
     if rules is None or len(rules.parts) != 1 or rules.nonblank_floor.resolve(rules.total_pts):
@@ -128,16 +195,6 @@ def output_step(plan, answer, *, correct, language):
             or steps[0].required_conditions or steps[0].follow_through_pts
             or part.alternative.source_quote or part.alternative.field_sources):
         raise CodeOutputUnavailable()
-    from backend.services.math_source_evidence import source_catalog
-
-    # Quote the actual answer, never the expected output or a generated value.
-    catalog = source_catalog(answer.content, "", "")
-    output_lines = [line for line, (value, _, _) in catalog.items() if _OUTPUT_LINE.match(value)]
-    output_block = _FENCED_ANSWER.match(answer.content.strip())
-    if output_block:
-        payload = output_block[1].splitlines()
-        output_lines = [key for key, (line, _, _) in catalog.items() if line in payload]
-    evidence = output_lines[0] if output_lines else next(iter(catalog), "")
     token = _result_step.set((plan.plan_id, part.id, steps[0].id, correct, evidence,
                               output_feedback(correct, language)))
     try:

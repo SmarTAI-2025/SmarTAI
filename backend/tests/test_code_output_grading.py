@@ -83,13 +83,13 @@ def reviewed_problem(problem, form):
     return confirmed_problem(problem, criterion, draft.model_dump(mode="json"))
 
 
-async def generate_problem(monkeypatch, questions, form):
+async def generate_problem(monkeypatch, questions, form, *, definition=None):
     targets = requested_major_question_materials(questions)
     target, = targets
     assert target["target"] == "criterion"
     question = questions["q1"]
     reply = {"candidates": [{**target, "rubric_definition":
-                           rubric_definition(question, form).model_dump(mode="json", exclude_unset=True)}]}
+                           (definition or rubric_definition(question, form)).model_dump(mode="json", exclude_unset=True)}]}
     call = AsyncMock(return_value=SimpleNamespace(content=json.dumps(reply), duration_ms=1))
     monkeypatch.setattr(ingest_agent, "ainvoke_with_retry", call)
     feedback = {}
@@ -103,12 +103,12 @@ async def generate_problem(monkeypatch, questions, form):
     return confirmed_problem(question, draft.text_value, draft.rubric_draft)
 
 
-def stub_oci(monkeypatch, *, stdout="7\n"):
+def stub_oci(monkeypatch, *, stdout="7\n", program=PROGRAM):
     monkeypatch.setattr(code_output_grading.settings, "program_runner_mode", "oci")
     monkeypatch.setattr(code_output_grading.settings, "runtime_environment", "production")
 
     async def execute(code, stdin, **limits):
-        assert code == PROGRAM
+        assert code == program
         assert stdin == "3"
         assert limits["timeout"] == 5.0 and limits["memory_mb"] == 256
         assert limits["max_output_chars"] == 8192 and limits["function_call"] is None
@@ -127,16 +127,18 @@ def stub_process_grading(monkeypatch, fail_answers=()):
         if answer in fail_answers:
             raise RuntimeError("synthetic provider failure")
         reasoning = "Multiplication gives 6." in answer
+        proof_line = next((f"student:{i}" for i, line in enumerate(answer.splitlines(), 1)
+                           if "Multiplication gives 6." in line), "student:1")
         # Both verdicts are deliberately wrong. The runner owns this row.
         result = output_model.model_validate({
             "confidence": 1, "comment": "Evaluate the multiplication trace.",
             "part_decisions": [{
                 "part_id": "p1", "target_quote": "part:p1",
-                "student_quote": "student:2" if reasoning else "student:1",
+                "student_quote": proof_line,
                 "relevance": "partial" if reasoning else "incorrect",
                 "method": "reference", "progress": "The trace was checked.",
                 "inferences": [
-                    {"step_ids": ["trace"], "evidence": "student:2" if reasoning else "",
+                    {"step_ids": ["trace"], "evidence": proof_line if reasoning else "",
                      "reasoning": "The trace is shown." if reasoning else "The multiplication step is missing.",
                      "result": "written" if reasoning else "gap"},
                     {"step_ids": ["stdout"], "evidence": "student:1",
@@ -315,3 +317,220 @@ async def test_incidental_code_does_not_change_grading(monkeypatch):
     questions = await recognize(monkeypatch, stem, candidate, question_type="概念题")
     assert "code_output" not in questions["q1"]
     assert {item["target"] for item in requested_major_question_materials(questions)} == {"criterion", "reference_answer"}
+
+
+async def grade_fixture(monkeypatch, problem, answers, *, stdout, program=PROGRAM):
+    dispatched = stub_oci(monkeypatch, stdout=stdout, program=program)
+    scored = stub_process_grading(monkeypatch)
+    owner, task, provider = task_with_problem(problem, answers)
+    run_id = start(owner, task)
+    await grading_runs.process_run(run_id=run_id, worker_id="synthetic-stdout",
+        registry=registry_for(SimpleNamespace(provider_id=provider.id, model="fixture")))
+    identities = workflow_repository.list_student_presentations(task)
+    rows = sorted(grading_repository.list_results_for_run(run_id),
+                  key=lambda row: int(identities[row.student_id].display_student_id))
+    dispatched.assert_awaited_once()
+    assert all("code_output_unavailable" in row.review_reasons for row in rows if row.ai_score is None)
+    return rows, scored
+
+
+@pytest.mark.asyncio
+async def test_choice_with_content_markings_and_conflicting_selection(monkeypatch):
+    stem, candidate = source_question("choice")
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    rows, scored = await grade_fixture(monkeypatch, reviewed_problem(question, "choice"), [
+        "B", "B. 7", "b. 七", "选项：ｂ. SEVEN", "B. ７", "seven", "笔迹无法辨认\n(b)",
+        "B and A", "b, a", "B. 6", "A. 7", "B. 77", "B seven", "B six",
+        "B\n不相关涂写", "A. 6", "", "B. 7 A. 6", "B\nA stray line of notes.", "B a note",
+    ], stdout="7\n")
+    assert [row.ai_score for row in rows] == [10]*7 + [0, 0, None, None, None, 10, None, 10, 0, 0, 0, 10, 10]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_numeric_option_labels_accept_each_number_notation(monkeypatch):
+    stem, candidate = source_question("choice")
+    stem = stem.replace("A. `6`", "1. `6`").replace("B. `7`", "2. `7`")
+    candidate["choices"] = {"1": "6", "2": "7"}
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    rows, _ = await grade_fixture(monkeypatch, reviewed_problem(question, "choice"), [
+        "2", "二", "TWO", "２. 7", "二. 七", "1", "one", "1. 七", "one and two",
+    ], stdout="7\n")
+    assert [row.ai_score for row in rows] == [10, 10, 10, 10, 10, 0, 0, None, 0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("subset_award", ["2 points", "full credit", "0 points"])
+async def test_multiple_choice_applies_the_frozen_missing_option_award(monkeypatch, subset_award):
+    program = PROGRAM + "print(8)\n"
+    stem, candidate = source_question("choice", code=program)
+    stem = stem.replace("What is printed by the given program?", "Which values appear in the output? Select all that apply.")
+    stem += "\nC. `8`"
+    candidate["choices"]["C"] = "8"
+    questions = await recognize(monkeypatch, stem, candidate)
+    definition = rubric_definition(questions["q1"], "choice").model_dump()
+    definition["part_rubric"]["parts"][0]["steps"][0]["criterion"] = (
+        f"All correct options: full credit; Any wrong option: 0 points; Partial selection: {subset_award}"
+    )
+    problem = await generate_problem(monkeypatch, questions, "choice", definition=RubricDefinition.model_validate(definition))
+    rows, scored = await grade_fixture(monkeypatch, problem, [
+        "BC", "b and c", "b, c", "Ｂ. 七\nｃ. Eight", "B", "C",
+        "ABC", "A and B", "B\nA", "B. 8", "",
+    ], stdout="7\n8\n", program=program)
+    partial = 10 if subset_award == "full credit" else int(subset_award[0])
+    assert [row.ai_score for row in rows] == [10]*4 + [partial, partial, 0, 0, 0, None, 0]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("multi", [False, True])
+async def test_explanation_compares_the_full_stdout_block(monkeypatch, multi):
+    program = PROGRAM + "print(8)\n" if multi else PROGRAM
+    stem, candidate = source_question("explanation", code=program)
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    correct = "7\n8" if multi else "7"
+    wrong = "7\n9" if multi else "6"
+    answers = [
+        f"Output: {correct}\nMultiplication gives 6.",
+        f"Output:\n{correct}\nMultiplication gives 6.",
+        f"Multiplication gives 6.\n输出：\n{correct}",
+        f"Output:\n```text\n{correct}\n```\nMultiplication gives 6.",
+        f"Output:\n{wrong}\nExplanation: Multiplication gives 6.",
+        f"Output:\n{correct}\n9\nMultiplication gives 6.",
+        f"Output:\n{correct}\nundecidable note\nMultiplication gives 6.",
+        f"Output: {correct}\nOutput: {wrong}\nMultiplication gives 6.",
+        "Output:\nExplanation: Multiplication gives 6.",
+    ]
+    rows, scored = await grade_fixture(monkeypatch, reviewed_problem(question, "explanation"), answers,
+                                       stdout=correct + "\n", program=program)
+    assert [row.ai_score for row in rows] == [10, 10, 10, 10, 6, 6, None, None, None]
+    assert scored.await_count == 6
+    assert {step["item_id"]: step["score"] for step in rows[2].ai_steps} == {"trace": 6, "stdout": 4}
+
+
+@pytest.mark.asyncio
+async def test_two_blanks_keep_frozen_teacher_awards_and_never_shift_missing_values(monkeypatch):
+    program = PROGRAM + "print(8)\n"
+    stem, candidate = source_question("blank", code=program)
+    stem = stem.replace("What is printed by the given program?", "依次填写两个空。第一空____，第二空____。")
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    question["criterion"] = "第一空4分；第二空6分。"
+    definition = rubric_definition(question, "blank").model_dump()
+    part = definition["part_rubric"]["parts"][0]
+    with pytest.raises(ValueError, match="exactly 2 independent point steps"):
+        generated_rubric({**question, "criterion": ""}, RubricDefinition.model_validate(definition))
+    part["steps"] = [
+        {"id": "blank1", "total_pts": 4, "criterion": "第一空正确", "source_quote": "第一空4分"},
+        {"id": "blank2", "total_pts": 6, "criterion": "第二空正确", "source_quote": "第二空6分"},
+    ]
+    part["steps"].reverse()
+    with pytest.raises(ValueError, match="must refer only to blank 1"):
+        generated_rubric(question, RubricDefinition.model_validate(definition))
+    part["steps"].reverse()
+    criterion, draft = generated_rubric(question, RubricDefinition.model_validate(definition))
+    problem = confirmed_problem(question, criterion, draft.model_dump(mode="json"))
+    problem["ai_completion_provenance"] = {}
+    rows, scored = await grade_fixture(monkeypatch, problem, [
+        "7 9", "7\n9", "0 8", "7 8", "7\n8", "7", "8", "7 9 8", "__ 8", "",
+    ], stdout="7\n8\n", program=program)
+    assert [row.ai_score for row in rows] == [4, 4, 6, 10, 10, None, None, None, 6, 0]
+    assert [(step["item_id"], step["score"]) for step in rows[0].ai_steps] == [("blank1", 4), ("blank2", 0)]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_one_blank_keeps_a_multiline_output_as_one_answer(monkeypatch):
+    program = PROGRAM + "print(8)\n"
+    stem, candidate = source_question("blank", code=program)
+    stem = stem.replace("What is printed by the given program?", "Write the exact output in one blank: ____.")
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    rows, _ = await grade_fixture(monkeypatch, reviewed_problem(question, "blank"),
+                                   ["7\n8", "7 8", "7\n9"], stdout="7\n8\n", program=program)
+    assert [row.ai_score for row in rows] == [10, 0, 0]
+
+
+@pytest.mark.asyncio
+async def test_teacher_multi_selection_policy_is_one_funded_step(monkeypatch):
+    program = PROGRAM + "print(8, 9)\n"
+    stem, candidate = source_question("choice", code=program)
+    stem = stem.replace("What is printed by the given program?", "Select all printed values.") + "\nC. `8`"
+    candidate["choices"]["C"] = "8"
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    question["criterion"] = "全部选对满分；错选0分；少选但没有错误选项得四分。"
+    criterion, draft = generated_rubric(question, rubric_definition(question, "choice"))
+    assert criterion == question["criterion"]
+    step, = draft.plan.part_rubric.parts[0].steps
+    assert step.code_output and step.total_pts == 10 and step.criterion == criterion
+    problem = confirmed_problem(question, criterion, draft.model_dump(mode="json"))
+    problem["ai_completion_provenance"] = {}
+    rows, scored = await grade_fixture(monkeypatch, problem, ["B", "BC", "AB", ""],
+                                      stdout="7\n8 9\n", program=program)
+    assert [row.ai_score for row in rows] == [4, 10, 0, 0]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_objective_retry_reuses_recorded_stdout_and_preserves_accepted_results(monkeypatch):
+    stem, candidate = source_question("choice")
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    owner, task, provider = task_with_problem(reviewed_problem(question, "choice"), ["B. 7", "B. 6"])
+    registry = registry_for(SimpleNamespace(provider_id=provider.id, model="fixture"))
+    dispatched = stub_oci(monkeypatch)
+    first = start(owner, task)
+    await grading_runs.process_run(run_id=first, worker_id="stdout-first", registry=registry)
+    assert sorted((row.ai_score for row in grading_repository.list_results_for_run(first)), key=str) == [10, None]
+    retry = start(owner, task, request_id="stdout-retry", retry_scope="failed_only")
+    await grading_runs.process_run(run_id=retry, worker_id="stdout-retry", registry=registry)
+    assert sorted((row.ai_score for row in grading_repository.list_results_for_run(retry)), key=str) == [10, None]
+    dispatched.assert_awaited_once()
+
+
+def test_annotated_selection_keeps_commas_in_the_selected_literal():
+    choices = {"A": "6", "B": "7, 8", "C": "8"}
+    from backend.services.code_output_answers import submitted_choices
+
+    assert submitted_choices("B. 7, 8", choices) == {"B"}
+    assert submitted_choices("B. 7, 8; A", choices) == {"A", "B"}
+    assert submitted_choices("B annotation, A", choices) == {"A", "B"}
+    assert submitted_choices("A stray note.\n`B`", choices) == {"B"}
+
+
+def test_explanation_labels_inside_an_explicit_output_block_are_literal():
+    from backend.services.code_output_answers import explanation_stdout
+
+    result, evidence = explanation_stdout(
+        "Output:\n```text\nOutput: 7\nExplanation: 8\n```\nExplanation: here is the trace.",
+        "Output: 7\nExplanation: 8\n",
+    )
+    assert result == "Output: 7\nExplanation: 8\n"
+    assert evidence == "student:3"
+    assert explanation_stdout("Output: Explanation: 8", "Explanation: 8\n")[0] == "Explanation: 8"
+
+
+def test_number_spellings_preserve_scalar_option_identity():
+    from backend.services.code_output_answers import submitted_choices
+
+    choices = {"A": "22", "B": "-27", "C": "123"}
+    assert submitted_choices("A. twenty-two", choices) == {"A"}
+    assert submitted_choices("B. negative twenty seven", choices) == {"B"}
+    assert submitted_choices("C. one hundred and twenty-three", choices) == {"C"}
+    assert submitted_choices("C. 一百二十三", choices) == {"C"}
+
+
+@pytest.mark.asyncio
+async def test_four_blanks_follow_order_and_ignore_answer_line_wrapping(monkeypatch):
+    program = "input()\nprint('1 2')\nprint('3 4')\n"
+    stem, candidate = source_question("blank", code=program)
+    stem = stem.replace("What is printed by the given program?", "Fill in four blanks in order: ___ ___ ___ ___.")
+    questions = await recognize(monkeypatch, stem, candidate)
+    definition = rubric_definition(questions["q1"], "blank").model_dump()
+    definition["part_rubric"]["parts"][0]["steps"] = [
+        {"id": f"blank{i}", "criterion": f"Blank {i}", "total_pts": i} for i in range(1, 5)
+    ]
+    problem = await generate_problem(monkeypatch, questions, "blank", definition=RubricDefinition.model_validate(definition))
+    rows, _ = await grade_fixture(monkeypatch, problem, ["1 2 3 4", "1 x\n3 4", "1 3 4"],
+                                   stdout="1 2\n3 4\n", program=program)
+    assert [row.ai_score for row in rows] == [10, 8, None]
+    assert [(step["item_id"], step["score"]) for step in rows[1].ai_steps] == [
+        ("blank1", 1), ("blank2", 0), ("blank3", 3), ("blank4", 4),
+    ]
