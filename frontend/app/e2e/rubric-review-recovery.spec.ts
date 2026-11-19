@@ -23,7 +23,8 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) for (c
         details: { reason: "invalid_structured_rubric", rubric_review_draft: { status: "needs_review", fields: [
           { path: "part_rubric.parts[0].steps[0].criterion", value: zh ? "建立等式" : "Establish the equation" },
           { path: "part_rubric.parts[0].steps[0].total_pts", value: 3 },
-        ], invalid_fields: ["part_rubric.parts[0].steps[1]"] } } }],
+        ], invalid_fields: ["part_rubric.parts[0].steps[1].total_pts"],
+        missing_fields: ["part_rubric.parts[0].steps[1].total_pts"] } } }],
     };
     const task = { task_id: "review-recovery", name: zh ? "评分标准复核" : "Rubric review", status: "problems_ready",
       question_recognition_provider_id: "old-model", workflow_revision: 1, problem_data: { q1: question }, student_data: {}, problem_count: 1, student_count: 0,
@@ -74,12 +75,13 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) for (c
     expect(await page.title()).not.toBe("");
     const card = page.locator('[data-question-id="q1"]');
     await expect(card).toBeVisible();
-    await expect(card.getByText(zh ? "已保留已识别评分项，请核对分值和适用条件后保存。"
-      : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.")).toBeVisible();
+    const missingPoints = card.getByText(zh ? "请补填小问 1 · 评分项 2 · 分值。"
+      : "Enter Part 1 · Scoring item 2 · Points.");
+    await expect(missingPoints).toBeVisible();
     await expect(card.getByRole("complementary", { name: zh ? "待核对的评分项" : "Scoring details to review" })).toHaveCount(0);
     const scoring = card.locator("section").filter({ has: page.getByRole("heading", { name: zh ? "本题满分与评分标准" : "Maximum Score and Rubric", exact: true }) });
     await expect(scoring).toContainText(recovered ? (zh ? "建立等式" : "Establish the equation") : criterion);
-    if (recovered) await expect(scoring).toContainText(zh ? "步骤 2：待核对" : "Step 2：Review needed");
+    if (recovered) await expect(scoring).toContainText(zh ? "建立等式（3 分）" : "Establish the equation (3 pts)");
     const confirm = card.getByRole("button", { name: zh ? "第 1 题 · 待确认" : "Question 1 · Confirm review" });
     await expect(confirm).toHaveClass(/border-red-200/);
     await confirm.click();

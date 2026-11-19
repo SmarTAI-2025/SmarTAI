@@ -2570,7 +2570,7 @@ async def generate_missing_question_materials(
     ]
     expected_targets = {row["target_id"]: row for row in target_rows}
 
-    def retain_review(item):
+    def retain_review(item, *, findings=(), missing_parts=()):
         if review_feedback is None:
             return
         if isinstance(item, AICompletionCandidateOutput):
@@ -2585,9 +2585,14 @@ async def generate_missing_question_materials(
         if not target or target["target"] != "criterion":
             return
         from backend.services.rubric_review import review_extraction
-        extraction = review_extraction(proposal,
-            {**problems_data[target["q_id"]], "q_id": target["q_id"]})
+        problem = {**problems_data[target["q_id"]], "q_id": target["q_id"]}
+        extraction = review_extraction(proposal, problem, generated=not problem.get("criterion")
+                                       and not is_programming_question_type(problem.get("type")))
         if extraction:
+            if findings:
+                extraction["findings"] = findings
+            if missing_parts:
+                extraction["missing_parts"] = missing_parts
             review_feedback[target["target_id"]] = extraction
 
     def source_bound_candidate(raw):
@@ -2637,7 +2642,10 @@ async def generate_missing_question_materials(
         if isinstance(definition, dict):
             from backend.services.rubric_drafts import _point_budget, source_bound_definition
             row = {**problems_data[target["q_id"]], "q_id": target["q_id"]}
-            bound = source_bound_definition(definition, row, check_labels=item["target_id"] in part_targets)
+            bound = source_bound_definition(
+                definition, row, check_labels=item["target_id"] in part_targets,
+                normalize_generated_points=target["target"] == "criterion" and not is_programming_question_type(row.get("type")),
+            )
             rubric = bound.get("part_rubric")
             if (is_programming_question_type(row.get("type")) and not (row.get("criterion") or "").strip()
                     and isinstance(rubric, dict) and isinstance(rubric.get("parts"), list)):
@@ -2856,7 +2864,8 @@ async def generate_missing_question_materials(
                         candidate = AICompletionCandidateOutput.model_validate({**bound, "rubric_definition": None})
                     validate_targets(AICompletionOutput(candidates=[candidate]))
                 except ValueError as exc:
-                    retain_review(bound if isinstance(bound, dict) else item)
+                    retain_review(bound if isinstance(bound, dict) else item,
+                                  missing_parts=getattr(exc, "review_missing_parts", ()))
                     if repair_feedback is not None and isinstance(item, dict):
                         key = item.get("target_id")
                         if isinstance(key, str) and key in expected_targets:
@@ -2930,7 +2939,7 @@ async def generate_missing_question_materials(
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
-            retain_review(candidate)
+            retain_review(candidate, findings=exc.findings)
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue

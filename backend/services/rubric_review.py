@@ -3,10 +3,10 @@ from typing import Annotated
 
 from pydantic import TypeAdapter, ValidationError
 
-from backend.services.part_rubric import PartRubric, RubricPart, PointStep, Penalty
+from backend.services.part_rubric import Alternative, PartRubric, RubricPart, PointStep, Penalty
 
 
-def review_extraction(proposal, problem):
+def review_extraction(proposal, problem, *, generated=False):
     """Preserve valid field values even when a sibling or cross-field rule fails.
 
     These are pending extraction results, not an approved ledger. Each value
@@ -15,11 +15,13 @@ def review_extraction(proposal, problem):
     Unknown provider keys are never persisted.
     """
     from backend.services.rubric_drafts import draft_fingerprint
+    from backend.services.true_false_answers import is_decision_only
 
     raw = proposal.get("part_rubric") if isinstance(proposal, dict) else None
     if not isinstance(raw, dict):
         return None
-    fields, invalid = [], []
+    fields, invalid, missing = [], [], []
+    ai_alternative_required = generated and not is_decision_only(problem.get("stem") or "")
     children = {(PartRubric, "parts"): RubricPart, (RubricPart, "steps"): PointStep,
                 (RubricPart, "deductions"): Penalty}
     server_fields = {"teacher_rubric", "rubric_origin", "rubric_version", "teacher_gaps",
@@ -38,7 +40,15 @@ def review_extraction(proposal, problem):
                 # are not missing scoring values. Required fields are checked
                 # only inside the route/items actually present in this proposal.
                 if field.is_required() and not (model is PartRubric and name in {"id", "label", "stem"}):
-                    invalid.append(location if name != "id" else path)
+                    field_path = location if name != "id" else path
+                    invalid.append(field_path)
+                    missing.append(field_path)
+                if model is RubricPart and name == "alternative" and ai_alternative_required:
+                    budget = value.get("total_pts")
+                    if type(budget) in (float, int) and budget > 0:
+                        field_path = location + ".deduct_per_error"
+                        invalid.append(field_path)
+                        missing.append(field_path)
                 continue
             nested = children.get((model, name))
             if nested:
@@ -55,6 +65,12 @@ def review_extraction(proposal, problem):
             except (ValidationError, TypeError, ValueError):
                 invalid.append(location)
                 continue
+            if (ai_alternative_required and model is RubricPart and isinstance(parsed, Alternative)
+                    and type(budget := value.get("total_pts")) in (float, int)
+                    and 0 < budget <= 10000 and parsed.needs_rate(budget)):
+                field_path = location + ".deduct_per_error"
+                invalid.append(field_path)
+                missing.append(field_path)
             fields.append({"path": location, "value": adapter.dump_python(parsed, mode="json")})
         if model is RubricPart and not value.get("steps") and not value.get("deductions"):
             invalid.append(path)
@@ -63,7 +79,8 @@ def review_extraction(proposal, problem):
     if not fields or len(fields) > 5000:
         return None
     return {"version": 1, "status": "needs_review", "input_fingerprint": draft_fingerprint(problem),
-            "fields": fields, "invalid_fields": list(dict.fromkeys(invalid))[:500]}
+            "fields": fields, "invalid_fields": list(dict.fromkeys(invalid))[:500],
+            "missing_fields": list(dict.fromkeys(missing))[:500]}
 
 
 def review_issue(q_id, extraction):

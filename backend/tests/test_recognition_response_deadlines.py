@@ -419,6 +419,7 @@ async def test_real_reader_uses_byok_admission_without_waiting_for_separate_ocr_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure,pending", [
+    ("connect_error", False), ("connect_recovered", False),
     ("connect_timeout", False), ("read_timeout", True), ("upstream_503", True),
     ("invalid_200", True), ("route_changed", True),
 ])
@@ -429,6 +430,10 @@ async def test_real_reader_retains_unknown_responses_but_settles_proved_no_conne
 
     async def handle(request):
         posts.append(request)
+        if failure == "connect_error" or (failure == "connect_recovered" and len(posts) == 1):
+            raise httpx.ConnectError("synthetic pre-request connection reset")
+        if failure == "connect_recovered":
+            return relay_response()
         if failure == "connect_timeout":
             raise httpx.ConnectTimeout("synthetic connection timeout")
         if failure == "read_timeout":
@@ -446,8 +451,8 @@ async def test_real_reader_retains_unknown_responses_but_settles_proved_no_conne
         service, request, data, _ = runner(tmp_path)
         request = new_policy(request, engine)
         result = await run(service, request, data, engine)
-    assert len(posts) == (3 if failure in {"connect_timeout", "read_timeout"} else 1)
-    assert result.status == "needs_review"
+    assert len(posts) == {"connect_recovered": 2, "connect_error": 3, "connect_timeout": 3, "read_timeout": 3}.get(failure, 1)
+    assert result.status != "needs_review" if failure == "connect_recovered" else result.status == "needs_review"
     persisted = workflow_repository.get_operation(result.operation_id, owner_id=request.source.owner_id)
     checkpoint = persisted.checkpoint["calls"]
     assert len(checkpoint) == 1
@@ -456,7 +461,7 @@ async def test_real_reader_retains_unknown_responses_but_settles_proved_no_conne
     assert result.assembly.raw.budget.pending_calls == int(pending)
     if pending:
         assert result.safe_error_code == "provider_submit_uncertain"
-    else:
+    elif failure != "connect_recovered":
         assert result.safe_error_code in {"provider_timeout", "provider_unreachable"}
 
 

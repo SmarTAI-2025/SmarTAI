@@ -73,10 +73,8 @@ async def test_generated_invalid_step_retains_values_for_review_without_executab
 
 
 @pytest.mark.asyncio
-async def test_generated_partial_values_survive_storage_and_manual_handoff(monkeypatch):
+async def test_generated_partial_values_survive_exhausted_retry_and_publish_for_review(monkeypatch):
     from backend.tests.test_incremental_question_preparation import setup, inc, persisted, generated, api
-    from backend.db import workflow_repository
-    from backend.services.task_execution import stop_task_run
     from backend.services import task_facade
     owner, task, operation, pipeline = await setup(monkeypatch)
     original = make_row("")
@@ -88,19 +86,15 @@ async def test_generated_partial_values_survive_storage_and_manual_handoff(monke
         kwargs["review_feedback"]["q1:criterion"] = review_extraction({"part_rubric": raw}, data["q1"])
         return [generated("reference_answer", "A correct answer.")] if not data["q1"]["reference_answer"] else []
     monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
-    with pytest.raises(ValidationError):
-        await pipeline.run()
-    _, rows = persisted(owner, operation)
+    await api.run_durable_question_preparation(operation)
+    finished, rows = persisted(owner, operation)
+    assert finished.status == "done"
     issue = next(i for i in rows["q1"]["preparation_issues"] if i.get("details", {}).get("rubric_review_draft"))
     assert issue["details"]["rubric_review_draft"]["input_fingerprint"] == draft_fingerprint(rows["q1"])
     assert saved_draft(rows["q1"]) is None
-    workflow = workflow_repository.get_workflow(task, owner_id=owner)
-    stop_task_run(task_id=task, owner_id=owner, job_id=operation.operation_id, expected_revision=workflow.workflow_revision)
-    workflow = workflow_repository.get_workflow(task, owner_id=owner)
-    await api.manually_complete_question_preparation(task, operation.operation_id,
-        api.ManualQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision),
-        current=SimpleNamespace(id=owner))
-    saved = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q1"]
+    view = task_facade.get_task(task_id=task, owner_id=owner)
+    assert view["status"] == "problems_ready"
+    saved = view["problem_data"]["q1"]
     assert any(i.get("details", {}).get("rubric_review_draft") == issue["details"]["rubric_review_draft"]
                for i in saved["preparation_issues"])
     assert saved["reference_answer"] == "A correct answer."

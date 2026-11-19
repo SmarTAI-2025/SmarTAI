@@ -183,7 +183,8 @@ async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
 
 
 @pytest.mark.asyncio
-async def test_reported_bundle_cannot_be_accepted_by_an_overall_consistent_verdict():
+@pytest.mark.parametrize("verdict", ["consistent", "inconsistent"])
+async def test_only_a_substantive_defect_blocks_a_complete_bundled_rubric(verdict):
     feedback = {}
     issue = "square: computing the square and proving nonidentity are independently earnable goals"
     rules = rubric()
@@ -192,11 +193,19 @@ async def test_reported_bundle_cannot_be_accepted_by_an_overall_consistent_verdi
         "criterion": "Prove the square equals 1 and prove the element is not the identity."})
     rules = rules.model_copy(update={"parts": (part.model_copy(update={
         "steps": (part.steps[0], bundled, part.steps[3])}),)})
-    provider = Provider([initial(rules), audit(reason=issue, bundled_steps=["square"])])
-    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
-    assert [c.target for c in candidates] == ["reference_answer"]
-    assert issue in feedback["q1:criterion"]
-    assert "without changing the part budget" in feedback["q1:criterion"]
+    if verdict == "inconsistent":
+        issue = "The square step assumes commutativity, which the question does not provide."
+    provider = Provider([initial(rules), audit(verdict=verdict, reason=issue, bundled_steps=["square"])])
+    review = {}
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    if verdict == "consistent":
+        criterion = next(c for c in candidates if c.target == "criterion")
+        assert [step["total_pts"] for step in criterion.rubric_draft["plan"]["part_rubric"]["parts"][0]["steps"]] == [3, 5, 2]
+        assert not feedback and not review
+    else:
+        assert [c.target for c in candidates] == ["reference_answer"]
+        assert issue in feedback["q1:criterion"]
+        assert review["q1:criterion"]["findings"] == [{"part": None, "reason": issue}]
     assert len(provider.calls) == 2
 
 

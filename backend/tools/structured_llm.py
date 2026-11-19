@@ -36,7 +36,7 @@ from tenacity import (
 )
 
 from backend.config import settings
-from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError
+from backend.llm.providers import BaseProvider, LLMResponse, ProviderRequestError, is_preconnection_error
 from backend.llm.endpoint_policy import ProviderEndpointError
 from backend.llm.request_timeouts import current_response_scope, is_response_timeout, provider_local_step
 
@@ -149,6 +149,10 @@ class ResponseTimeoutError(TransientLLMError):
     def __init__(self, *, submission_may_exist: bool):
         super().__init__(self.code)
         self.submission_may_exist = submission_may_exist
+
+
+class ConnectionNotEstablished(TransientLLMError):
+    code = "provider_unreachable"
 
 
 class PermanentLLMError(Exception):
@@ -1227,10 +1231,11 @@ def _preserve_unknown_usage(response):
 
 
 @ordered_call
-@retry(stop=_retry_stop, wait=_retry_wait, retry=retry_if_exception_type((RateLimitError, ResponseTimeoutError)),
+@retry(stop=_retry_stop, wait=_retry_wait,
+       retry=retry_if_exception_type((RateLimitError, ResponseTimeoutError, ConnectionNotEstablished)),
        before=_before_retry_attempt, before_sleep=_before_retry_sleep, sleep=_sleep_before_retry, reraise=True)
-async def _invoke_with_rate_retry(invoke, *args, **kwargs):
-    """Bounded retries for rejected 429s and explicitly authorized timeouts."""
+async def _invoke_with_rate_retry(invoke, *args, retry_preconnection=False, **kwargs):
+    """Retry rejected 429s, authorized timeouts, and proved vision connection failures."""
     try:
         return _preserve_unknown_usage(await invoke(*args, **kwargs))
     except Exception as exc:
@@ -1243,6 +1248,8 @@ async def _invoke_with_rate_retry(invoke, *args, **kwargs):
             # A previous 429 in an SDK exception context cannot authorize even
             # another local retry cycle while this request remains unknown.
             raise
+        if retry_preconnection and is_preconnection_error(exc):
+            raise ConnectionNotEstablished("provider_unreachable") from exc
         from backend.services.background_errors import classify_background_error
         code = classify_background_error(exc, "provider_request_failed")
         _block_exhausted_provider(getattr(invoke, "__self__", invoke), code)
@@ -1256,7 +1263,8 @@ async def _invoke_with_rate_retry(invoke, *args, **kwargs):
 async def ainvoke_vision_with_rate_retry(provider, prompt, images, *, max_output_tokens=None):
     with llm_attempt_budget():
         options = {} if max_output_tokens is None else {"max_output_tokens": max_output_tokens}
-        return await _invoke_with_rate_retry(provider.ainvoke_vision, prompt, images, **options)
+        return await _invoke_with_rate_retry(provider.ainvoke_vision, prompt, images,
+                                             retry_preconnection=True, **options)
 
 
 async def ainvoke_with_rate_retry(provider, messages, **kwargs):

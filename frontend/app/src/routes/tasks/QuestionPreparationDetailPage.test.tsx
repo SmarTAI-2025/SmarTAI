@@ -706,12 +706,12 @@ describe("QuestionPreparationDetailPage navigation", () => {
     await renderPage();
     expect(screen.queryByLabelText("待核对的评分项")).toBeNull();
     expect(screen.queryByText("尚未提供评分标准。")).toBeNull();
-    expect(screen.getByText(/评分要求：建立等式/)).toBeVisible();
+    expect(screen.getByText(/建立等式（3 分）/)).toBeVisible();
+    expect(screen.getByText(/请核对小问 1 · 评分项 2 · 分值/)).toBeVisible();
     expect(mutateAsync).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: "修改第 1 题满分与评分标准" }));
     const input = screen.getByRole("textbox", { name: "第 1 题评分标准" });
-    expect((input as HTMLTextAreaElement).value).toContain("评分要求：建立等式");
-    expect((input as HTMLTextAreaElement).value).toContain("步骤 2 · 满分：待核对");
+    expect((input as HTMLTextAreaElement).value).toBe("- 建立等式（3 分）");
     const corrected = "(a) 建立等式4分；(b) 计算结果6分。";
     await userEvent.clear(input);
     await userEvent.type(input, corrected);

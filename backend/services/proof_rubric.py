@@ -26,8 +26,7 @@ class ProofPartCheck(BaseModel):
     verdict: Literal["consistent", "inconsistent", "uncertain"]
     reason: Text
     bundled_steps: list[Key] = Field(max_length=100, description=(
-        "IDs of steps bundling independently earnable substantive proof goals; [] when none. "
-        "Explain the distinct goals in reason. Do not flag routine algebra or an indivisible inference."
+        "Optional refinements only: IDs of sound steps that could be split within the scoring constraints."
     ))
 
 
@@ -38,6 +37,10 @@ class ProofRubricAudit(BaseModel):
 
 class ProofRubricUnverified(ValueError):
     """An unchecked mathematical rubric must not become an accepted candidate."""
+
+    def __init__(self, message, *, findings=()):
+        super().__init__(message)
+        self.findings = findings
 
 
 def use_proof_steps(row):
@@ -60,8 +63,8 @@ Each criterion must say what is established and what evidence suffices, in conci
 language. Preserve hypotheses, quantifiers, required methods and all requested conclusions.
 Cover each part's own requirements; a sibling part's result cannot replace them. Do not merely
 repeat the full question or use generic 'some progress', 'half complete' or 'local error' tiers.
-When meaningful partial progress is possible within an item, split it into separately assessable
-funded points. Use the mathematical content, not a fixed number of steps or a universal allocation.
+A sound step may cover related achievements. Assess whether its actual criterion gives fair
+credit and covers the required work. A finer split by itself is an optional refinement.
 Do not allocate points for copying givens, renaming symbols, unnecessary intermediate lines,
 restating a proved result, or repeated/equivalent versions of the same inference. Do not add a new
 theorem to prove. A short, genuinely indivisible proof may have one point item.
@@ -92,16 +95,15 @@ async def audit_proof_steps(provider, task, rules):
         system_prompt=(
             "Independently audit the proposed proof scoring steps. " + _QUALITY +
             "For every part check mathematical validity, complete scope, non-overlapping awards, "
-            "useful partial-credit granularity and fair treatment of equivalent/condensed work. "
+            "fair treatment of equivalent and condensed work. "
             "Compare each actual criterion with the source; valid IDs and sums alone prove nothing "
             "about its mathematical quality. Do not require an arbitrary step count. Use inconsistent "
-            "for any violation, uncertain if correctness cannot be established, and consistent only "
-            "when all checks hold. Name the specific step and mathematical issue in reason. "
-            "Explicitly check whether completing one substantive proof goal can earn credit independently "
-            "of another goal currently bundled into the same step. Report those step IDs in bundled_steps, "
-            "and identify the independently earnable goals in reason; use [] if none. A conjunction or "
-            "multiple algebraic lines alone is not a defect. Respect teacher rules and the per-subquestion "
-            "granularity bound; preserve the total budget when requesting a split. "
+            "only for a defect that changes correctness, coverage, the point budget or grading fairness. "
+            "Use uncertain if correctness cannot be established. If the rubric is usable as written, "
+            "use consistent even if a finer division could improve it. For inconsistent, state the actual "
+            "scoring defect in reason, in one concise teacher-facing sentence in the requested language. "
+            "A possible split is never by itself an inconsistency. Use bundled_steps for optional "
+            "refinements only, or [] when none. Do not include split recommendations in a blocking reason. "
             "Return JSON. Schema: " + json.dumps(ProofRubricAudit.model_json_schema())),
         user_prompt=json.dumps({"source": task, "proposal": [
             {"part_id": p.id, "budget": p.total_pts,
@@ -109,13 +111,13 @@ async def audit_proof_steps(provider, task, rules):
         ]}, ensure_ascii=False),
         output_model=ProofRubricAudit, validate_output=validate,
     )
-    failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict == "inconsistent"]
-    failures.extend(f"{part.part_id}: split independently earnable goals in steps "
-                    f"{', '.join(part.bundled_steps)} without changing the part budget: {part.reason}"
-                    for part in audit.parts if part.bundled_steps and part.verdict != "uncertain")
-    if failures:
+    labels = {part.id: part.label for part in rules.parts}
+    findings = [{"part": labels[part.part_id], "reason": part.reason.strip()[:600]}
+                for part in audit.parts if part.verdict == "inconsistent"]
+    if findings:
         # Feed the actual defect to the existing bounded material-repair loop.
-        raise ProofRubricUnverified("Proof scoring steps need correction: " + "; ".join(failures))
+        failures = [f"{part.part_id}: {part.reason}" for part in audit.parts if part.verdict == "inconsistent"]
+        raise ProofRubricUnverified("Proof scoring steps need correction: " + "; ".join(failures), findings=findings)
     return audit
 
 
