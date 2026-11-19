@@ -12,7 +12,7 @@ from backend.domain.code_output import (
 )
 from backend.models import Correction, StepScore, TestCase
 from backend.services.code_output_answers import (
-    CodeOutputUnavailable, same_choice_value, submitted_choices, submitted_stdout,
+    CodeOutputUnavailable, submitted_choices, submitted_stdout,
 )
 from backend.services.programming_runs import QUESTION_OUTPUT, _validate_report, digest, runtime_identity
 from backend.tools.code_interpreter import HostCodeExecutionDisabled, compare_stdout, run_sandbox
@@ -151,8 +151,10 @@ def grade_blanks(problem, source, stdout, text, language):
 def grade_choices(problem, source, stdout, text, language):
     multiple = multiple_choice(problem.stem)
     outputs = choice_output_items(problem.stem, stdout) if multiple else [stdout]
+    # Option identity comes from printed text. Numeric aliases apply only
+    # when interpreting the student's written selection.
     expected = {choice_key(key) for key, value in source.choices.items()
-                if any(same_choice_value(output, value) for output in outputs)}
+                if any(compare_stdout(output, value) for output in outputs)}
     if not expected or (not multiple and len(expected) != 1):
         raise CodeOutputUnavailable()
     selected = submitted_choices(text, source.choices) if text.strip() else set()

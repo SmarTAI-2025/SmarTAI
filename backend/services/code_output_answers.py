@@ -18,7 +18,9 @@ _SELECTION = re.compile(
     re.I,
 )
 _OPTION_NUMBER = rf"(?:(?:minus |negative |负)?{ENGLISH_CARDINAL}|(?:负)?{_NUMBER})"
-_LABEL = re.compile(rf"^\(?([A-Za-z]|{_OPTION_NUMBER})\)?(?:(?![\w'’])|(?=[和及或]))", re.I)
+_LABEL = re.compile(rf"^\(?([A-Za-z]|{_OPTION_NUMBER})(?:\)|(?![\w'’])|(?=[和及或]))", re.I)
+_OPTION_ASSERTION = re.compile(r"^(?:是|为|的|(?:并)?不(?:是|对|正确|选|符合)|错(?:误|了)"
+                               r"|(?:is|was|would be|isn['’]t|wasn['’]t)\b)", re.I)
 _CONNECTOR = re.compile(r"^\s*(?:[,，;；、/&+]|\band\b|和|及)\s*|^\s+", re.I)
 _NUMBER_PREFIX = re.compile(rf"^({_OPTION_NUMBER})(?!\w|\.\d)", re.I)
 
@@ -32,9 +34,7 @@ def unquote(value):
     return value[1:-1] if re.fullmatch(r"`[^`\n]*`", value) else value
 
 
-def same_choice_value(actual, option):
-    if compare_stdout(actual, option):
-        return True
+def _same_number(actual, option):
     try:
         return choice_number(actual) == choice_number(option)
     except ValueError:
@@ -46,7 +46,10 @@ def _stated_value(text, options):
     if quoted := re.match(r"^`([^`]+)`", text):
         return quoted[1], quoted.end()
     known = [value for value in set(options.values()) if value and (
-        text == value or (text.startswith(value) and text[len(value):len(value) + 1] in " \t。.!?,，;；"))]
+        text == value or (
+            text.startswith(value) and text[len(value):len(value) + 1] in " \t。.!?,，;；"
+            and not re.match(r"\.\d", text[len(value):])
+        ))]
     if known:
         value = max(known, key=len)
         return value, len(value)
@@ -55,9 +58,14 @@ def _stated_value(text, options):
 
 
 def _line_choices(line, options):
+    """Return None for a recognized explanation, or the set of selected options."""
     line = re.sub(r"^[-*•]\s+", "", line.strip(" \t*✓√☑"))
-    explicit = _SELECTION.match(line)
-    line = unquote(line[explicit.end():] if explicit else line)
+    if _EXPLANATION.match(line) or re.match(r"^(?:说明|理由)\s*:", line):
+        return None
+    prefix = _SELECTION.match(line)
+    line = unquote(line[prefix.end():] if prefix else line)
+    explicit = bool(prefix)
+    stated_selection = explicit and prefix[0].strip().casefold() not in {"option", "options", "选项"}
     # A contiguous letter list is valid only when the entire line is a list.
     if re.fullmatch(r"[A-Za-z]{2,}", line) and set(line.upper()) <= options.keys():
         return set(line.upper())
@@ -70,12 +78,19 @@ def _line_choices(line, options):
         next_label = _LABEL.match(payload)
         next_key = choice_key(next_label[1]) if next_label else None
         value, length = _stated_value(payload, options) if listed or next_key not in options else (None, 0)
+        if value is None and not stated_selection and _OPTION_ASSERTION.match(payload):
+            return selected or None
         if (key == "A" and label[0] in {"a", "A"} and not (explicit or listed or value)
                 and re.match(r"\s+[A-Za-z]{2,}", tail) and not _CONNECTOR.match(tail)[0].strip()):
             break  # An English article introducing an annotation is not a choice.
         selected.add(key)
+        stated_selection = False
         if value is not None:
-            if not same_choice_value(value, options[key]):
+            # A literal match to a different option conflicts with this label.
+            if not compare_stdout(value, options[key]) and (
+                any(compare_stdout(value, option) for option in options.values())
+                or not _same_number(value, options[key])
+            ):
                 raise CodeOutputUnavailable()
             tail = payload[length:]
         elif listed:
@@ -97,7 +112,9 @@ def _line_choices(line, options):
     if selected:
         return selected
     value = unquote(line.rstrip("。"))
-    by_value = {key for key, option in options.items() if same_choice_value(value, option)}
+    by_value = {key for key, option in options.items() if compare_stdout(value, option)}
+    if not by_value:
+        by_value = {key for key, option in options.items() if _same_number(value, option)}
     if len(by_value) > 1:
         raise CodeOutputUnavailable()
     return by_value
@@ -110,9 +127,12 @@ def submitted_choices(text, choices):
     # Commas separate listed selections. Preserve the comma when it is part of a known literal.
     for line in text.splitlines():
         selected = _line_choices(line, options)
+        if selected is None:
+            continue
         if not selected:
             for clause in re.split(r"[,，;；]", line)[1:]:
-                selected |= _line_choices(clause, options)
+                if choices_in_clause := _line_choices(clause, options):
+                    selected.update(choices_in_clause)
         if not selected:
             selected = {choice_key(match[1]) for match in re.finditer(rf"\(([A-Za-z]|{_NUMBER})\)", line, re.I)}
         marked.update(selected & options.keys())

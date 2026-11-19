@@ -348,6 +348,40 @@ async def test_choice_with_content_markings_and_conflicting_selection(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_correct_option_is_bound_to_printed_text_before_reading_student_aliases(monkeypatch):
+    stem, candidate = source_question("choice")
+    stem = stem.replace("A. `6`", "A. `7.0`")
+    candidate["choices"]["A"] = "7.0"
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    rows, scored = await grade_fixture(monkeypatch, reviewed_problem(question, "choice"), [
+        "B", "A", "b. 七", "B. seven", "7", "7.0", "B. 7.0", "A. 7", "七", "B. 7.5",
+    ], stdout="7\n")
+    assert [row.ai_score for row in rows] == [10, 0, 10, 10, 10, 0, None, None, None, None]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_option_discussed_in_an_explanation_is_not_an_additional_selection(monkeypatch):
+    stem, candidate = source_question("choice")
+    question = (await recognize(monkeypatch, stem, candidate))["q1"]
+    rows, scored = await grade_fixture(monkeypatch, reviewed_problem(question, "choice"), [
+        "答案：B\nA 是错误选项",
+        "A 是错误选项\n答案：B",
+        "答案：B，A 是错误选项",
+        "答案：B\n（A）是错误选项",
+        "答案：B\n选项 A 不正确",
+        "答案：B\nOption A is incorrect.",
+        "答案：B\nA is not the correct answer (A).",
+        "答案：B\n说明：先检查（A），它不是答案。",
+        "答案：B\nA",
+        "B 和 A",
+        "B. 7\nA. 6",
+    ], stdout="7\n")
+    assert [row.ai_score for row in rows] == [10] * 8 + [0, 0, 0]
+    scored.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_numeric_option_labels_accept_each_number_notation(monkeypatch):
     stem, candidate = source_question("choice")
     stem = stem.replace("A. `6`", "1. `6`").replace("B. `7`", "2. `7`")
@@ -365,8 +399,8 @@ async def test_multiple_choice_applies_the_frozen_missing_option_award(monkeypat
     program = PROGRAM + "print(8)\n"
     stem, candidate = source_question("choice", code=program)
     stem = stem.replace("What is printed by the given program?", "Which values appear in the output? Select all that apply.")
-    stem += "\nC. `8`"
-    candidate["choices"]["C"] = "8"
+    stem = stem.replace("A. `6`", "A. `7.0`") + "\nC. `8`"
+    candidate["choices"].update(A="7.0", C="8")
     questions = await recognize(monkeypatch, stem, candidate)
     definition = rubric_definition(questions["q1"], "choice").model_dump()
     definition["part_rubric"]["parts"][0]["steps"][0]["criterion"] = (
