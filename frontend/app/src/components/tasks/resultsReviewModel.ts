@@ -1,6 +1,7 @@
-import type { Correction } from "@/types";
+import type { Correction, ExpertResult } from "@/types";
 import type { Locale } from "@/i18n/messages";
 import { confidenceNeedsAttention, confidenceValue } from "@/lib/confidencePolicy";
+import { reviewProviderFailureLabel } from "@/lib/reviewLabels";
 import {
   correctionReviewAttention,
   correctionReviewBlocked,
@@ -112,6 +113,18 @@ export function correctionReviewLabels(correction: Correction, locale: Locale) {
   return correctionReviewNotes(correction, locale).map(issue => issue.label);
 }
 
+function expertFailureLabel(expert: ExpertResult, locale: Locale): string {
+  const kind = expert.error_kind ?? "general";
+  const failure = expert.provider_failure;
+  // A known quota type or execution failure is more precise than a generic
+  // provider error. For broad retry kinds, prefer the recorded provider cause.
+  if (failure && ["transient_llm", "parse_failed", "quota_exhausted", "general"].includes(kind)) {
+    const detail = reviewProviderFailureLabel(failure.code, failure.http_status, locale);
+    if (detail) return detail;
+  }
+  return reviewReasonLabel(kind, locale);
+}
+
 export function correctionReviewNotes(correction: Correction, locale: Locale, compact = false) {
   const text = (zh: string, en: string) => locale === "en-US" ? en : zh;
   const labels = new Map<string, "blocking" | "advisory">();
@@ -143,13 +156,13 @@ export function correctionReviewNotes(correction: Correction, locale: Locale, co
     } else add(reviewReasonLabel("confidence_unavailable", locale));
   }
   const failedExperts = (correction.expert_results ?? []).filter(expert => expert.error_kind);
-  const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}${text("：", ": ")}${reviewReasonLabel(expert.error_kind!, locale)}`))];
+  const failureLabels = [...new Set(failedExperts.map(expert => `${expert.provider}${text("：", ": ")}${expertFailureLabel(expert, locale)}`))];
   if (hasPartialExperts(correction)) {
     add((compact ? text("部分专家未完成，建议核对。", "Some experts did not finish. Review suggested.")
       : text("部分专家完成，已保留有效评分和评语，建议核对。", "Some experts completed. Valid scores and feedback are retained; review suggested."))
       + (failureLabels.length ? ` ${failureLabels.join(text("；", " · "))}` : ""));
   } else for (const expert of failedExperts) {
-    add(`${expert.provider}${text("：", ": ")}${reviewReasonLabel(expert.error_kind!, locale)}`,
+    add(`${expert.provider}${text("：", ": ")}${expertFailureLabel(expert, locale)}`,
       correctionReviewBlocked(correction) ? "blocking" : "advisory");
   }
   for (const label of mathReviewLabels(correction, locale)) {

@@ -142,6 +142,7 @@ class ExpertResult(BaseModel):
                     "'quota_exhausted' | 'transient_llm' | 'parse_failed' | 'general'. "
                     "Used by multi_expert/grading_agent to pick a friendly comment.",
     )
+    provider_failure: ProviderFailure | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class Correction(BaseModel):

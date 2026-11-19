@@ -9,6 +9,24 @@ const correction = (overrides: Partial<Correction> = {}): Correction => ({
 });
 
 describe("grading review attention", () => {
+  it.each([
+    ["zero_quota", "模型当前无可用额度"],
+    ["daily_quota_exhausted", "模型今日额度已用完"],
+    ["programming_execution_unavailable", "隔离执行服务暂不可用"],
+    ["programming_conflicting_expectations", "同一测试输入对应不同的预期结果"],
+    ["transient_llm", "模型服务暂时不可用（HTTP 503）"],
+  ])("shows the specific %s cause while still blocking a missing score", (kind, label) => {
+    const value = correction({ score: null, provisional_score: null, synthesis_method: "all_failed",
+      review_reasons: ["llm_failed"], expert_results: [{
+        provider: "Model", score: 0, max_score: 10, confidence: 0, steps: [], comment: "", error_kind: kind,
+        ...(kind === "transient_llm" ? { provider_failure: { code: "provider_upstream_unavailable", http_status: 503 } } : {}),
+      }],
+    });
+    expect(correctionReviewNotes(value, "zh-CN", true)).toContainEqual({ severity: "blocking", label: `Model：${label}` });
+    expect(correctionReviewNotes(value, "zh-CN")).toContainEqual({ severity: "blocking", label: `Model：${label}` });
+    expect(correctionReviewNextBlocked(value)).toBe(true);
+  });
+
   it.each([0, 10])("keeps alternative grading advisory at score %s", score => {
     const value = correction({ score, provisional_score: score, confidence: .95, review_status: "pending",
       review_reasons: ["math_alternative_method"] });

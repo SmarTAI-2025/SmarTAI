@@ -475,6 +475,6 @@ class ProgrammingSkill(GradingSkill):
                         "score_status": "unavailable", "primary_reason": kind, "requires_human_review": True,
                     })
                     evidence.safe_summary = f"{ungraded_message(kind, self.language)} {evidence.safe_summary}"
-                result = self._blank_result(problem.q_id, problem.max_score, evidence.safe_summary, error_kind=kind)
+                result = self._blank_result(problem.q_id, problem.max_score, evidence.safe_summary, error_kind=kind, error=exc)
                 result.programming_evidence = evidence
                 return result

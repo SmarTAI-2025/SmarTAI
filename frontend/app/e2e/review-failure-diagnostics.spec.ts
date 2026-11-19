@@ -8,7 +8,13 @@ for (const stage of ["submissions", "grading"] as const) test(`${stage}: failure
   await page.addInitScript(() => { localStorage.setItem("smartai_token", "synthetic"); localStorage.setItem("smartai_locale", "zh-CN"); });
   const correction = { student_id: "S1", q_id: "q1", type: "concept", score: null, max_score: 10, confidence: 0,
     comment: "", steps: [], requires_human_review: true, review_status: "pending", review_reasons: ["all_failed", "parse_failed"],
-    expert_results: [{ provider: "Gemini", score: 0, max_score: 10, confidence: 0, error_kind: "parse_failed", comment: "", steps: [] }] };
+    expert_results: [
+      { provider: "Gemini", score: 0, max_score: 10, confidence: 0, error_kind: "parse_failed", comment: "", steps: [] },
+      { provider: "Daily limit", score: 0, max_score: 10, confidence: 0, error_kind: "daily_quota_exhausted", comment: "", steps: [] },
+      { provider: "Execution", score: 0, max_score: 10, confidence: 0, error_kind: "programming_execution_unavailable", comment: "", steps: [] },
+      { provider: "Relay", score: 0, max_score: 10, confidence: 0, error_kind: "transient_llm", comment: "", steps: [],
+        provider_failure: { code: "provider_upstream_unavailable", http_status: 503 } },
+    ] };
   const sources = [{ source_id: "src1", file_id: "file1", file_name: "样例作答.pdf", content_type: "application/pdf", size_bytes: 1000,
     status: "failed", internal_status: "parse_failed", retryable: true, reason_code: "parse_failed", failure_phase: "parse", matched_answer_count: 1,
     unknown_question_ids: [], student_candidate: "样例学生", answer_diagnostic_count: 1, answer_diagnostics: [{ q_id: "q1", number: "1.10", has_content: true,
@@ -48,6 +54,9 @@ for (const stage of ["submissions", "grading"] as const) test(`${stage}: failure
     const issues = page.getByRole("region", { name: "批改问题明细" });
     await expect(issues).toContainText("样例学生（S1） · 第 1.10 题");
     await expect(issues).toContainText("Gemini：模型返回的评分格式无法读取");
+    await expect(issues).toContainText("Daily limit：模型今日额度已用完");
+    await expect(issues).toContainText("Execution：隔离执行服务暂不可用");
+    await expect(issues).toContainText("Relay：模型服务暂时不可用（HTTP 503）");
     await expect(issues.getByRole("heading")).toHaveText("1 个题次需处理，其中 1 个缺少有效分数。");
   }
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);

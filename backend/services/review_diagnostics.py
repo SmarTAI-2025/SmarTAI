@@ -2,15 +2,19 @@
 import math
 import re
 from backend.domain.confidence_policy import confidence_needs_attention
+from backend.services.question_matching import QUESTION_IDENTIFIER_CONFLICT_FLAGS
 
 _ANSWER_FLAGS = frozenset({
-    "answer_assignment_conflict", "recognition_matching_review", "recognition_failed", "parse_failed",
+    "answer_assignment_conflict", "recognition_matching_review", "recognition_matching_advisory", "recognition_failed", "parse_failed",
     "no_matching_answer", "recognition_manual_pending", "recognition_paused", "recognition_incomplete",
     "recognition_partial", "recognition_needs_review", "recognition_metadata_review", "recognition_boundary_uncertain", "recognition_boundary_previous_page_failed",
     "recognition_boundary_next_page_failed",
     "ocr_only_structure_requires_teacher_review", "recognition_very_low_confidence", "very_low_confidence",
     "recognition_low_confidence", "low_confidence", "manual_blank_confirmed", "provider_submit_uncertain",
-})
+    "unclear_text", "recognition_unclear", "recognition_unreadable", "unreadable_text",
+    "unreadable", "unreadable_text_present", "unreadable_content", "unclear_crossed_out_work",
+    "crossed_out_text_unclear", "external_annotation_present", "authorship_uncertain",
+}) | QUESTION_IDENTIFIER_CONFLICT_FLAGS
 
 
 def public_answer_diagnostics(answers, limit=20, *, required_only=False):
@@ -60,18 +64,34 @@ def public_answer_diagnostics(answers, limit=20, *, required_only=False):
 
 def public_grading_diagnostics(results, limit=20):
     """Keep the shape used by review notes, without feedback or raw responses."""
+    from backend.domain.grading_review import result_programming_review_reason
+    from backend.models import ProviderFailure
+    from backend.services.background_errors import SAFE_BACKGROUND_ERROR_CODES
+    from backend.skills.programming_evidence import UNGRADED_REASONS
+
+    allowed_error_kinds = UNGRADED_REASONS.keys() | {
+        "general", "operation_cancelled", "not_completed", "programming_execution_contract_invalid",
+        "programming_unverified_zero", "programming_language_unsupported", "code_output_unavailable",
+    } | {code for code in SAFE_BACKGROUND_ERROR_CODES if code.startswith(("provider_", "shared_pool_"))}
+
     rows = []
     for result in results:
         review = result.teacher_review or {}
-        from backend.domain.grading_review import result_programming_review_reason
         programming_reason = result_programming_review_reason(result)
-        experts = [{"provider": str(expert.get("provider") or "Model")[:120],
+        experts = []
+        for expert in result.ai_expert_results[:8]:
+            error = expert.get("error_kind")
+            safe = {"provider": str(expert.get("provider") or "Model")[:120],
                     "provider_id": str(expert.get("provider_id") or "")[:120], "score": expert.get("score", 0),
                     "max_score": expert.get("max_score", result.ai_max_score),
                     "confidence": expert.get("confidence"), "comment": "", "steps": [],
-                    "error_kind": expert.get("error_kind") if expert.get("error_kind") in {
-                        "quota_exhausted", "transient_llm", "parse_failed", "general", "operation_cancelled"} else "general" if expert.get("error_kind") else None}
-                   for expert in result.ai_expert_results[:8]]
+                    "error_kind": error if isinstance(error, str) and error in allowed_error_kinds else "general" if error else None}
+            if error and isinstance(expert.get("provider_failure"), dict):
+                try:
+                    safe["provider_failure"] = ProviderFailure.model_validate(expert["provider_failure"]).model_dump(exclude_none=True)
+                except ValueError:
+                    pass
+            experts.append(safe)
         rows.append({"student_id": result.student_id, "q_id": result.q_id, "type": "",
                      "score": result.effective_score, "max_score": result.ai_max_score,
                      "confidence": result.ai_confidence, "comment": "", "steps": [],

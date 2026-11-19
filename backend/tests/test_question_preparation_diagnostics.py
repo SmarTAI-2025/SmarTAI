@@ -172,3 +172,15 @@ def test_public_review_normalizes_only_sanitized_persisted_issue_details(details
         issue_id="conflict", field="rubric", code="source_conflict", severity="warning", status="open", details=details)])])
     assert result[0]["issues"][0]["severity"] == "blocking"
     assert "PRIVATE" not in str(result)
+def test_public_question_review_retains_field_specific_reason_after_readback():
+    from backend.services.question_preparation_diagnostics import preparation_review, public_preparation_review
+    issue = dict(issue_id="q1-tests", q_id="q1", field="rubric", code="generation_failed",
+                 status="open", severity="blocking",
+                 details={"reason": "programming_test_award_unset", "message": "PRIVATE_DETAIL"})
+    parsed = preparation_review({"q1": {"number": "1", "preparation_issues": [
+        issue, {**issue, "issue_id": "q1-parser", "field": "programming_tests",
+                "code": "material_parser_provider_required", "severity": "warning", "details": {}},
+    ]}})
+    rows = public_preparation_review(parsed)
+    assert rows == parsed
+    assert rows[0]["issues"][0]["details"] == {"reason": "programming_test_award_unset"}

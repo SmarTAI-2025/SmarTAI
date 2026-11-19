@@ -7,6 +7,16 @@ const question = (overrides: Partial<ProblemInfo> = {}): ProblemInfo => ({ q_id:
 const issue = (overrides: Partial<PreparationIssue> = {}): PreparationIssue => ({ issue_id: "i1", q_id: "q1", field: "stem", code: "recognition_needs_review", severity: "warning", status: "open", ...overrides });
 
 describe("review hard failures", () => {
+  it("keeps different preparation causes distinct for the same rubric field", () => {
+    const base = issue({ code: "generation_failed", field: "rubric", severity: "blocking" });
+    expect(recognitionIssueLabel({ ...base, details: { reason: "programming_test_award_unset" } }, "zh-CN"))
+      .toBe("请在评分标准中保存测试配分。填 0 表示测试不单独计分。");
+    expect(recognitionIssueLabel({ ...base, details: { provider_error_code: "provider_timeout" } }, "zh-CN"))
+      .toContain("模型响应超时。");
+    expect(recognitionIssueLabel({ ...base, details: { provider_error_code: "provider_upstream_unavailable",
+      provider_http_status: 503 } }, "zh-CN", "detail")).toContain("模型服务暂时不可用（HTTP 503）。");
+  });
+
   it("keeps missing funded tests blocking and visible even on a previously confirmed question", () => {
     const required = issue({ field: "programming_tests", code: "generation_failed", severity: "blocking",
       details: { reason: "required_programming_tests_missing" } });

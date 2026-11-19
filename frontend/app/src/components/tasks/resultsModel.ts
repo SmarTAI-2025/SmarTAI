@@ -2,6 +2,8 @@ import type { Correction, ProblemInfo, StepScore, StudentAnswerInfo, StudentResu
 import type { Locale } from "@/i18n/messages";
 import type { ReviewAttention } from "@/lib/reviewConfirmation";
 import { confidenceNeedsAttention, confidenceValue } from "@/lib/confidencePolicy";
+import { reviewProviderFailureLabel } from "@/lib/reviewLabels";
+import { backgroundErrorTitle } from "@/lib/taskActionGuards";
 export { LOW_CONFIDENCE_THRESHOLD } from "@/lib/confidencePolicy";
 
 export type CorrectionScoreSource =
@@ -412,7 +414,55 @@ export function mathReviewLabels(correction: Correction, locale: Locale): string
   return visible.map(reason => reviewReasonLabel(reason, locale));
 }
 
+const GRADING_FAILURE_LABELS: Record<string, [string, string]> = {
+  zero_quota: ["模型当前无可用额度", "The model has no available quota"],
+  daily_quota_exhausted: ["模型今日额度已用完", "The model’s daily quota is exhausted"],
+  operation_cancelled: ["批改已停止", "Grading was stopped"],
+  not_completed: ["本题批改尚未完成", "Grading for this answer did not finish"],
+  invalid_score_scale: ["模型分数不符合本题的计分范围", "The model’s score does not use the question’s score scale"],
+  missing_student_result: ["未取得该学生的评分结果", "No grading result was returned for this student"],
+  programming_execution_unavailable: ["隔离执行服务暂不可用", "The isolated execution service is unavailable"],
+  native_runner_unavailable: ["C/C++ 测试服务不可用", "The C/C++ test service is unavailable"],
+  toolchain_unavailable: ["编译服务不可用", "The compilation service is unavailable"],
+  native_header_unavailable: ["缺少程序所需的头文件", "A required header is missing"],
+  native_main_required: ["未找到单文件程序所需的 main 入口", "The single-file program has no required main entry point"],
+  native_standard_unsupported: ["执行环境不支持所需的 C/C++ 语言标准", "The runner does not support the required C/C++ standard"],
+  programming_return_value_unavailable: ["无法核对函数返回值", "The function’s return value could not be checked"],
+  programming_reference_conflict: ["参考程序未通过本题测试", "The reference program failed the question’s tests"],
+  programming_conflicting_expectations: ["同一测试输入对应不同的预期结果", "The same test input has different expected results"],
+  programming_case_configuration_invalid: ["测试样例与题目要求不匹配", "The test cases do not match the question requirements"],
+  programming_cases_unavailable: ["这组测试样例无法运行", "These test cases could not be run"],
+  programming_input_domain_unverified: ["无法确认测试输入满足题目限制", "The test inputs could not be verified against the question requirements"],
+  programming_no_cases: ["未取得可用的测试样例", "No usable test cases were available"],
+  programming_preparation_interrupted: ["测试样例准备中断", "Test preparation was interrupted"],
+  programming_mapping_invalid: ["无法确定本题对应的源码或函数", "The source or function assigned to this question is unclear"],
+  programming_source_encoding_unavailable: ["无法按声明编码读取源码", "The source could not be read using its declared encoding"],
+  programming_source_too_large: ["源码超过单文件执行上限", "The source exceeds the single-file execution limit"],
+  programming_language_unsupported: ["执行环境不支持该作答语言", "The runner does not support the language used in this answer"],
+  programming_unverified_zero: ["零分缺少可核实的执行依据", "The zero score lacks verified execution evidence"],
+  mode_unsupported: ["执行环境不支持本题的测试调用方式", "The runner does not support the required test call mode"],
+  contract_invalid: ["执行结果无法与本题测试对应", "The execution results could not be matched to the question’s tests"],
+  provider_auth_failed: ["模型服务未接受凭据", "The model service rejected the credentials"],
+  provider_permission_denied: ["当前账户无权调用该模型", "This account cannot use the model"],
+  provider_model_not_found: ["模型服务找不到所选模型", "The selected model was not found"],
+  provider_model_or_endpoint_not_found: ["模型或接入地址未找到", "The model or endpoint was not found"],
+  provider_request_rejected: ["模型服务拒绝了请求", "The model service rejected the request"],
+  provider_content_blocked: ["模型因内容策略停止输出", "The model stopped under its content policy"],
+  provider_recitation_blocked: ["模型因原文复述限制停止输出", "The model stopped under its recitation policy"],
+  provider_submit_uncertain: ["服务商是否接收请求尚未确认", "It is unclear whether the provider received the request"],
+  shared_pool_weekly_limit_reached: ["本周共享额度不足", "The weekly shared allowance is exhausted"],
+  shared_pool_budget_pending: ["共享额度正在被其他请求占用", "Other requests are using the shared allowance"],
+  shared_pool_usage_unavailable: ["共享模型用量暂时无法结算", "Shared model usage could not be settled"],
+  shared_pool_billing_unavailable: ["共享模型计费配置暂不可用", "Shared model billing is unavailable"],
+  shared_pool_request_too_large: ["本次请求超过共享模型单次限制", "The request exceeds the shared model limit"],
+};
+
 export function reviewReasonLabel(reason: string, locale: Locale = "zh-CN") {
+  if (reason === "programming_execution_contract_invalid") reason = "contract_invalid";
+  if (Object.hasOwn(GRADING_FAILURE_LABELS, reason)) return GRADING_FAILURE_LABELS[reason][locale === "zh-CN" ? 0 : 1];
+  if (/^(provider_|shared_pool_)[a-z0-9_]+$/.test(reason)) {
+    return reviewProviderFailureLabel(reason, undefined, locale) ?? backgroundErrorTitle(reason, locale);
+  }
   const english: Record<string, string> = {
     code_output_unavailable: "The program output or its score could not be verified. Please grade this answer manually.",
     grading_paused: "Paused before grading finished", partial_experts: "Some experts completed",

@@ -1,6 +1,6 @@
 import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmission, SubmissionSourceOutcome, Task } from "@/types";
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
-import { formatSubmissionFlag, genericAnswerReviewLabel, hasQuestionType, incompleteSubmissionLabel, isUnclearAnswerFlag, questionIssueCodeLabel, unclearAnswerLabel } from "./reviewLabels";
+import { formatSubmissionFlag, genericAnswerReviewLabel, hasQuestionType, incompleteSubmissionLabel, isUnclearAnswerFlag, questionIssueCodeLabel, reviewProviderFailureLabel, unclearAnswerLabel } from "./reviewLabels";
 import { isProgrammingProblem } from "./questionPreparation";
 import { rubricReviewDetail } from "./rubricReviewText";
 
@@ -93,15 +93,13 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string, v
     };
     if (labels[issue.field]) {
       const label = labels[issue.field][locale === "zh-CN" ? 0 : 1];
-      if (issue.details?.provider_error_code === "provider_upstream_unavailable") {
-        const status = issue.details?.provider_http_status;
-        const suffix = typeof status === "number" && status >= 500 && status <= 599 ? `（HTTP ${status}）` : "";
-        return locale === "zh-CN" ? `${label}模型服务暂时不可用${suffix}。` : `${label} The model service is temporarily unavailable${suffix}.`;
-      }
+      const failure = reviewProviderFailureLabel(issue.details?.provider_error_code,
+        issue.details?.provider_http_status, locale);
+      if (failure) return locale === "zh-CN" ? `${label}${failure}。` : `${label} ${failure}.`;
       return label;
     }
   }
-  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation" && typeof issue.details?.message === "string") return locale === "zh-CN" ? "请核对教师评分规则的解读。" : "Check how the teacher’s scoring rule was interpreted.";
+  if (issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation") return locale === "zh-CN" ? "请核对教师评分规则的解读。" : "Check how the teacher’s scoring rule was interpreted.";
   if (issue.code === "math_rubric_advisory") return locale === "zh-CN"
     ? "本题评分标准有待核对的内容。" : "Some rubric details need review.";
   if (issue.details?.review_display_reason === "empty_stem") return locale === "zh-CN"
@@ -134,9 +132,13 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string, v
     ["missing_targets", "未找到的题号", "Question numbers not found"],
   ].flatMap(([key, cn, en]) => coverage?.[key]?.length ? [`${zh ? cn : en}：${coverage[key].join(", ")}`] : []);
   if (reasons.length) return reasons.join("；");
-  if (issue.details?.error_code) return zh
-    ? "来源读取失败，请重试或修正原件后继续。"
-    : "Source reading failed. Retry or correct the source before continuing.";
+  if (issue.details?.error_code) {
+    const failure = reviewProviderFailureLabel(issue.details?.provider_error_code ?? issue.details.error_code,
+      issue.details?.provider_http_status, locale);
+    if (failure) return zh ? `来源读取失败。${failure}。` : `Source reading failed. ${failure}.`;
+    return zh ? "来源读取失败，请重试或修正原件后继续。"
+      : "Source reading failed. Retry or correct the source before continuing.";
+  }
   if (issue.code === "recognition_partial" && (issue.details?.incomplete === true || issue.severity === "blocking")) return zh
     ? "来源内容不完整，请对照原件补齐。"
     : "Source content is incomplete. Complete it against the original.";

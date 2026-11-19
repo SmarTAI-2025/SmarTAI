@@ -27,6 +27,25 @@ def gemini_unavailable():
     })
 
 
+def test_expert_result_adds_safe_provider_cause_without_changing_retry_kind(monkeypatch):
+    from backend.services import background_errors
+    from backend.skills.base import GradingSkill
+
+    skill = SimpleNamespace(provider=SimpleNamespace(provider_id="test"))
+    first = GradingSkill._blank_result(skill, "q1", 10, "safe", error_kind="transient_llm",
+                                       error=gemini_unavailable())
+    assert first.error_kind == "transient_llm"
+    assert first.provider_failure.model_dump() == {"code": "provider_upstream_unavailable", "http_status": 503}
+
+    def unavailable(_exc):
+        raise RuntimeError("diagnostics unavailable")
+
+    monkeypatch.setattr(background_errors, "provider_failure_diagnostic", unavailable)
+    fallback = GradingSkill._blank_result(skill, "q1", 10, "safe", error_kind="transient_llm",
+                                          error=gemini_unavailable())
+    assert fallback.error_kind == first.error_kind and fallback.provider_failure is None
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["", "PRIVATE_BLOCKED_PARTIAL_TEXT"])
 @pytest.mark.parametrize("reason", ["provider_recitation_blocked", "provider_content_blocked"])

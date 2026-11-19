@@ -44,13 +44,54 @@ def seed(count=2, flags=()):
     return args
 
 
+@pytest.mark.parametrize(("content", "extra", "expected_flags"), [
+    ("1.1.20. First step [unclear]", [], ["unclear_text"]),
+    ("1.1.20. Work", ["crossed_out_text_unclear"], ["crossed_out_text_unclear"]),
+    ("1.1.20. Readable work", [], []),
+    ("1.1.31. Readable work", [], ["question_identifier_conflict"]),
+    ("1.1.3. Readable work", [], ["question_identifier_conflict"]),
+    ("1.1.3)Readable work", [], ["question_identifier_conflict"]),
+    ("**1.1.21.** Readable work", [], ["question_identifier_conflict"]),
+    ("1.1.20. Work", ["question_identifier_conflict"], ["question_identifier_conflict"]),
+    ("1.1.20. Explain why the second statement holds. Student work.",
+        [], ["question_identifier_conflict"]),
+    ("Student work.\n1.1.20. A reference to this exercise.",
+        [], ["recognition_matching_advisory"]),
+    ("Question 20: Work", [], ["recognition_matching_advisory"]),
+])
+def test_answer_matching_advice_uses_saved_heading_evidence(content, extra, expected_flags):
+    args = seed(flags=["recognition_manual_pending", *extra])
+    with session_scope() as session:
+        first = session.scalar(select(SubmissionAnswerRecord).where(SubmissionAnswerRecord.q_id == "q1"))
+        first.number = "1.1.20"
+        first.content = content
+        questions = {q.q_id: q for q in session.scalars(select(AssignmentQuestionRecord))}
+        questions["q1"].number = "1.1.20"
+        questions["q2"].number = "1.2.20"
+        questions["q2"].stem = "Explain why the second statement holds."
+        for question in questions.values():
+            question.source = _reviewed_source(question.q_id, question.number, question.stem,
+                                               question.criterion, question.type)
+    task = snapshot(args)
+    row = next(a for a in answers(task) if a["q_id"] == "q1")
+    assert row["flag"] == expected_flags
+    assert row["content"] == content
+    assert task_facade.grading_readiness(**args) == {
+        "ready": True, "blocking_issues": [],
+        "warnings": ["submission_recognition_needs_review"] if expected_flags else [],
+    }
+    with session_scope() as session:
+        saved = session.scalar(select(SubmissionAnswerRecord).where(SubmissionAnswerRecord.q_id == "q1"))
+        assert saved.flag == ["recognition_manual_pending", *extra]
+
+
 @pytest.mark.parametrize("flags", [["recognition_manual_pending"], ["recognition_invalid_fields:number,type"]])
 @pytest.mark.parametrize("save_field", ["content", "target_q_id"])
 def test_saving_verified_answer_fields_resolves_doubts_without_confirmation(flags, save_field):
     args = seed(flags=flags)
     before = snapshot(args)
     first = next(a for a in answers(before) if a["q_id"] == "q1")
-    assert not task_facade.grading_readiness(**args)["ready"]
+    assert task_facade.grading_readiness(**args)["ready"] == (flags == ["recognition_manual_pending"])
     patch = {save_field: first["content"] if save_field == "content" else first["q_id"]}
     repaired = save(args, before, first, review_status="pending", **patch)
     assert repaired["answer"]["review_status"] == "pending"
@@ -68,7 +109,9 @@ def test_matching_confirmation_without_rewriting_survives_reload_and_sibling_edi
     first = next(a for a in answers(before) if a["q_id"] == "q1")
     with session_scope() as session:
         revision = session.scalar(select(SubmissionRecord.current_revision_id))
-    assert not task_facade.grading_readiness(**args)["ready"]
+    assert task_facade.grading_readiness(**args) == {
+        "ready": True, "blocking_issues": [], "warnings": ["submission_recognition_needs_review"],
+    }
     confirmed = save(args, before, first, review_status="confirmed", **({"content": first["content"]} if unchanged_save else {}))
     assert confirmed["answer"]["content"] == first["content"]
     assert confirmed["answer"]["answer_id"] == first["answer_id"]
@@ -204,14 +247,20 @@ def test_late_recognition_publication_cannot_replace_teacher_review(action):
     assert answers(snapshot(args)) == answers(current)
 
 
-def test_saved_matching_review_can_start_grading_and_freezes_confirmation():
+@pytest.mark.parametrize("confirm", [False, True])
+def test_matching_review_can_start_grading_without_altering_review_status(confirm):
     args = seed(flags=["recognition_manual_pending"])
     before = snapshot(args)
     first = next(a for a in answers(before) if a["q_id"] == "q1")
-    save(args, before, first, content=first["content"], flag=first["flag"], review_status="confirmed")
+    if confirm:
+        save(args, before, first, content=first["content"], flag=first["flag"], review_status="confirmed")
     current = snapshot(args)
     started = task_facade.start_task_grading(**args, expected_workflow_revision=current["workflow_revision"])
     assert started["job_id"]
+    reloaded = next(a for a in answers(snapshot(args)) if a["answer_id"] == first["answer_id"])
+    assert reloaded["review_status"] == ("confirmed" if confirm else "pending")
+    assert reloaded["content"] == first["content"]
+    assert ("recognition_matching_advisory" in reloaded["flag"]) is not confirm
 
 
 @pytest.mark.parametrize("uncertain", [False, True])

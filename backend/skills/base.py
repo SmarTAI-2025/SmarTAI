@@ -337,6 +337,8 @@ class GradingSkill(ABC):
         max_score: float,
         reason: str,
         error_kind: Optional[str] = None,
+        *,
+        error: Exception | None = None,
     ) -> ExpertResult:
         """Helper: construct a default zero-score result for error paths.
 
@@ -344,6 +346,13 @@ class GradingSkill(ABC):
         | 'general') lets the caller (multi_expert / grading_agent) pick a
         friendly final comment without re-parsing the raw exception text.
         """
+        provider_failure = None
+        if error is not None:
+            from backend.services.background_errors import provider_failure_diagnostic
+            try:
+                provider_failure = provider_failure_diagnostic(error)
+            except Exception:
+                pass  # Optional display evidence must not replace the original grading failure.
         return ExpertResult(
             provider=self.provider.provider_id,
             score=0.0,
@@ -352,6 +361,7 @@ class GradingSkill(ABC):
             comment=reason,
             steps=[],
             error_kind=error_kind or "general",
+            provider_failure=provider_failure,
         )
 
 

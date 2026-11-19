@@ -4,6 +4,20 @@ import { answerNeedsConfirmation, answerReviewAttention, answerReviewNotes, answ
 import { answerReviewNextBlocked } from "./reviewConfirmation";
 
 describe("OCR review labels", () => {
+  it.each([
+    ["unclear_text", "部分作答识别不清，建议对照原文件核对。"],
+    ["crossed_out_text_unclear", "部分划掉的文字识别不清，建议对照原文件核对。"],
+    ["question_identifier_conflict", "请对照学生作答原文件，确认该题对应的题号。"],
+  ])("shows only the specific %s suggestion in the queue and detail", (flag, label) => {
+    const answer = { q_id: "q1", number: "1.1.20", type: "reasoning", content: "Saved work",
+      recognition_confidence: .97, flag: [flag] };
+    expect(answerReviewAttention(answer)).toBe("advisory");
+    expect(answerReviewNextBlocked(answer)).toBe(false);
+    expect(answerReviewQueueReason(answer, "zh-CN")).toBe(label);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([{ label, severity: "advisory" }]);
+    expect(answerReviewNotes({ ...answer, review_status: "confirmed" }, "zh-CN")).toEqual([]);
+  });
+
   it("shows a page-boundary doubt as one optional review message", () => {
     const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text", recognition_confidence: .95,
       flag: ["recognition_uncertain", "recognition_boundary_uncertain"] };

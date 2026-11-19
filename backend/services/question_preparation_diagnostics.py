@@ -102,7 +102,7 @@ def preparation_review(packages):
                 continue
             details = issue.get("details") or {}
             safe = {key: deepcopy(details[key]) for key in (
-                "reason", "incomplete", "confidence", "confidence_scope", "coverage", "error_code",
+                "reason", "incomplete", "confidence", "confidence_scope", "confidence_reasons", "coverage", "error_code",
                 "required_fields", "review_display_reason", "provider_error_code", "provider_http_status", "alternative_caps",
             ) if key in details}
             draft = details.get("rubric_review_draft") or {}
@@ -138,10 +138,11 @@ def public_preparation_review(value):
     codes = {"recognition_partial", "recognition_needs_review", "low_confidence", "generation_failed",
              "manual_completion_required", "parse_anomaly", "source_conflict", "ambiguous_question_match",
              "rubric_step_reference_conflict", "invalid_test_case", "reference_solution_failed_case",
-             "math_rubric_advisory", "ai_source_conflict", "unmapped_source_content", "max_score_not_found", "default_max_score_requires_review"}
+             "math_rubric_advisory", "ai_source_conflict", "unmapped_source_content", "max_score_not_found",
+             "default_max_score_requires_review", "material_recognition_review_required", "material_parser_provider_required"}
     fields = {"stem", "answer", "rubric", "source", "programming_tests", "max_score"}
     reasons = {"conflicting_printed_formula", "invalid_structured_rubric", "test_case_output_conflict", "alternative_cap_review",
-               "required_programming_tests_missing"}
+               "required_programming_tests_missing", "programming_test_award_unset", "teacher_rule_interpretation"}
     for row in value[:500] if isinstance(value, list) else []:
         if not isinstance(row, dict) or not isinstance(row.get("q_id"), str):
             continue
@@ -174,7 +175,13 @@ def public_preparation_review(value):
                 safe["incomplete"] = True
             if details.get("confidence_scope") == "question":
                 safe["confidence_scope"] = "question"
-            if details.get("review_display_reason") in {"missing_type", "missing_number", "empty_stem", "missing_rubric", "missing_answer", "rubric_conflict"}:
+            if isinstance(details.get("confidence_reasons"), list):
+                known = {"quality_uncalibrated", "coverage_not_semantic_accuracy", "low_confidence_content",
+                         "coverage_incomplete", "target_content_unverified"}
+                safe["confidence_reasons"] = [reason for reason in details["confidence_reasons"][:24]
+                                              if isinstance(reason, str) and reason in known]
+            if details.get("review_display_reason") in {"missing_type", "missing_number", "empty_stem", "missing_rubric",
+                                                        "missing_answer", "missing_tests", "rubric_conflict"}:
                 safe["review_display_reason"] = details["review_display_reason"]
             if isinstance(details.get("required_fields"), list):
                 safe["required_fields"] = [field for field in details["required_fields"]
@@ -190,8 +197,9 @@ def public_preparation_review(value):
                 safe["coverage"] = {key: [n for n in coverage.get(key, [])[:500]
                     if type(n) is int and 0 < n <= 10000] for key in ("failed_pages", "unprocessed_pages")
                     if isinstance(coverage.get(key), list)}
-                if isinstance(coverage.get("missing_targets"), list):
-                    safe["coverage"]["missing_targets"] = [n[:80] for n in coverage["missing_targets"][:500] if isinstance(n, str)]
+                for key in ("missing_targets", "unverified_targets"):
+                    if isinstance(coverage.get(key), list):
+                        safe["coverage"][key] = [n[:80] for n in coverage[key][:500] if isinstance(n, str)]
             effective = effective_question_issues({"preparation_issues": [{**issue, "details": safe}]})
             if not effective:
                 continue
