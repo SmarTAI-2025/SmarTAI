@@ -58,7 +58,8 @@ class PreparedSubmissionSource:
     closed_question_ids: frozenset[str] = frozenset()
     opening_candidates: dict[str, tuple[str, str | None]] | None = None
     read_pages: dict[int, str] | None = None
-    boundary_review_edges: dict[tuple[int, str], tuple[str, int]] | None = None
+    leading_answer_headings: dict[int, str] | None = None
+    boundary_number_aliases: dict[str, list[str]] | None = None
 
 
 def has_partial_page_failure(summary):
@@ -118,7 +119,7 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
             if partial_page_failure and (read_pages := getattr(source, "read_pages", None)):
                 from backend.services.submission_incremental import page_gap_review_flags
                 boundary_reviews = page_gap_review_flags(read_pages, coverage["failed_pages"],
-                    source.boundary_review_edges or {}, student.get("stu_ans", []))
+                    source.leading_answer_headings or {}, student.get("stu_ans", []), source.boundary_number_aliases)
             flags = ["recognition_needs_review"]
             if summary.get("error_code") or partial_page_failure or coverage.get("missing_targets"):
                 flags.append("recognition_failed")

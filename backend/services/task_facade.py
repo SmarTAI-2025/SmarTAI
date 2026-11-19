@@ -3823,13 +3823,14 @@ async def run_task_submission_parsing(
                 await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
                     complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
                 read_pages = successful_submission_pages(page_texts.get(source.source_id, {}), coverage)
-                closed, openings, boundary_edges = answer_boundaries_on_read_pages(read_pages, problem_data, coverage)
+                closed, openings, leading_headings = answer_boundaries_on_read_pages(read_pages, problem_data, coverage)
                 invalid = boundary_invalidations.get(source.source_id, set())
                 if read_pages:
                     source = replace(source, closed_question_ids=frozenset(closed - invalid),
                         opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid},
-                        read_pages=read_pages, boundary_review_edges={edge: hint for edge, hint in boundary_edges.items()
-                                                                    if hint[0] not in invalid})
+                        read_pages=read_pages, boundary_number_aliases=aliases,
+                        leading_answer_headings={page: q_id for page, q_id in leading_headings.items()
+                                                 if q_id not in invalid})
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their

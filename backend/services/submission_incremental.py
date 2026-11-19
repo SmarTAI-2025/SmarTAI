@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from bisect import bisect_right
 from collections import Counter
 from dataclasses import replace
@@ -189,6 +190,22 @@ def split_submission_question_units(source, problems, target_ids=None):
 SOURCE_OPENING_QUOTE_LIMIT = 320
 PREVIOUS_PAGE_FAILED = "recognition_boundary_previous_page_failed"
 NEXT_PAGE_FAILED = "recognition_boundary_next_page_failed"
+_PAGE_GAP_PREFIX = re.compile(
+    r"(?:#{1,6}\s+)?(?:\*\*)?(?:(?:question|problem|q|题目?|第)\s*)?"
+    r"(?P<number>\d+(?:\.\d+)*)\s*(?:题)?(?:\*\*)?\s*[.、):：-]?(?:\*\*)?"
+    r"(?:\s*[（(](?:[a-z]|\d+|续[^()（）]*|continued)[）)])*\s*",
+    re.IGNORECASE,
+)
+_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_EXPONENT = re.compile(rf"[{_SUPERSCRIPT_DIGITS}]+|\^([0-9])(?![0-9])")
+_EXPONENT_DIGITS = str.maketrans(_SUPERSCRIPT_DIGITS, "0123456789")
+
+
+def _page_gap_text(value):
+    # Keep the exponent explicit. Compatibility normalization alone would
+    # confuse x² with x2, and subscripts are different source evidence.
+    return _EXPONENT.sub(lambda match: "^{" + (match[1] or match[0].translate(_EXPONENT_DIGITS)) + "}",
+                         " ".join(value.split()))
 
 
 def matches_source_opening(candidate: tuple[str, str | None], content: str, quote: str) -> bool:
@@ -210,7 +227,7 @@ def successful_submission_pages(pages, coverage):
 
 
 def answer_boundaries_on_read_pages(read_pages, problems, coverage):
-    """Find closed answers, pending openings, and answers with only a possible page gap."""
+    """Find closed answers, pending openings, and headings at a readable page's start."""
     if not (read_pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
         return set(), {}, {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
@@ -218,21 +235,18 @@ def answer_boundaries_on_read_pages(read_pages, problems, coverage):
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
-    closed, openings, boundary_reviews = set(), {}, {}
+    closed, openings, leading_headings = set(), {}, {}
     failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
-        edges = [(page + shift, flag) for page, shift, flag in (
-            (unit.previous_gap_page, 1, PREVIOUS_PAGE_FAILED),
-            (unit.next_gap_page, -1, NEXT_PAGE_FAILED),
-        ) if page in failed_pages]
-        if not (unit.complete or unit.closure == "unverified_opening" or edges):
+        gap_page = unit.previous_gap_page
+        follows_failure = gap_page is not None and gap_page in failed_pages
+        if not (unit.complete or unit.closure == "unverified_opening" or follows_failure):
             continue
         q_id = resolve_question_match(unit.number, unit.text, problems)
         if not q_id:
             continue
-        for page, flag in edges:
-            offset = unit.heading_offset if page == unit.heading_page else -1
-            boundary_reviews[page, flag] = q_id, offset
+        if follows_failure:
+            leading_headings[gap_page + 1] = q_id
         if unit.complete:
             closed.add(q_id)
             continue
@@ -259,32 +273,28 @@ def answer_boundaries_on_read_pages(read_pages, problems, coverage):
         prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
             openings[q_id] = (prefix, part.group("label") if part else None)
-    return closed, openings, boundary_reviews
+    return closed, openings, leading_headings
 
 
-def page_gap_review_flags(read_pages, failed_pages, heading_edges, answers):
-    """Locate already-matched answers on actual pages, without parsing their numbers again."""
+def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, number_aliases=None):
+    """Mark page edges supported by already-matched answers and saved OCR."""
     pages = sorted(read_pages)
     failed = set(failed_pages)
-    text, offsets, previous = [], [], None
+    aliases = number_aliases or {}
+    text, offsets, ends, previous = [], [], [], None
     offset = 0
     for page in pages:
         if previous is not None:
             text.append(" " if page == previous + 1 else "\n")
             offset += 1
         offsets.append(offset)
-        normalized = " ".join(read_pages[page].split())
+        normalized = _page_gap_text(read_pages[page])
         text.append(normalized)
         offset += len(normalized)
+        ends.append(offset)
         previous = page
     source = "".join(text)
-    grounded, edges = set(), {}
-
-    def offer(page, flag, position, length, q_id):
-        edge = (page, flag)
-        rank = (position if flag == PREVIOUS_PAGE_FAILED else -position, -length)
-        if edge not in edges or rank < edges[edge][0]:
-            edges[edge] = (rank, q_id)
+    edges = {}
 
     def locate(content):
         if not content:
@@ -302,7 +312,7 @@ def page_gap_review_flags(read_pages, failed_pages, heading_edges, answers):
 
     locations = {}
     for answer in answers:
-        lines = [" ".join(line.split()) for line in (answer.get("content") or "").splitlines() if line.strip()]
+        lines = [_page_gap_text(line) for line in (answer.get("content") or "").splitlines() if line.strip()]
         if not lines:
             continue
         span = locate(" ".join(lines))
@@ -323,30 +333,32 @@ def page_gap_review_flags(read_pages, failed_pages, heading_edges, answers):
     for q_id, spans in locations.items():
         if any(occurrences[span] != 1 for span in spans):
             continue
-        grounded.add(q_id)
         for start, end in spans:
-            first = pages[bisect_right(offsets, start) - 1]
-            last = pages[bisect_right(offsets, end - 1) - 1]
+            first_index = bisect_right(offsets, start) - 1
+            last_index = bisect_right(offsets, end - 1) - 1
+            first, last = pages[first_index], pages[last_index]
+            # Being the closest *matched* answer is insufficient: unlocated
+            # work may still lie between a match and the missing page.
             if first - 1 in failed:
-                offer(first, PREVIOUS_PAGE_FAILED, start, end - start, q_id)
-            if last + 1 in failed:
-                offer(last, NEXT_PAGE_FAILED, end, end - start, q_id)
+                prefix = source[offsets[first_index]:start].strip()
+                label = _PAGE_GAP_PREFIX.fullmatch(prefix) if prefix and not prefix.isdigit() else None
+                matching_label = label and unicodedata.normalize("NFKC", label["number"]) in aliases.get(q_id, ())
+                if not prefix or matching_label:
+                    edges.setdefault((first, PREVIOUS_PAGE_FAILED), set()).add(q_id)
+            if last + 1 in failed and end == ends[last_index]:
+                edges.setdefault((last, NEXT_PAGE_FAILED), set()).add(q_id)
 
-    # Explicit or section-qualified headings remain useful for transcriptions
-    # too different to locate verbatim. Compare them on the same physical page.
-    page_offsets = dict(zip(pages, offsets))
-    for (page, flag), (q_id, heading_offset) in heading_edges.items():
-        if q_id not in grounded:
-            position = -1
-            if heading_offset >= 0:
-                before_heading = read_pages[page][:heading_offset]
-                normalized = " ".join(before_heading.split())
-                position = len(normalized) + int(bool(normalized) and before_heading[-1].isspace())
-            offer(page, flag, page_offsets[page] + position, 0, q_id)
+    # An explicit heading at the very top can identify the first answer
+    # even if its text was reformatted. A heading alone cannot prove a
+    # tail: later OCR text might belong to a different answer.
+    for page, q_id in leading_headings.items():
+        edges.setdefault((page, PREVIOUS_PAGE_FAILED), set()).add(q_id)
 
     result = {}
-    for (_, flag), (_, q_id) in edges.items():
-        result.setdefault(q_id, []).append(flag)
+    for (_, flag), ids in edges.items():
+        if len(ids) == 1:
+            q_id, = ids
+            result.setdefault(q_id, []).append(flag)
     return {q_id: sorted(flags) for q_id, flags in result.items()}
 
 

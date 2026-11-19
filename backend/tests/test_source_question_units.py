@@ -119,14 +119,19 @@ def test_failed_page_advice_only_uses_answers_on_adjacent_successful_pages():
     })
     previous = "recognition_boundary_previous_page_failed"
     following = "recognition_boundary_next_page_failed"
-    assert page_gap_review_flags(pages, [3, 5], edges, []) == {
+    answers = [{"q_id": str(i), "content": content} for i, content in enumerate([
+        "Earlier", "First", "Last before the gap", "Between two gaps", "First after the gap", "Later", "Final",
+    ], 1)]
+    assert page_gap_review_flags(pages, [3, 5], edges, answers) == {
         "3": [following], "4": [following, previous], "5": [previous],
     }
 
 
 def test_empty_successful_page_separates_the_previous_answer_from_a_failure():
-    units = source_question_units({1: "Question 1: Answer", 2: " \n"}, check_opening=True)
-    assert units[0].next_gap_page is None
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    assert page_gap_review_flags({1: "Question 1: Answer", 2: " \n"}, [3], {},
+                                 [{"q_id": "q1", "content": "Answer"}]) == {}
 
 
 def test_matched_fragments_can_bound_the_same_answer_on_both_sides_of_a_failed_page():
@@ -157,7 +162,28 @@ def test_page_gap_does_not_choose_between_questions_sharing_one_text_span():
     assert page_gap_review_flags(pages, [2], {}, answers) == {}
 
 
-def test_last_explicit_heading_can_still_locate_a_reformatted_answer():
+def test_page_gap_does_not_choose_between_overlapping_claims_to_the_edge():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    pages = {1: "2. The proof ends with the identity."}
+    answers = [
+        {"q_id": "q1", "content": "with the identity."},
+        {"q_id": "q2", "content": "The proof ends with the identity."},
+    ]
+    assert page_gap_review_flags(pages, [2], {}, answers) == {}
+
+
+def test_page_gap_does_not_choose_between_conflicting_heading_and_answer_evidence():
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
+
+    pages = {2: "Question 1: The original work."}
+    problems = {"q1": {"number": "1"}, "q2": {"number": "2"}}
+    _, _, headings = answer_boundaries_on_read_pages(pages, problems, {"failed_pages": [1]})
+    answers = [{"q_id": "q2", "content": pages[2]}]
+    assert page_gap_review_flags(pages, [1], headings, answers) == {}
+
+
+def test_heading_alone_does_not_prove_the_last_answer():
     from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
 
     pages = {1: "1. Another answer.\n1.2.3 Some OCR text."}
@@ -167,6 +193,23 @@ def test_last_explicit_heading_can_still_locate_a_reformatted_answer():
         {"q_id": "q2", "content": "Reformatted OCR text."},
     ]
     _, _, edges = answer_boundaries_on_read_pages(pages, problems, {"failed_pages": [2]})
-    assert page_gap_review_flags(pages, [2], edges, answers) == {
-        "q2": ["recognition_boundary_next_page_failed"],
-    }
+    assert page_gap_review_flags(pages, [2], edges, answers) == {}
+
+
+def test_page_gap_does_not_fall_back_to_explicit_headings_inside_the_page():
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
+
+    pages = {1: "Question 1: OCR before the last answer.\n2. Unmatched work at the end.",
+             3: "3. Unmatched work at the beginning.\nQuestion 4: OCR after the first answer."}
+    problems = {f"q{i}": {"number": str(i)} for i in range(1, 5)}
+    answers = [{"q_id": q_id, "content": f"Different text for {q_id}."} for q_id in problems]
+    _, _, edges = answer_boundaries_on_read_pages(pages, problems, {"failed_pages": [2]})
+    assert page_gap_review_flags(pages, [2], edges, answers) == {}
+
+
+def test_a_number_or_a_different_questions_heading_does_not_open_a_matched_answer():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    answers = [{"q_id": "q2", "content": "The proof resumes here."}]
+    for prefix in ("2", "1."):
+        assert page_gap_review_flags({2: f"{prefix}\nThe proof resumes here."}, [1], {}, answers, {"q2": ["2"]}) == {}

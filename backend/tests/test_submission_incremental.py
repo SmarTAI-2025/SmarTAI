@@ -448,13 +448,15 @@ async def test_pdf_page_gap_advises_at_page_boundaries_and_blocks_missing_work(m
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("headings", [
-    ("Question 4:", "Question 2:", "Question 3:", "Question 1:"),
-    ("4.", "2.", "3.", "1."),
-    ("Question 4:", "2.", "3.", "Question 1:"),
-    ("4.", "2.", "", "1."),
+@pytest.mark.parametrize(("headings", "transcribed_power", "expect_edges"), [
+    (("Question 4:", "Question 2:", "Question 3:", "Question 1:"), "x^2", True),
+    (("4.", "2.", "3.", "1."), "x^2", True),
+    (("Question 4:", "2.", "3.", "Question 1:"), "x^2", True),
+    (("4.", "2.", "", "1."), "x^2", True),
+    (("4.", "2.", "3.", "1."), "x²", True),
+    (("Question 4:", "2.", "3.", "Question 1:"), "x₁", False),
 ])
-async def test_pdf_page_gap_uses_the_positions_of_matched_answers(monkeypatch, headings):
+async def test_pdf_page_gap_uses_the_positions_of_matched_answers(monkeypatch, headings, transcribed_power, expect_edges):
     from backend.tests.test_recognition_agent import pdf
 
     owner, task = _seed_task()
@@ -463,13 +465,13 @@ async def test_pdf_page_gap_uses_the_positions_of_matched_answers(monkeypatch, h
             number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
     contents = {
         "q1": "The final answer is complete.",
-        "q2": "The first half of the group proof.\n1. Pair each element with its inverse.",
-        "q3": "The proof resumes with its last claim.",
+        "q2": f"The first half of the group proof.\n1. Pair each element with {transcribed_power}.",
+        "q3": f"The proof resumes with {transcribed_power}.",
         "q4": "A complete answer before the proof.",
     }
     pages = {
-        1: f"{headings[0]} {contents['q4']}\n{headings[1]}\n{contents['q2']}",
-        3: f"{headings[2]} {contents['q3']}\n{headings[3]} {contents['q1']}",
+        1: f"{headings[0]} {contents['q4']}\n{headings[1]}\n{contents['q2'].replace(transcribed_power, 'x^2')}",
+        3: f"{headings[2]} {contents['q3'].replace(transcribed_power, 'x^2')}\n{headings[3]} {contents['q1']}",
     }
 
     async def read(**kwargs):
@@ -500,8 +502,9 @@ async def test_pdf_page_gap_uses_the_positions_of_matched_answers(monkeypatch, h
     answers = {answer["q_id"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
     assert {q_id: answer["content"] for q_id, answer in answers.items()} == contents
     assert {q_id: answer["flag"] for q_id, answer in answers.items()} == {
-        "q1": [], "q2": ["recognition_boundary_uncertain", "recognition_boundary_next_page_failed"],
-        "q3": ["recognition_boundary_uncertain", "recognition_boundary_previous_page_failed"], "q4": [],
+        "q1": [], "q2": ["recognition_boundary_uncertain", "recognition_boundary_next_page_failed"] if expect_edges else [],
+        "q3": ["recognition_boundary_uncertain", "recognition_boundary_previous_page_failed"] if expect_edges else [],
+        "q4": [],
     }
     registry.provider.ainvoke.assert_awaited_once()
 

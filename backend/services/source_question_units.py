@@ -47,10 +47,7 @@ class SourceQuestionUnit:
     pages: tuple[int, ...]
     complete: bool
     closure: str
-    heading_page: int
-    heading_offset: int
     previous_gap_page: int | None = None
-    next_gap_page: int | None = None
 
 
 def source_question_units(pages: dict[int, str], *, source_complete=False,
@@ -85,18 +82,16 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
         text = "\n\n".join(parts)
         matches, previous = [], None
         for match in question_headings(text, numbered=numbered, qualified=qualified):
-            page, page_start = next(
-                (page, start) for page, start, stop in offsets if start <= match.start("number") < stop
-            )
+            page = next(page for page, start, stop in offsets if start <= match.start("number") < stop)
             # Repeating a running question label on its continuation page is
             # not a new question. Keep the heading and body in the same span.
             key = number_key(match.group("number"))
             continuation = (key is not None and previous is not None and previous[0] == key
                             and previous[1] != page)
             if not continuation:
-                matches.append((match, page, page_start))
+                matches.append((match, page))
             previous = (key, page)
-        for index, (match, heading_page, page_start) in enumerate(matches):
+        for index, (match, heading_page) in enumerate(matches):
             number = match.group("number")
             key = number_key(number)
             if known_keys is not None and key not in known_keys:
@@ -116,12 +111,10 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
                 closure = "unverified_opening"
             body = text[match.start():end].strip()
             unit_pages = tuple(page for page, start, stop in offsets if stop > match.start() and start < end)
-            previous_gap_page = group[0] - 1 if check_opening and index == 0 and heading_page == group[0] else None
-            next_gap_page = (group[-1] + 1 if check_opening and following is None
-                             and pages[group[-1]].strip() else None)
+            previous_gap_page = (group[0] - 1 if check_opening and index == 0
+                                 and heading_page == group[0] and not text[:match.start()].strip() else None)
             records.append(SourceQuestionUnit(number, body, unit_pages,
-                closure in {"next_heading", "source_end"}, closure, heading_page,
-                match.start("number") - page_start, previous_gap_page, next_gap_page))
+                closure in {"next_heading", "source_end"}, closure, previous_gap_page))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:
