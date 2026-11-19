@@ -55,6 +55,34 @@ async function setup(page: Page, matching = false) {
 for (const viewport of [{ width: 1440, height: 1000 }, { width: 390, height: 844 }]) {
   test.describe(`assignment review ${viewport.width}`, () => {
     test.use({ viewport });
+    test("separate a page boundary suggestion from missing answer content", async ({ page }, testInfo) => {
+      const { answers, errors, mutations } = await setup(page);
+      answers[0].flag = ["recognition_uncertain", "recognition_boundary_uncertain"];
+      answers[1].flag = ["recognition_failed", "recognition_failed_pages:2", "recognition_incomplete"];
+      const overview = "/tasks/assignment-review/submissions";
+      await page.goto(overview);
+      const queue = page.getByRole("region", { name: "待复核队列" });
+      await expect(queue.getByRole("tab", { name: "需要处理 (1)" })).toBeVisible();
+      await expect(queue.getByText("第 2 页识别失败", { exact: true })).toBeVisible();
+      await queue.locator('a[href*="question=a2"]').click();
+      await expect(page.locator('[data-question-id="a2"]')).toContainText("第 2 页识别失败，作答内容缺失，请对照原文件补全。");
+      await page.goto(overview);
+      await queue.getByRole("tab", { name: "建议处理 (1)" }).click();
+      await expect(queue.getByText("作答可能未识别完整，请对照原文件核对", { exact: true })).toBeVisible();
+      await queue.locator('a[href*="question=a1"]').click();
+      const advisory = page.locator('[data-question-id="a1"]');
+      await expect(advisory).toContainText("作答可能未识别完整，请对照原文件核对");
+      await expect(advisory).not.toContainText("recognition_uncertain");
+      await page.screenshot({ path: testInfo.outputPath("page-boundary-review.png") });
+      answers[1].flag = [];
+      await page.goto(overview);
+      await expect(queue.getByRole("tab", { name: "需要处理 (0)" })).toBeVisible();
+      await page.getByRole("button", { name: "进入批改设置", exact: true }).click();
+      await expect(page).toHaveURL(/grading-setup$/);
+      expect(mutations).toEqual([]);
+      expect(errors).toEqual([]);
+    });
+
     test("save duplicate, reload, locate other answer, resolve swap and proceed", async ({ page }, testInfo) => {
       const { errors, mutations, answers } = await setup(page);
       await page.goto("/tasks/assignment-review/students/S1?question=a2");

@@ -382,6 +382,234 @@ async def test_response_arriving_after_stop_cannot_write_a_source_structure(monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("blank_heading", "missing_answer"), [(False, True), (True, True), (True, False)])
+async def test_pdf_page_gap_advises_at_page_boundaries_and_blocks_missing_work(monkeypatch, blank_heading, missing_answer):
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    numbers = ("1.1.5", "1.1.7", "1.1.20", "1.1.29", "1.1.31")
+    for index, number in enumerate(numbers, 1):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    pages = {1: "1.1.5: Complete\n1.1.7 Some unclear marks\n1.1.20 Text visible before the gap",
+             3: "1.1.29 A complete final answer"}
+    if blank_heading:
+        pages[3] += "\n1.1.31" if missing_answer else "\n1.1.31 The other full answer"
+    calls = []
+
+    async def read(**kwargs):
+        await kwargs["on_pages"]([dict(page_number=page, text=text) for page, text in pages.items()])
+        coverage = {"processed_pages": [1, 3], "failed_pages": [2], "unprocessed_pages": [], "total_pages": 3}
+        return SimpleNamespace(text="\n\n".join(pages.values()), recognition={
+            "error_code": "image_recognition_unconfirmed",
+            "coverage": coverage, "page_diagnostics": coverage,
+        })
+
+    async def invoke(messages):
+        questions = _questions(messages)
+        calls.append([question["q_id"] for question in questions])
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
+            dict(q_id=q["q_id"], number=q["number"], type="concept",
+                 content=content, flag={"q2": ["unclear_text"], "q4": ["recognition_uncertain"]}.get(q["q_id"], []),
+                 recognition_confidence={"q3": 1, "q4": .95}.get(q["q_id"]),
+                 **({"source_opening": content} if q["q_id"] == "q5" and content else {}))
+            for q, content in zip(questions, ("Complete", "Some unclear marks", "Text visible before the gap",
+                                              "A complete final answer", "" if missing_answer else "The other full answer"))
+        ])))
+
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.pdf", content=pdf(["First", "Unread", "Last"]), content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == "error"
+    assert before["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+    await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                            expected_revision=before["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {a["q_id"]: a for a in after["student_data"]["S1"]["stu_ans"]}
+    assert calls == [["q1", "q2", "q3", "q4", "q5"]]
+    assert not answers["q1"]["flag"]
+    assert answers["q2"]["flag"] == ["unclear_text"]
+    assert answers["q3"]["content"] == "Text visible before the gap"
+    assert answers["q3"]["flag"] == ["recognition_boundary_uncertain"]
+    assert answers["q4"]["flag"] == ["recognition_uncertain", "recognition_boundary_uncertain"]
+    if missing_answer:
+        assert not answers["q5"]["content"]
+        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["q5"]["flag"])
+    else:
+        assert answers["q5"]["content"] == "The other full answer" and not answers["q5"]["flag"]
+    readiness = task_facade.grading_readiness(task_id=task, owner_id=owner)
+    assert readiness["ready"] is not missing_answer
+    assert ("submission_recognition_blocked" in readiness["blocking_issues"]) == missing_answer
+    assert "submission_recognition_needs_review" in readiness["warnings"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("continued_heading", "next_answer"), [
+    ("1.1.29（续）", True),
+    ("1.1.29（续上页）", True),
+    ("1.1.29 （续上页）", True),
+    ("1.1.29 （续上页）", False),
+    ("Question 1.1.29: (continued)", True),
+    ("Question 1.1.29: (continued) Proof fragment", False),
+    ("1.1.29 (a) （续） Proof fragment", True),
+    ("Question 1.1.29: Proof ending", False),
+])
+async def test_pdf_continuation_after_unread_page_stays_incomplete_on_handoff(
+    monkeypatch, continued_heading, next_answer,
+):
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    numbers = ["1.1.5", "1.1.7", "1.1.29"]
+    if next_answer:
+        numbers.append("1.1.31")
+    contents = {"1.1.5": "Complete first answer", "1.1.7": "Opening fragment",
+                "1.1.29": "Proof ending only", "1.1.31": "Complete next answer"}
+    for index, number in enumerate(numbers, 1):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    pages = {1: "Question 1.1.5: Complete first answer\n1.1.7 Opening fragment",
+             3: f"{continued_heading}\nProof ending only"}
+    if next_answer:
+        pages[3] += "\n1.1.31 Complete next answer"
+
+    async def read(**kwargs):
+        await kwargs["on_pages"]([dict(page_number=page, text=value) for page, value in pages.items()])
+        coverage = {"processed_pages": [1, 3], "failed_pages": [2], "unprocessed_pages": [], "total_pages": 3}
+        return SimpleNamespace(text="\n\n".join(pages.values()), recognition={
+            "error_code": "image_recognition_unconfirmed", "coverage": coverage, "page_diagnostics": coverage,
+        })
+
+    async def invoke(messages):
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
+            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["number"]],
+                 flag=["recognition_failed"] if continued_heading.endswith("Proof ending") and q["q_id"] == "q3" else [],
+                 **({"source_opening": contents["1.1.31"]} if q["number"] == "1.1.31" else {}))
+            for q in _questions(messages)
+        ])))
+
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.pdf", content=pdf([pages[1], "Unread opening", pages[3]]),
+        content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["status"] == "error"
+    assert before["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+    await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                            expected_revision=before["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {a["q_id"]: a for a in after["student_data"]["S1"]["stu_ans"]}
+    assert answers["q3"]["content"] == "Proof ending only"
+    assert answers["q2"]["flag"] == ["recognition_boundary_uncertain"]
+    assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["q3"]["flag"])
+    assert not answers["q1"]["flag"]
+    if next_answer:
+        assert not answers["q4"]["flag"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("unread", "continuation_first", "opening_evidence", "part_label", "separator"), [
+    (True, False, "valid", "", "\n"),
+    (True, True, "valid", "", "\n"),
+    (True, True, "missing", "", "\n"),
+    (True, False, "unbound", "", "\n"),
+    (True, False, "missing_from_transcription", "", "\n"),
+    (False, False, "missing", "", "\n"),
+    (True, False, "valid", "(a)", "\n"),
+    (True, True, "labelled", "(a)", "\n"),
+    (True, False, "label_only", "(a)", "\n"),
+    (True, False, "wrong_label", "(a)", "\n"),
+    (True, False, "valid", "(a)", " "),
+    (True, True, "valid", "(a)", " "),
+    (True, False, "label_only", "(a)", " "),
+    (True, True, "wrong_label", "(a)", " "),
+])
+async def test_pdf_gap_handoff_uses_each_answers_opening_evidence(
+    monkeypatch, unread, continuation_first, opening_evidence, part_label, separator,
+):
+    import fitz
+
+    owner, task = _seed_task()
+    for index, number in enumerate(("1.1.29", "1.1.31"), 1):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    opening = "Let G be a finite group of even order."
+    body = "Pair every element with its inverse. One nonidentity element must be self-inverse."
+    full_answer = f"{opening} {body}"
+    saved_answer = body if opening_evidence == "missing_from_transcription" else full_answer
+    if opening_evidence in {"labelled", "label_only", "wrong_label"}:
+        saved_answer = f"{part_label}\n{saved_answer}"
+    quotes = {"unbound": "An invented opening.", "labelled": f"{part_label} {opening}",
+              "label_only": part_label, "wrong_label": f"(b) {opening}"}
+    proof_tail = "By the identity already established, the direct product is abelian."
+    partial = f"1.1.29（续）\n{proof_tail}"
+    heading = f"1.1.31 {part_label}".rstrip()
+    full = f"{heading}{separator}{full_answer}"
+    pages = {1: "Name: Student One\nStudent ID: S1", 2: "1.1.29\nThe full direct-product proof."}
+    pages[3] = "\n".join((partial, full) if continuation_first else (full, partial)) if unread else full
+    with fitz.open() as document:
+        for page_text in pages.values():
+            page = document.new_page(width=900, height=350)
+            assert page.insert_textbox(fitz.Rect(20, 20, 880, 320), page_text, fontname="china-s", fontsize=10) > 0
+        pdf_bytes = document.tobytes()
+    calls = []
+
+    async def read(**kwargs):
+        with fitz.open(stream=kwargs["content"], filetype="pdf") as document:
+            assert document.page_count == 3 and "1.1.29" in document[1].get_text()
+            seen = {index: page.get_text().strip() for index, page in enumerate(document, 1) if not unread or index != 2}
+        await kwargs["on_pages"]([dict(page_number=page, text=value) for page, value in seen.items()])
+        coverage = {"processed_pages": list(seen), "failed_pages": [2] if unread else [],
+                    "unprocessed_pages": [], "total_pages": 3}
+        return SimpleNamespace(text="\n\n".join(seen.values()), recognition={
+            "error_code": "image_recognition_unconfirmed" if unread else None,
+            "coverage": coverage, "page_diagnostics": coverage,
+        })
+
+    async def invoke(messages):
+        calls.append(messages[0].content)
+        answers = []
+        for question in _questions(messages):
+            number = question["number"]
+            content = (proof_tail if unread else "The full direct-product proof.") if number == "1.1.29" else saved_answer
+            answer = dict(q_id=question["q_id"], number=number, type="concept", content=content, flag=[])
+            if number == "1.1.29" and unread:
+                # The explicit continuation heading must not certify this tail.
+                answer["source_opening"] = proof_tail
+            elif number == "1.1.31" and opening_evidence != "missing":
+                answer["source_opening"] = quotes.get(opening_evidence, opening)
+            answers.append(answer)
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=answers)))
+
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.pdf", content=pdf_bytes, content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    task_state = task_facade.get_task(task_id=task, owner_id=owner)
+    if unread:
+        assert task_state["status"] == "error"
+        assert task_state["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+        await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                                expected_revision=task_state["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {answer["number"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
+    assert answers["1.1.31"]["content"] == saved_answer
+    assert bool(answers["1.1.31"]["flag"]) == (unread and opening_evidence not in {"valid", "labelled"})
+    if unread:
+        assert answers["1.1.29"]["content"] == proof_tail
+        assert {"recognition_failed_pages:2", "recognition_incomplete"} <= set(answers["1.1.29"]["flag"])
+    else:
+        assert not answers["1.1.29"]["flag"]
+    assert len(calls) == 1 and ("source_opening" in calls[0]) == unread
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("later_page_fails", [False, True])
 async def test_closed_answer_is_saved_before_later_ocr_and_is_not_invalidated_by_its_failure(monkeypatch, later_page_fails):
     owner, task = _seed_task()

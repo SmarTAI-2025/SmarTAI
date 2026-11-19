@@ -682,7 +682,7 @@ function buildSubmissionQueueItems(
       if (!question) continue;
       const attention = answerReviewAttention(answer);
       if (attention === "none") continue;
-      const notes = answerReviewNotes(answer, locale, true);
+      const notes = answerReviewNotes(answer, locale, true, "queue");
       for (const severity of ["blocking", "advisory"] as const) {
         const reasons = notes.filter(note => note.severity === severity).map(note => note.label);
         if (!reasons.length && (notes.length || attention !== severity)) continue;

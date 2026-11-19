@@ -38,6 +38,9 @@ from backend.tools.file_processing import (
 
 
 logger = logging.getLogger(__name__)
+BOUNDARY_REVIEW_FLAG = "recognition_boundary_uncertain"
+_ADVISORY_FLAGS = frozenset({"recognition_uncertain", "unclear_text",
+                             "authorship_uncertain", "external_annotation_present"})
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,9 @@ class PreparedSubmissionSource:
     retryable: bool = False
     recognition: dict | None = None
     whole_source: bool = True
+    closed_question_ids: frozenset[str] = frozenset()
+    opening_candidates: dict[str, tuple[str, str | None]] | None = None
+    boundary_review_ids: frozenset[str] = frozenset()
 
 
 def failed_pdf_without_identity(result: source_outcome_repository.WorkflowSourceResult) -> bool:
@@ -70,14 +76,29 @@ def failed_pdf_without_identity(result: source_outcome_repository.WorkflowSource
 
 def attach_submission_recognition(results, sources, *, verified_question_ids=()):
     """Keep reading uncertainty separate from student identity and correctness."""
-    by_source = {source.source_id: source.recognition for source in sources if source.recognition}
+    by_source = {source.source_id: source for source in sources if source.recognition}
     output = []
     for result in results:
-        summary = by_source.get(result.source_id)
-        if result.student is None or summary is None:
+        source = by_source.get(result.source_id)
+        if result.student is None or source is None:
             output.append(result)
             continue
+        summary = source.recognition
+        closed = getattr(source, "closed_question_ids", ())
+        candidates = getattr(source, "opening_candidates", None) or {}
+        boundary_reviews = getattr(source, "boundary_review_ids", ())
+        uncertain = "provider_submit_uncertain" in {result.stable_error_code, summary.get("error_code")}
+        openings = (result.student.get("recognition") or {}).get("source_opening_hashes", {})
         verified = set(verified_question_ids)
+        for answer in result.student.get("stu_ans", []):
+            q_id, content = answer["q_id"], answer.get("content", "")
+            if not isinstance(content, str) or not content.strip():
+                continue
+            if q_id in closed or (
+                q_id in candidates and q_id in openings
+                and openings[q_id] == hashlib.sha256(content.encode()).hexdigest()
+            ):
+                verified.add(q_id)
         student = {**result.student, "recognition": {**result.student.get("recognition", {}), **summary,
             **({"complete_question_ids": sorted(verified)} if verified else {})}}
         # File assessments stay in source diagnostics. Each parsed answer owns
@@ -90,11 +111,20 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
                 pages = (summary.get("coverage") or {}).get(key) or []
                 if pages:
                     flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
-            student["stu_ans"] = [answer if answer.get("q_id") in verified else
-                dict(answer, flag=list(dict.fromkeys([*answer.get("flag", []), *flags])))
-                for answer in student.get("stu_ans", [])]
-        if recognition_has_failure(summary):
-            uncertain = "provider_submit_uncertain" in {result.stable_error_code, summary.get("error_code")}
+            answers = []
+            for answer in student.get("stu_ans", []):
+                q_id = answer["q_id"]
+                existing = [flag for flag in answer.get("flag", []) if flag != BOUNDARY_REVIEW_FLAG]
+                if q_id in verified:
+                    added = []
+                elif (not uncertain and q_id in boundary_reviews and answer.get("content", "").strip()
+                      and all(flag in _ADVISORY_FLAGS or flag.startswith("answer_recognition_confidence:")
+                              for flag in existing)):
+                    added = [BOUNDARY_REVIEW_FLAG]
+                else:
+                    added = flags
+                answers.append(dict(answer, flag=list(dict.fromkeys([*existing, *added]))))
+            student["stu_ans"] = answers
             result = replace(result, status="parse_failed",
                 stable_error_code="provider_submit_uncertain" if uncertain else summary.get("error_code") or "submission_parse_failed",
                 failure_phase="recognition", retryable=False if uncertain else bool(summary.get("retryable", True)))

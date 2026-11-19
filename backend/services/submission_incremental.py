@@ -1,9 +1,13 @@
 """Conservative answer boundaries and composition of independently saved units."""
 from __future__ import annotations
 
+import hashlib
+import re
 from dataclasses import replace
-from backend.services.source_question_units import QUESTION_HEADING
+
 from backend.services.programming_submission_mapping import native_source
+from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
+from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 
 
 def merge_parse_repair(previous, current, question_ids, *, problems):
@@ -39,6 +43,8 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
     answers = {answer["q_id"]: dict(answer) for answer in student.get("stu_ans", [])}
     old_repairs = set((student.get("recognition") or {}).get("repair_question_ids", []))
     new_repairs = set((current.student.get("recognition") or {}).get("repair_question_ids", []))
+    openings = (student.get("recognition") or {}).get("source_opening_hashes", {})
+    incoming_openings = (current.student.get("recognition") or {}).get("source_opening_hashes", {})
     repair_fields = {q_id: invalid_fields(answer, old_repairs) for q_id, answer in answers.items()}
     model_reviews = set((student.get("recognition") or {}).get("model_review_question_ids", [])) & set(answers)
     incoming_reviews = set((current.student.get("recognition") or {}).get("model_review_question_ids", []))
@@ -91,6 +97,14 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
         "missing_question_ids": [q_id for q_id in question_ids if q_id not in answers],
         "identity_invalid_fields": sorted(identity_invalid),
         "model_review_question_ids": sorted(model_reviews & set(question_ids))}
+    if openings or incoming_openings:
+        # Only carry evidence for the exact transcription retained by repair.
+        student["recognition"]["source_opening_hashes"] = {
+            q_id: digest for q_id, answer in answers.items()
+            if q_id in question_ids and (q_id in openings or q_id in incoming_openings)
+            and (digest := hashlib.sha256(answer["content"].encode()).hexdigest())
+                in (openings.get(q_id), incoming_openings.get(q_id))
+        }
     # A repaired type does not validate the old answer content that we kept.
     # Matching review is independent of format retries: do not send more model
     # calls solely to clear this review marker.
@@ -170,6 +184,73 @@ def split_submission_question_units(source, problems, target_ids=None):
     return units or [(source, targets)]
 
 
+SOURCE_OPENING_QUOTE_LIMIT = 320
+
+
+def matches_source_opening(candidate: tuple[str, str | None], content: str, quote: str) -> bool:
+    """Compare the opening text, allowing an optional matching subpart label."""
+    source_prefix, part_label = candidate
+    content = " ".join(content.split())
+    quote = " ".join(quote.split())
+    if part_label:
+        label = re.escape(part_label[1:-1])
+        matching_label = re.compile(rf"^[（(]{label}[）)]\s*", re.IGNORECASE)
+        content = matching_label.sub("", content, count=1)
+        quote = matching_label.sub("", quote, count=1)
+    return bool(quote and source_prefix.startswith(quote) and content.startswith(quote))
+
+
+def answer_boundaries_on_read_pages(pages, problems, coverage):
+    """Find closed answers, pending openings, and answers with only a possible page gap."""
+    if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
+        return set(), {}, set()
+    from backend.services.question_matching import question_number_aliases, resolve_question_match
+
+    aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
+    # Use successfully read pages only, even when an earlier attempt also
+    # produced a candidate for an unread page.
+    read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
+    units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
+                                  qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
+    closed, openings, boundary_reviews = set(), {}, set()
+    failed_pages = set(coverage.get("failed_pages") or ())
+    for unit in units:
+        touches_failed_page = unit.adjacent_gap_page in failed_pages
+        if not (unit.complete or unit.closure == "unverified_opening" or touches_failed_page):
+            continue
+        q_id = resolve_question_match(unit.number, unit.text, problems)
+        if not q_id:
+            continue
+        if unit.complete:
+            closed.add(q_id)
+            continue
+        heading = question_headings(unit.text, qualified=True)[0]
+        # A continuation annotation can delimit the preceding answer.
+        # A standard subpart label still allows separate opening evidence.
+        title = heading.group("title").strip()
+        part = _PURE_LABEL_RE.fullmatch(title)
+        if part:
+            title = ""
+        elif (
+            (inline := _PAREN_LABEL_RE.match(title))
+            and title[inline.end():].startswith((" ", "\t"))
+            and _is_subpart_marker(title, inline)
+        ):
+            part = inline
+            title = title[inline.end():].lstrip()
+        annotation = re.match(r"\([^()]*\)|（[^（）]*）", title)
+        if annotation and annotation.end() == len(title):
+            continue
+        opening_text = title + unit.text[heading.end("title"):]
+        prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
+        if prefix:
+            if unit.closure == "unverified_opening":
+                openings[q_id] = (prefix, part.group("label") if part else None)
+            if touches_failed_page and not annotation:
+                boundary_reviews.add(q_id)
+    return closed, openings, boundary_reviews
+
+
 def merge_source_answer_units(results, source, problems):
     """Combine independently saved question units without inventing absent answers."""
     students = [result for result in results if result.student is not None]
@@ -177,9 +258,11 @@ def merge_source_answer_units(results, source, problems):
         return results[0]
     first = students[0]
     student = {**first.student}
-    answers, model_reviews = {}, set()
+    answers, model_reviews, openings = {}, set(), {}
     for result in students:
-        unit_reviews = set((result.student.get("recognition") or {}).get("model_review_question_ids", []))
+        recognition = result.student.get("recognition") or {}
+        unit_reviews = set(recognition.get("model_review_question_ids", []))
+        openings.update(recognition.get("source_opening_hashes", {}))
         for answer in result.student.get("stu_ans", []):
             q_id = answer["q_id"]
             answers[q_id] = answer
@@ -189,6 +272,8 @@ def merge_source_answer_units(results, source, problems):
     student["stu_ans"] = [answers[q_id] for q_id in problems if q_id in answers]
     student["recognition"] = {**student.get("recognition", {}),
         "model_review_question_ids": sorted(model_reviews & set(problems))}
+    if openings:
+        student["recognition"]["source_opening_hashes"] = openings
     student.update(source_id=source.source_id, stored_file_id=source.stored_file_id,
                    source_filename=source.filename)
     failures = [result for result in results if result.status in {"parse_failed", "no_matching_answer"}]

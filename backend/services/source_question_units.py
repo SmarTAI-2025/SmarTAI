@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 # Bare numbered lines are often solution steps. These are deliberately not
@@ -23,12 +23,20 @@ NUMBERED_QUESTION_HEADING = re.compile(
     r"(?:\*\*)?[ \t]+(?P<title>\S[^\n]*)$"
 )
 
+# A full exercise label such as 1.1.20 can bound a submission answer.
+# Single integers and ordinary decimals are not section-qualified labels.
+QUALIFIED_QUESTION_HEADING = re.compile(
+    r"(?m)^[ \t]*(?P<number>\d+(?:\.\d+){2,})"
+    r"(?:[ \t]*[:：、][ \t]*|\.(?:[ \t]+|$)|[ \t]+|(?=[（(])|$)(?P<title>[^\n]*)$"
+)
 
-def question_headings(text: str, *, numbered=False):
+
+def question_headings(text: str, *, numbered=False, qualified=False):
     matches = list(QUESTION_HEADING.finditer(text))
-    if numbered:
+    if numbered or qualified:
         starts = {match.start() for match in matches}
-        matches.extend(match for match in NUMBERED_QUESTION_HEADING.finditer(text) if match.start() not in starts)
+        pattern = NUMBERED_QUESTION_HEADING if numbered else QUALIFIED_QUESTION_HEADING
+        matches.extend(match for match in pattern.finditer(text) if match.start() not in starts)
     return sorted(matches, key=lambda match: match.start())
 
 
@@ -39,16 +47,19 @@ class SourceQuestionUnit:
     pages: tuple[int, ...]
     complete: bool
     closure: str
+    adjacent_gap_page: int | None = None
 
 
 def source_question_units(pages: dict[int, str], *, source_complete=False,
                           known_numbers: set[str] | None = None,
                           allow_repeated_numbers=False, numbered=False,
+                          qualified=False, source_end_page: int | None = None,
+                          check_opening=False,
                           number_key: Callable[[str], str | None] = str) -> list[SourceQuestionUnit]:
     """Identify bounded source text, without inferring content or inventing IDs.
 
     Only a next explicit heading in contiguous saved pages closes a question.
-    The final unit requires a confirmed complete source. Adjacent same-number
+    The final unit requires a confirmed end of the source. Adjacent same-number
     headings across pages continue that unit; a number returning after another
     question, gaps and unfinished tails stay incomplete. Callers may persist fragments,
     but must not generate/grade from an incomplete unit. An optional number_key
@@ -70,7 +81,7 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             offset += len(text) + 2
         text = "\n\n".join(parts)
         matches, previous = [], None
-        for match in question_headings(text, numbered=numbered):
+        for match in question_headings(text, numbered=numbered, qualified=qualified):
             page = next(page for page, start, stop in offsets
                         if start <= match.start("number") < stop)
             # Repeating a running question label on its continuation page is
@@ -83,7 +94,8 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             previous = (key, page)
         for index, match in enumerate(matches):
             number = match.group("number")
-            if known_keys is not None and number_key(number) not in known_keys:
+            key = number_key(number)
+            if known_keys is not None and key not in known_keys:
                 continue
             following = matches[index + 1] if index + 1 < len(matches) else None
             end = following.start() if following else len(text)
@@ -91,19 +103,29 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             # assert completeness against a known question set.
             next_key = number_key(following.group("number")) if following else None
             next_known = next_key is not None and (known_keys is None or next_key in known_keys)
-            final = following is None and source_complete and len(groups) == 1
+            final = following is None and ((source_complete and len(groups) == 1)
+                                           or group[-1] == source_end_page)
+            closure = "next_heading" if next_known else "source_end" if final else "open"
+            if check_opening and group[0] > 1 and closure != "open":
+                # A label delimits text. After a gap it cannot certify a new
+                # opening, regardless of how many other labels preceded it.
+                closure = "unverified_opening"
             body = text[match.start():end].strip()
+            unit_pages = tuple(page for page, start, stop in offsets if stop > match.start() and start < end)
+            adjacent_gap_page = None
+            if check_opening and closure == "open" and following is None and group[0] == 1:
+                adjacent_gap_page = group[-1] + 1
+            elif closure == "unverified_opening" and index == 0 and unit_pages[0] == group[0]:
+                adjacent_gap_page = group[0] - 1
             records.append(SourceQuestionUnit(number, body,
-                tuple(page for page, start, stop in offsets if stop > match.start() and start < end),
-                bool(next_known or final), "next_heading" if next_known else "source_end" if final else "open"))
+                unit_pages, closure in {"next_heading", "source_end"}, closure, adjacent_gap_page))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:
         return records
     counts = Counter(number_key(unit.number) for unit in records)
-    return [SourceQuestionUnit(unit.number, unit.text, unit.pages,
-        unit.complete and counts[number_key(unit.number)] == 1,
-        unit.closure if counts[number_key(unit.number)] == 1 else "repeated_heading") for unit in records]
+    return [unit if counts[number_key(unit.number)] == 1 else
+            replace(unit, complete=False, closure="repeated_heading", adjacent_gap_page=None) for unit in records]
 
 
 @dataclass(frozen=True)
@@ -114,7 +136,8 @@ class SourcePageGroup:
 
 
 def source_page_groups(pages: dict[int, str], *, source_complete=False, source_end_page=None,
-                       numbered=True, number_key: Callable[[str], str | None] = str) -> list[SourcePageGroup]:
+                       numbered=True, check_opening=False,
+                       number_key: Callable[[str], str | None] = str) -> list[SourcePageGroup]:
     """Batch the questions on a page; retain adjoining continuation pages.
 
     Heading candidates only determine request boundaries, never question IDs
@@ -133,7 +156,7 @@ def source_page_groups(pages: dict[int, str], *, source_complete=False, source_e
         spans[-1].append(number)
     units = [unit for span in spans for unit in source_question_units(
         {number: pages[number] for number in span}, source_complete=span[-1] == end_page,
-        allow_repeated_numbers=True, numbered=numbered, number_key=number_key)]
+        allow_repeated_numbers=True, numbered=numbered, check_opening=check_opening, number_key=number_key)]
     parent = {number: number for number in numbers}
 
     def root(number):

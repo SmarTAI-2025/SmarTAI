@@ -44,6 +44,7 @@ from backend.services.programming_test_contract import (
 )
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
+from backend.services.submission_incremental import SOURCE_OPENING_QUOTE_LIMIT, matches_source_opening
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     KATEX_GENERATION_GUIDANCE,
@@ -769,6 +770,8 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
             invalid_identity.append(field)
 
     answers, invalid_ids, unknown = {}, set(), []
+    openings = getattr(source, "opening_candidates", None) or {}
+    opening_hashes = {}
     model_review_ids = set()
     total = len(payload["stu_id"]) + len(payload["stu_name"])
     # Reserve space for bounded metadata/markers on every requested answer.
@@ -821,8 +824,16 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
             # A duplicate mapping is ambiguous even if both strings are valid.
             answers[q_id]["flag"] = list(dict.fromkeys([*answers[q_id]["flag"], "recognition_manual_pending"]))
             invalid_ids.add(q_id)
+            opening_hashes.pop(q_id, None)
         else:
             answers[q_id] = answer
+            quote = raw.get("source_opening")
+            if q_id in openings and isinstance(quote, str) and len(quote) <= SOURCE_OPENING_QUOTE_LIMIT and not invalid_fields:
+                if matches_source_opening(openings[q_id], answer["content"], quote):
+                    opening_hashes[q_id] = hashlib.sha256(answer["content"].encode()).hexdigest()
+                elif quote.strip() and q_id in getattr(source, "boundary_review_ids", ()):
+                    # A contradicted opening claim is more than a page-edge doubt.
+                    answer["flag"].append("recognition_failed")
     missing = known_question_ids - set(answers)
     for q_id in missing:
         answers[q_id] = dict(q_id=q_id, number="", type="", content="", flag=["recognition_manual_pending"])
@@ -832,6 +843,8 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
     payload["recognition"] = dict(missing_question_ids=sorted(missing),
         repair_question_ids=sorted(missing | invalid_ids), identity_invalid_fields=invalid_identity,
         model_review_question_ids=sorted(model_review_ids))
+    if opening_hashes:
+        payload["recognition"]["source_opening_hashes"] = opening_hashes
     return payload, tuple(dict.fromkeys(unknown))[:100]
 
 
@@ -951,11 +964,23 @@ async def parse_student_answer_sources(
                 f"**[Question Data (JSON)]**:\n{problems_json}\n\n"
                 f"**[Student Submission Content]**:\n---\n{source.text}\n---"
             )
+            opening_ids = known_question_ids & set(getattr(source, "opening_candidates", None) or {})
+            opening_guidance = (
+                "\nSome PDF pages could not be read. For these answer IDs only, add source_opening to the answer object "
+                "when the visible student text positively establishes where that answer begins: "
+                f"{json.dumps(sorted(opening_ids))}. Quote the substantive opening verbatim "
+                f"(up to {SOURCE_OPENING_QUOTE_LIMIT} characters), "
+                "starting with the first text after the question label. A number, an answer label, a previous different "
+                "question, and a conclusion alone do not establish a start. Omit source_opening when the passage "
+                "continues prior work or the beginning is uncertain. Judge whether the original writing is visible, "
+                "without judging whether the student answered correctly or completed the solution."
+                if independent_answers and opening_ids else ""
+            )
             messages = [
                 SystemMessage(content=HW_SYSTEM_PROMPT +
                     "\nNever reconstruct missing pages or assume unread work is blank. "
                     "Preserve available answer fragments; flag an answer recognition_incomplete "
-                    "when its continuation or steps are missing."),
+                    "when its continuation or steps are missing." + opening_guidance),
                 HumanMessage(content=user_message),
             ]
             try:
