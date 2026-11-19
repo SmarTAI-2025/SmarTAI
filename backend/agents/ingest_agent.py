@@ -45,6 +45,7 @@ from backend.services.programming_test_contract import (
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
 from backend.services.submission_incremental import SOURCE_OPENING_QUOTE_LIMIT, matches_source_opening
+from backend.services.submission_source_pipeline import has_partial_page_failure
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
     KATEX_GENERATION_GUIDANCE,
@@ -841,7 +842,8 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
         if len(answer["flag"]) > 97:
             answer["flag"] = answer["flag"][:97]
             invalid_fields.append("flag")
-        if "recognition_incomplete" in answer["flag"]:
+        if "recognition_incomplete" in answer["flag"] and not (
+                answer["content"].strip() and has_partial_page_failure(getattr(source, "recognition", None))):
             invalid_fields.append("content")
         if invalid_fields:
             answer["flag"] = list(dict.fromkeys([*answer["flag"], "recognition_manual_pending",
@@ -858,9 +860,6 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
             if q_id in openings and isinstance(quote, str) and len(quote) <= SOURCE_OPENING_QUOTE_LIMIT and not invalid_fields:
                 if matches_source_opening(openings[q_id], answer["content"], quote):
                     opening_hashes[q_id] = hashlib.sha256(answer["content"].encode()).hexdigest()
-                elif quote.strip() and q_id in getattr(source, "boundary_review_ids", ()):
-                    # A contradicted opening claim is more than a page-edge doubt.
-                    answer["flag"].append("recognition_failed")
     missing = known_question_ids - set(answers)
     for q_id in missing:
         answers[q_id] = dict(q_id=q_id, number="", type="", content="", flag=["recognition_manual_pending"])

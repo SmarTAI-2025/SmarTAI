@@ -3572,6 +3572,7 @@ async def run_task_submission_parsing(
             from backend.services.submission_incremental import (
                 answer_boundaries_on_read_pages,
                 invalidate_answer_units, merge_parse_repair, merge_source_answer_units, split_submission_question_units,
+                successful_submission_pages,
             )
             from backend.agents.question_preparation_agent import _major_question_generation_concurrency
             parse_capacity = asyncio.Semaphore(_major_question_generation_concurrency(provider) if provider else 4)
@@ -3822,13 +3823,15 @@ async def run_task_submission_parsing(
                 requested = coverage.get("requested_pages") or []
                 await schedule_pages(source.source_id, source.stored_file_id, source.filename, source.content_type,
                     complete=complete, end_page=max(requested) if requested else coverage.get("total_pages"))
-                closed, openings, boundary_reviews = answer_boundaries_on_read_pages(
-                    page_texts.get(source.source_id, {}), problem_data, coverage)
+                read_pages = successful_submission_pages(page_texts.get(source.source_id, {}), coverage)
+                closed, openings, leading_headings = answer_boundaries_on_read_pages(read_pages, problem_data, coverage)
                 invalid = boundary_invalidations.get(source.source_id, set())
-                if closed or openings or boundary_reviews:
+                if read_pages:
                     source = replace(source, closed_question_ids=frozenset(closed - invalid),
                         opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid},
-                        boundary_review_ids=frozenset(boundary_reviews - invalid))
+                        read_pages=read_pages, boundary_number_aliases=aliases,
+                        leading_answer_headings={page: q_id for page, q_id in leading_headings.items()
+                                                 if q_id not in invalid})
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their

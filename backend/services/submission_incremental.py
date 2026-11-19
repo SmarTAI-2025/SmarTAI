@@ -3,6 +3,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
+from bisect import bisect_right
+from collections import Counter
 from dataclasses import replace
 
 from backend.services.programming_submission_mapping import native_source
@@ -185,6 +188,28 @@ def split_submission_question_units(source, problems, target_ids=None):
 
 
 SOURCE_OPENING_QUOTE_LIMIT = 320
+PREVIOUS_PAGE_FAILED = "recognition_boundary_previous_page_failed"
+NEXT_PAGE_FAILED = "recognition_boundary_next_page_failed"
+_PAGE_GAP_PREFIX = re.compile(
+    r"(?:#{1,6}\s+)?(?:\*\*)?(?:(?:question|problem|q|题目?|第)\s*)?"
+    r"(?P<number>\d+(?:\.\d+)*)\s*(?:题)?(?:\*\*)?\s*[.、):：-]?(?:\*\*)?"
+    r"(?:\s*[（(](?:[a-z]|\d+|续[^()（）]*|continued)[）)])*\s*",
+    re.IGNORECASE,
+)
+_PAGE_NUMBER_FOOTER = re.compile(
+    r"(?:[-–—][ \t]+([0-9]+)[ \t]+[-–—]|Page[ \t]+([0-9]+)|第[ \t]*([0-9]+)[ \t]*页)",
+    re.IGNORECASE,
+)
+_SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
+_EXPONENT = re.compile(rf"[{_SUPERSCRIPT_DIGITS}]+|\^([0-9])(?![0-9])")
+_EXPONENT_DIGITS = str.maketrans(_SUPERSCRIPT_DIGITS, "0123456789")
+
+
+def _page_gap_text(value):
+    # Keep the exponent explicit. Compatibility normalization alone would
+    # confuse x² with x2, and subscripts are different source evidence.
+    return _EXPONENT.sub(lambda match: "^{" + (match[1] or match[0].translate(_EXPONENT_DIGITS)) + "}",
+                         " ".join(value.split()))
 
 
 def matches_source_opening(candidate: tuple[str, str | None], content: str, quote: str) -> bool:
@@ -200,29 +225,36 @@ def matches_source_opening(candidate: tuple[str, str | None], content: str, quot
     return bool(quote and source_prefix.startswith(quote) and content.startswith(quote))
 
 
-def answer_boundaries_on_read_pages(pages, problems, coverage):
-    """Find closed answers, pending openings, and answers with only a possible page gap."""
-    if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
-        return set(), {}, set()
+def successful_submission_pages(pages, coverage):
+    # Do not use an earlier attempt's candidate for a currently unread page.
+    return {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
+
+
+def answer_boundaries_on_read_pages(read_pages, problems, coverage):
+    """Find closed answers, pending openings, and headings at a readable page's start."""
+    if not (read_pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
+        return set(), {}, {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
-    # Use successfully read pages only, even when an earlier attempt also
-    # produced a candidate for an unread page.
-    read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
-    closed, openings, boundary_reviews = set(), {}, set()
+    closed, openings, leading_headings = set(), {}, {}
     failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
-        touches_failed_page = unit.adjacent_gap_page in failed_pages
-        if not (unit.complete or unit.closure == "unverified_opening" or touches_failed_page):
+        gap_page = unit.previous_gap_page
+        follows_failure = gap_page is not None and gap_page in failed_pages
+        if not (unit.complete or unit.closure == "unverified_opening" or follows_failure):
             continue
         q_id = resolve_question_match(unit.number, unit.text, problems)
         if not q_id:
             continue
+        if follows_failure:
+            leading_headings[gap_page + 1] = q_id
         if unit.complete:
             closed.add(q_id)
+            continue
+        if unit.closure != "unverified_opening":
             continue
         heading = question_headings(unit.text, qualified=True)[0]
         # A continuation annotation can delimit the preceding answer.
@@ -244,11 +276,103 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
         opening_text = title + unit.text[heading.end("title"):]
         prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
-            if unit.closure == "unverified_opening":
-                openings[q_id] = (prefix, part.group("label") if part else None)
-            if touches_failed_page and not annotation:
-                boundary_reviews.add(q_id)
-    return closed, openings, boundary_reviews
+            openings[q_id] = (prefix, part.group("label") if part else None)
+    return closed, openings, leading_headings
+
+
+def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, number_aliases=None):
+    """Mark page edges supported by already-matched answers and saved OCR."""
+    pages = sorted(read_pages)
+    failed = set(failed_pages)
+    aliases = number_aliases or {}
+    text, offsets, ends, body_ends, previous = [], [], [], [], None
+    offset = 0
+    for page in pages:
+        if previous is not None:
+            text.append(" " if page == previous + 1 else "\n")
+            offset += 1
+        offsets.append(offset)
+        raw = read_pages[page].rstrip()
+        normalized = _page_gap_text(raw)
+        body, _, last_line = raw.rpartition("\n")
+        footer = _PAGE_NUMBER_FOOTER.fullmatch(last_line.strip())
+        # Keep the original OCR for locating answers. Only an independent
+        # trailing marker with the actual page number can shorten the edge.
+        body_length = len(_page_gap_text(body)) if footer and str(page) in footer.groups() else len(normalized)
+        body_ends.append(offset + body_length)
+        text.append(normalized)
+        offset += len(normalized)
+        ends.append(offset)
+        previous = page
+    source = "".join(text)
+    edges = {}
+
+    def locate(content):
+        if not content:
+            return None
+        start = source.find(content)
+        if start < 0 or source.find(content, start + 1) >= 0:
+            return None
+        end = start + len(content)
+        # Short answers must still match whole words, not pieces of another
+        # answer, identifier or number.
+        if ((start and content[0].isalnum() and source[start - 1].isalnum())
+                or (end < len(source) and content[-1].isalnum() and source[end].isalnum())):
+            return None
+        return start, end
+
+    locations = {}
+    for answer in answers:
+        lines = [_page_gap_text(line) for line in (answer.get("content") or "").splitlines() if line.strip()]
+        if not lines:
+            continue
+        span = locate(" ".join(lines))
+        if span:
+            spans = (span,)
+        elif len(lines) > 1:
+            # The structured answer may join fragments on either side of a
+            # failed page. Locate both ends without joining OCR across the gap.
+            start_span, end_span = locate(lines[0]), locate(lines[-1])
+            if not (start_span and end_span and start_span[1] <= end_span[0]):
+                continue
+            spans = (start_span, end_span)
+        else:
+            continue
+        locations[answer["q_id"]] = spans
+
+    occurrences = Counter(span for spans in locations.values() for span in spans)
+    for q_id, spans in locations.items():
+        if any(occurrences[span] != 1 for span in spans):
+            continue
+        for start, end in spans:
+            first_index = bisect_right(offsets, start) - 1
+            last_index = bisect_right(offsets, end - 1) - 1
+            first, last = pages[first_index], pages[last_index]
+            # Being the closest *matched* answer is insufficient: unlocated
+            # work may still lie between a match and the missing page.
+            if first - 1 in failed:
+                prefix = source[offsets[first_index]:start].strip()
+                label = _PAGE_GAP_PREFIX.fullmatch(prefix) if prefix and not prefix.isdigit() else None
+                matching_label = label and unicodedata.normalize("NFKC", label["number"]) in aliases.get(q_id, ())
+                if not prefix or matching_label:
+                    edges.setdefault((first, PREVIOUS_PAGE_FAILED), set()).add(q_id)
+            body_end = body_ends[last_index]
+            if (last + 1 in failed and max(start, offsets[last_index]) < body_end
+                    and end in (body_end, ends[last_index])):
+                edges.setdefault((last, NEXT_PAGE_FAILED), set()).add(q_id)
+
+    # An explicit heading at the very top can identify the first answer
+    # even if its text was reformatted. A heading alone cannot prove a
+    # tail: later OCR text might belong to a different answer.
+    for page, q_id in leading_headings.items():
+        edges.setdefault((page, PREVIOUS_PAGE_FAILED), set()).add(q_id)
+
+    result = {}
+    for (_, flag), ids in edges.items():
+        if len(ids) == 1:
+            q_id, = ids
+            result.setdefault(q_id, []).append(flag)
+    return {q_id: sorted(flags) for q_id, flags in result.items()}
 
 
 def merge_source_answer_units(results, source, problems):
