@@ -191,7 +191,7 @@ for (const width of [390, 1024, 1280, 1440, 1920]) {
     await expect(remove).toBeFocused();
     await remove.click();
     await dialog.getByRole("button", { name: "确认删除" }).click();
-    await expect(remove).toHaveCount(0);
+    await expect(open).toHaveCount(0);
     expect(deletes).toEqual(["/tasks/practice"]);
     // Deleting from the attention list must also retire the same row from a prior Ask selection.
     await page.goto("/dashboard");
