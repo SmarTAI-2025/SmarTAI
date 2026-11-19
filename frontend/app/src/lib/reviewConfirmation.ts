@@ -380,7 +380,12 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   const blankRecognitionFailure = !answer.content?.trim() && !specificFailure
     && flags.some(flag => ["recognition_failed", "recognition_manual_pending"].includes(flag));
   const pageFailure = answerReviewNextBlocked(answer) && (blankRecognitionFailure || flags.includes("recognition_incomplete"));
-  const visibleFlags = flags.filter(flag => !(pageFailure && ["recognition_failed", "recognition_manual_pending", "recognition_incomplete"].includes(flag))
+  const directionalBoundary = flags.some(flag => flag === "recognition_boundary_previous_page_failed"
+    || flag === "recognition_boundary_next_page_failed");
+  const blankWithFailedPages = !answer.content?.trim()
+    && answer.flag?.some(flag => flag.startsWith("recognition_failed_pages:"));
+  const visibleFlags = flags.filter(flag => !(directionalBoundary && flag === "recognition_boundary_uncertain")
+    && !(pageFailure && ["recognition_failed", "recognition_manual_pending", "recognition_incomplete"].includes(flag))
     && !(flag === "recognition_uncertain" && flags.includes("recognition_boundary_uncertain"))
     && !(specificFailure && ["recognition_failed", "recognition_manual_pending"].includes(flag))
     && !(flag === "recognition_manual_pending" && flags.includes("recognition_failed"))
@@ -400,7 +405,7 @@ export function answerReviewNotes(answer: StudentAnswerInfo | undefined, locale:
   const generic = genericAnswerReviewLabel(locale);
   const unique = new Map<string, typeof notes[number]>();
   for (const note of notes) {
-    if (saved && note.severity !== "blocking") continue;
+    if ((saved || blankWithFailedPages) && note.severity !== "blocking") continue;
     if (note.label === generic && notes.some(other => other.severity === note.severity && other.label !== generic)) continue;
     unique.set(`${note.severity}:${note.label}`, note);
   }

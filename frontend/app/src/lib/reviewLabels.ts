@@ -54,6 +54,8 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
     recognition_matching_review: ["请对照学生作答原文件，确认该题对应的题号。", "Check the student's original submission and confirm the corresponding question number."],
     question_identifier_mismatch: ["建议对照原文件核对作答题号。", "Check the answer’s question number against the original."],
     identifier_mismatch: ["建议对照原文件核对作答题号。", "Check the answer’s question number against the original."],
+    recognition_boundary_previous_page_failed: ["作答识别可能不完整，请核对识别失败的上一页是否有遗漏。", "This answer may be incomplete. Check the previous page, which could not be read, for missing work."],
+    recognition_boundary_next_page_failed: ["作答识别可能不完整，请核对识别失败的下一页是否有遗漏。", "This answer may be incomplete. Check the next page, which could not be read, for missing work."],
     recognition_boundary_uncertain: ["作答可能未识别完整，请对照原文件核对。", "This answer may be incomplete. Check it against the original."],
     recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
     external_annotation_present: ["原件含外部批注，不属于学生作答。", "External annotations are not student answers."],

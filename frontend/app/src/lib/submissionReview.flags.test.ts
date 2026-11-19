@@ -16,6 +16,29 @@ describe("OCR review labels", () => {
   });
 
   it.each([
+    ["previous", "上一页"],
+    ["next", "下一页"],
+  ])("shares the %s failed-page advisory between the queue and detail", (direction, page) => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: "Saved text",
+      flag: ["recognition_boundary_uncertain", `recognition_boundary_${direction}_page_failed`, "unreadable_crossed_out_text"] };
+    const label = `作答识别可能不完整，请核对识别失败的${page}是否有遗漏。`;
+    expect(answerReviewAttention(answer)).toBe("advisory");
+    expect(answerReviewQueueReason(answer, "zh-CN")).toBe(label);
+    expect(answerReviewNotes(answer, "zh-CN")).toEqual([{ label, severity: "advisory" }]);
+    expect(answerReviewQueueReason(answer, "en-US")).toContain(`Check the ${direction} page`);
+    expect(answerReviewNotes({ ...answer, recognition_confidence: .4 }, "zh-CN")).toHaveLength(2);
+  });
+
+  it("shows only the blocking reason on empty answers affected by a failed page", () => {
+    const answer = { q_id: "q1", number: "1", type: "reasoning", content: " ", recognition_confidence: .4,
+      flag: ["recognition_failed", "recognition_failed_pages:1", "recognition_manual_pending", "recognition_incomplete", "unclear_text"] };
+    expect(answerReviewQueueReason(answer, "zh-CN")).toBe("第 1 页识别失败，作答内容缺失。");
+    expect(answerReviewNotes(answer, "en-US")).toEqual([
+      { label: "Recognition failed on page 1. Answer content is missing. Complete it using the original.", severity: "blocking" },
+    ]);
+  });
+
+  it.each([
     ["  ", "作答内容缺失", "Answer content is missing"],
     ["Partial text", "作答识别不完整", "Answer transcription is incomplete"],
   ])("describes an already-blocking recognition failure according to the displayed answer", (content, chinese, english) => {

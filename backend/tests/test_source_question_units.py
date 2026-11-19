@@ -105,3 +105,23 @@ def test_selected_pages_finished_does_not_make_missing_continuation_complete():
         3: "Continuation of missing page two.\nQuestion 2: Independent ending."},
         source_complete=True, source_end_page=3)
     assert not next(group for group in groups if group.pages == (3,)).complete
+
+
+def test_failed_page_advice_only_uses_answers_on_adjacent_successful_pages():
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages
+
+    pages = {1: "1.1.1 Earlier", 2: "1.1.2 First\n1.1.3 Last before the gap",
+             4: "1.1.4 Between two gaps", 6: "1.1.5 First after the gap\n1.1.6 Later",
+             7: "1.1.7 Final"}
+    problems = {str(number): {"number": f"1.1.{number}"} for number in range(1, 8)}
+    _, _, advice = answer_boundaries_on_read_pages(pages, problems, {
+        "processed_pages": list(pages), "failed_pages": [3, 5], "total_pages": 7,
+    })
+    previous = "recognition_boundary_previous_page_failed"
+    following = "recognition_boundary_next_page_failed"
+    assert advice == {"3": {following}, "4": {previous, following}, "5": {previous}}
+
+
+def test_empty_successful_page_separates_the_previous_answer_from_a_failure():
+    units = source_question_units({1: "Question 1: Answer", 2: " \n"}, check_opening=True)
+    assert units[0].next_gap_page is None

@@ -47,7 +47,8 @@ class SourceQuestionUnit:
     pages: tuple[int, ...]
     complete: bool
     closure: str
-    adjacent_gap_page: int | None = None
+    previous_gap_page: int | None = None
+    next_gap_page: int | None = None
 
 
 def source_question_units(pages: dict[int, str], *, source_complete=False,
@@ -90,14 +91,14 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
             continuation = (key is not None and previous is not None and previous[0] == key
                             and previous[1] != page)
             if not continuation:
-                matches.append(match)
+                matches.append((match, page))
             previous = (key, page)
-        for index, match in enumerate(matches):
+        for index, (match, heading_page) in enumerate(matches):
             number = match.group("number")
             key = number_key(number)
             if known_keys is not None and key not in known_keys:
                 continue
-            following = matches[index + 1] if index + 1 < len(matches) else None
+            following = matches[index + 1][0] if index + 1 < len(matches) else None
             end = following.start() if following else len(text)
             # An unknown numbered heading is still a boundary, but cannot
             # assert completeness against a known question set.
@@ -112,20 +113,18 @@ def source_question_units(pages: dict[int, str], *, source_complete=False,
                 closure = "unverified_opening"
             body = text[match.start():end].strip()
             unit_pages = tuple(page for page, start, stop in offsets if stop > match.start() and start < end)
-            adjacent_gap_page = None
-            if check_opening and closure == "open" and following is None and group[0] == 1:
-                adjacent_gap_page = group[-1] + 1
-            elif closure == "unverified_opening" and index == 0 and unit_pages[0] == group[0]:
-                adjacent_gap_page = group[0] - 1
-            records.append(SourceQuestionUnit(number, body,
-                unit_pages, closure in {"next_heading", "source_end"}, closure, adjacent_gap_page))
+            previous_gap_page = group[0] - 1 if check_opening and index == 0 and heading_page == group[0] else None
+            next_gap_page = (group[-1] + 1 if check_opening and following is None
+                             and pages[group[-1]].strip() else None)
+            records.append(SourceQuestionUnit(number, body, unit_pages,
+                closure in {"next_heading", "source_end"}, closure, previous_gap_page, next_gap_page))
     # Test material may list independent case groups under the same question
     # number. Keep the normal gap/end-of-source checks for each group.
     if allow_repeated_numbers:
         return records
     counts = Counter(number_key(unit.number) for unit in records)
     return [unit if counts[number_key(unit.number)] == 1 else
-            replace(unit, complete=False, closure="repeated_heading", adjacent_gap_page=None) for unit in records]
+            replace(unit, complete=False, closure="repeated_heading") for unit in records]
 
 
 @dataclass(frozen=True)

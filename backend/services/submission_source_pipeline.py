@@ -39,8 +39,8 @@ from backend.tools.file_processing import (
 
 logger = logging.getLogger(__name__)
 BOUNDARY_REVIEW_FLAG = "recognition_boundary_uncertain"
-_ADVISORY_FLAGS = frozenset({"recognition_uncertain", "unclear_text",
-                             "authorship_uncertain", "external_annotation_present"})
+_BOUNDARY_FLAGS = frozenset({BOUNDARY_REVIEW_FLAG, "recognition_boundary_previous_page_failed",
+                             "recognition_boundary_next_page_failed"})
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,15 @@ class PreparedSubmissionSource:
     whole_source: bool = True
     closed_question_ids: frozenset[str] = frozenset()
     opening_candidates: dict[str, tuple[str, str | None]] | None = None
-    boundary_review_ids: frozenset[str] = frozenset()
+    boundary_review_flags: dict[str, tuple[str, ...]] | None = None
+
+
+def has_partial_page_failure(summary):
+    summary = summary or {}
+    coverage = summary.get("coverage") or {}
+    return bool(summary.get("error_code") != "provider_submit_uncertain"
+                and coverage.get("processed_pages") and coverage.get("failed_pages")
+                and not coverage.get("unprocessed_pages") and not coverage.get("missing_targets"))
 
 
 def failed_pdf_without_identity(result: source_outcome_repository.WorkflowSourceResult) -> bool:
@@ -86,7 +94,7 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
         summary = source.recognition
         closed = getattr(source, "closed_question_ids", ())
         candidates = getattr(source, "opening_candidates", None) or {}
-        boundary_reviews = getattr(source, "boundary_review_ids", ())
+        boundary_reviews = getattr(source, "boundary_review_flags", None) or {}
         uncertain = "provider_submit_uncertain" in {result.stable_error_code, summary.get("error_code")}
         openings = (result.student.get("recognition") or {}).get("source_opening_hashes", {})
         verified = set(verified_question_ids)
@@ -104,23 +112,31 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
         # File assessments stay in source diagnostics. Each parsed answer owns
         # its numeric confidence; only concrete source failures propagate here.
         if recognition_has_failure(summary):
+            coverage = summary.get("coverage") or {}
+            partial_page_failure = not uncertain and has_partial_page_failure(summary)
             flags = ["recognition_needs_review"]
-            if summary.get("error_code") or (summary.get("coverage") or {}).get("missing_targets"):
+            if summary.get("error_code") or partial_page_failure or coverage.get("missing_targets"):
                 flags.append("recognition_failed")
             for key in ("failed_pages", "unprocessed_pages"):
-                pages = (summary.get("coverage") or {}).get(key) or []
+                pages = coverage.get(key) or []
                 if pages:
                     flags.append(f"recognition_{key}:" + ",".join(str(page) for page in pages))
             answers = []
             for answer in student.get("stu_ans", []):
                 q_id = answer["q_id"]
-                existing = [flag for flag in answer.get("flag", []) if flag != BOUNDARY_REVIEW_FLAG]
-                if q_id in verified:
+                existing = [flag for flag in (answer.get("flag") or []) if flag not in _BOUNDARY_FLAGS]
+                has_content = bool((answer.get("content") or "").strip())
+                if partial_page_failure and has_content:
+                    # The file's failed page is not evidence that this answer is missing.
+                    # Keep independent structured failures, for example invalid content fields.
+                    if "recognition_manual_pending" not in existing:
+                        existing = [flag for flag in existing if flag not in {
+                            "recognition_failed", "recognition_incomplete", "recognition_needs_review",
+                        } and not flag.startswith("recognition_failed_pages:")]
+                    directions = boundary_reviews.get(q_id, ())
+                    added = [BOUNDARY_REVIEW_FLAG, *directions] if directions else []
+                elif q_id in verified:
                     added = []
-                elif (not uncertain and q_id in boundary_reviews and answer.get("content", "").strip()
-                      and all(flag in _ADVISORY_FLAGS or flag.startswith("answer_recognition_confidence:")
-                              for flag in existing)):
-                    added = [BOUNDARY_REVIEW_FLAG]
                 else:
                     added = flags
                 answers.append(dict(answer, flag=list(dict.fromkeys([*existing, *added]))))

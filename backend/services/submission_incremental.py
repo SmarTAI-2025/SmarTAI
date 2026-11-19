@@ -203,7 +203,7 @@ def matches_source_opening(candidate: tuple[str, str | None], content: str, quot
 def answer_boundaries_on_read_pages(pages, problems, coverage):
     """Find closed answers, pending openings, and answers with only a possible page gap."""
     if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
-        return set(), {}, set()
+        return set(), {}, {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
@@ -212,17 +212,24 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
     read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
-    closed, openings, boundary_reviews = set(), {}, set()
+    closed, openings, boundary_reviews = set(), {}, {}
     failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
-        touches_failed_page = unit.adjacent_gap_page in failed_pages
-        if not (unit.complete or unit.closure == "unverified_opening" or touches_failed_page):
+        directions = [flag for page, flag in (
+            (unit.previous_gap_page, "recognition_boundary_previous_page_failed"),
+            (unit.next_gap_page, "recognition_boundary_next_page_failed"),
+        ) if page in failed_pages]
+        if not (unit.complete or unit.closure == "unverified_opening" or directions):
             continue
         q_id = resolve_question_match(unit.number, unit.text, problems)
         if not q_id:
             continue
+        if directions:
+            boundary_reviews.setdefault(q_id, set()).update(directions)
         if unit.complete:
             closed.add(q_id)
+            continue
+        if unit.closure != "unverified_opening":
             continue
         heading = question_headings(unit.text, qualified=True)[0]
         # A continuation annotation can delimit the preceding answer.
@@ -244,10 +251,7 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
         opening_text = title + unit.text[heading.end("title"):]
         prefix = " ".join(opening_text.split())[:SOURCE_OPENING_QUOTE_LIMIT]
         if prefix:
-            if unit.closure == "unverified_opening":
-                openings[q_id] = (prefix, part.group("label") if part else None)
-            if touches_failed_page and not annotation:
-                boundary_reviews.add(q_id)
+            openings[q_id] = (prefix, part.group("label") if part else None)
     return closed, openings, boundary_reviews
 
 

@@ -3827,7 +3827,8 @@ async def run_task_submission_parsing(
                 if closed or openings or boundary_reviews:
                     source = replace(source, closed_question_ids=frozenset(closed - invalid),
                         opening_candidates={q_id: prefix for q_id, prefix in openings.items() if q_id not in invalid},
-                        boundary_review_ids=frozenset(boundary_reviews - invalid))
+                        boundary_review_flags={q_id: tuple(sorted(flags)) for q_id, flags in boundary_reviews.items()
+                                               if q_id not in invalid})
                 dispatched = incremental_tasks.get(source.source_id, {})
                 remaining = targets - set(dispatched)
                 # PDFs use saved page groups. Other input formats retain their
