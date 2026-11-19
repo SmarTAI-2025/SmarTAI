@@ -108,20 +108,65 @@ def test_selected_pages_finished_does_not_make_missing_continuation_complete():
 
 
 def test_failed_page_advice_only_uses_answers_on_adjacent_successful_pages():
-    from backend.services.submission_incremental import answer_boundaries_on_read_pages
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
 
     pages = {1: "1.1.1 Earlier", 2: "1.1.2 First\n1.1.3 Last before the gap",
              4: "1.1.4 Between two gaps", 6: "1.1.5 First after the gap\n1.1.6 Later",
              7: "1.1.7 Final"}
     problems = {str(number): {"number": f"1.1.{number}"} for number in range(1, 8)}
-    _, _, advice = answer_boundaries_on_read_pages(pages, problems, {
+    _, _, edges = answer_boundaries_on_read_pages(pages, problems, {
         "processed_pages": list(pages), "failed_pages": [3, 5], "total_pages": 7,
     })
     previous = "recognition_boundary_previous_page_failed"
     following = "recognition_boundary_next_page_failed"
-    assert advice == {"3": {following}, "4": {previous, following}, "5": {previous}}
+    assert page_gap_review_flags(pages, [3, 5], edges, []) == {
+        "3": [following], "4": [following, previous], "5": [previous],
+    }
 
 
 def test_empty_successful_page_separates_the_previous_answer_from_a_failure():
     units = source_question_units({1: "Question 1: Answer", 2: " \n"}, check_opening=True)
     assert units[0].next_gap_page is None
+
+
+def test_matched_fragments_can_bound_the_same_answer_on_both_sides_of_a_failed_page():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    pages = {1: "An earlier nonadjacent answer.", 2: "4. The opening of the proof.",
+             4: "The last assertion of the proof.\n2. The next answer.",
+             5: "A different nonadjacent answer."}
+    answers = [
+        {"q_id": "q1", "content": "An earlier nonadjacent answer."},
+        {"q_id": "q2", "content": "The next answer."},
+        {"q_id": "q3", "content": "A different nonadjacent answer."},
+        {"q_id": "q4", "content": "The opening of the proof.\nThe last assertion of the proof."},
+    ]
+    assert page_gap_review_flags(pages, [3], {}, answers) == {
+        "q4": ["recognition_boundary_next_page_failed", "recognition_boundary_previous_page_failed"],
+    }
+
+
+def test_page_gap_does_not_choose_between_questions_sharing_one_text_span():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    pages = {1: "2. The same short answer."}
+    answers = [
+        {"q_id": "q1", "content": "The same short answer."},
+        {"q_id": "q2", "content": "The same short answer."},
+    ]
+    assert page_gap_review_flags(pages, [2], {}, answers) == {}
+
+
+def test_last_explicit_heading_can_still_locate_a_reformatted_answer():
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
+
+    pages = {1: "1. Another answer.\n1.2.3 Some OCR text."}
+    problems = {"q1": {"number": "1"}, "q2": {"number": "1.2.3"}}
+    answers = [
+        {"q_id": "q1", "content": "Another answer."},
+        {"q_id": "q2", "content": "Reformatted OCR text."},
+    ]
+    _, _, edges = answer_boundaries_on_read_pages(pages, problems, {"failed_pages": [2]})
+    assert page_gap_review_flags(pages, [2], edges, answers) == {
+        "q2": ["recognition_boundary_next_page_failed"],
+    }

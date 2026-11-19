@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from bisect import bisect_right
+from collections import Counter
 from dataclasses import replace
 
 from backend.services.programming_submission_mapping import native_source
@@ -185,6 +187,8 @@ def split_submission_question_units(source, problems, target_ids=None):
 
 
 SOURCE_OPENING_QUOTE_LIMIT = 320
+PREVIOUS_PAGE_FAILED = "recognition_boundary_previous_page_failed"
+NEXT_PAGE_FAILED = "recognition_boundary_next_page_failed"
 
 
 def matches_source_opening(candidate: tuple[str, str | None], content: str, quote: str) -> bool:
@@ -200,32 +204,35 @@ def matches_source_opening(candidate: tuple[str, str | None], content: str, quot
     return bool(quote and source_prefix.startswith(quote) and content.startswith(quote))
 
 
-def answer_boundaries_on_read_pages(pages, problems, coverage):
+def successful_submission_pages(pages, coverage):
+    # Do not use an earlier attempt's candidate for a currently unread page.
+    return {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
+
+
+def answer_boundaries_on_read_pages(read_pages, problems, coverage):
     """Find closed answers, pending openings, and answers with only a possible page gap."""
-    if not (pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
+    if not (read_pages and (coverage.get("failed_pages") or coverage.get("unprocessed_pages"))):
         return set(), {}, {}
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
-    # Use successfully read pages only, even when an earlier attempt also
-    # produced a candidate for an unread page.
-    read_pages = {number: pages[number] for number in coverage.get("processed_pages", []) if number in pages}
     units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
     closed, openings, boundary_reviews = set(), {}, {}
     failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
-        directions = [flag for page, flag in (
-            (unit.previous_gap_page, "recognition_boundary_previous_page_failed"),
-            (unit.next_gap_page, "recognition_boundary_next_page_failed"),
+        edges = [(page + shift, flag) for page, shift, flag in (
+            (unit.previous_gap_page, 1, PREVIOUS_PAGE_FAILED),
+            (unit.next_gap_page, -1, NEXT_PAGE_FAILED),
         ) if page in failed_pages]
-        if not (unit.complete or unit.closure == "unverified_opening" or directions):
+        if not (unit.complete or unit.closure == "unverified_opening" or edges):
             continue
         q_id = resolve_question_match(unit.number, unit.text, problems)
         if not q_id:
             continue
-        if directions:
-            boundary_reviews.setdefault(q_id, set()).update(directions)
+        for page, flag in edges:
+            offset = unit.heading_offset if page == unit.heading_page else -1
+            boundary_reviews[page, flag] = q_id, offset
         if unit.complete:
             closed.add(q_id)
             continue
@@ -253,6 +260,94 @@ def answer_boundaries_on_read_pages(pages, problems, coverage):
         if prefix:
             openings[q_id] = (prefix, part.group("label") if part else None)
     return closed, openings, boundary_reviews
+
+
+def page_gap_review_flags(read_pages, failed_pages, heading_edges, answers):
+    """Locate already-matched answers on actual pages, without parsing their numbers again."""
+    pages = sorted(read_pages)
+    failed = set(failed_pages)
+    text, offsets, previous = [], [], None
+    offset = 0
+    for page in pages:
+        if previous is not None:
+            text.append(" " if page == previous + 1 else "\n")
+            offset += 1
+        offsets.append(offset)
+        normalized = " ".join(read_pages[page].split())
+        text.append(normalized)
+        offset += len(normalized)
+        previous = page
+    source = "".join(text)
+    grounded, edges = set(), {}
+
+    def offer(page, flag, position, length, q_id):
+        edge = (page, flag)
+        rank = (position if flag == PREVIOUS_PAGE_FAILED else -position, -length)
+        if edge not in edges or rank < edges[edge][0]:
+            edges[edge] = (rank, q_id)
+
+    def locate(content):
+        if not content:
+            return None
+        start = source.find(content)
+        if start < 0 or source.find(content, start + 1) >= 0:
+            return None
+        end = start + len(content)
+        # Short answers must still match whole words, not pieces of another
+        # answer, identifier or number.
+        if ((start and content[0].isalnum() and source[start - 1].isalnum())
+                or (end < len(source) and content[-1].isalnum() and source[end].isalnum())):
+            return None
+        return start, end
+
+    locations = {}
+    for answer in answers:
+        lines = [" ".join(line.split()) for line in (answer.get("content") or "").splitlines() if line.strip()]
+        if not lines:
+            continue
+        span = locate(" ".join(lines))
+        if span:
+            spans = (span,)
+        elif len(lines) > 1:
+            # The structured answer may join fragments on either side of a
+            # failed page. Locate both ends without joining OCR across the gap.
+            start_span, end_span = locate(lines[0]), locate(lines[-1])
+            if not (start_span and end_span and start_span[1] <= end_span[0]):
+                continue
+            spans = (start_span, end_span)
+        else:
+            continue
+        locations[answer["q_id"]] = spans
+
+    occurrences = Counter(span for spans in locations.values() for span in spans)
+    for q_id, spans in locations.items():
+        if any(occurrences[span] != 1 for span in spans):
+            continue
+        grounded.add(q_id)
+        for start, end in spans:
+            first = pages[bisect_right(offsets, start) - 1]
+            last = pages[bisect_right(offsets, end - 1) - 1]
+            if first - 1 in failed:
+                offer(first, PREVIOUS_PAGE_FAILED, start, end - start, q_id)
+            if last + 1 in failed:
+                offer(last, NEXT_PAGE_FAILED, end, end - start, q_id)
+
+    # Explicit or section-qualified headings remain useful for transcriptions
+    # too different to locate verbatim. Compare them on the same physical page.
+    page_offsets = dict(zip(pages, offsets))
+    for (page, flag), (q_id, heading_offset) in heading_edges.items():
+        if q_id not in grounded:
+            position = -1
+            if heading_offset >= 0:
+                before_heading = read_pages[page][:heading_offset]
+                normalized = " ".join(before_heading.split())
+                position = len(normalized) + int(bool(normalized) and before_heading[-1].isspace())
+            offer(page, flag, page_offsets[page] + position, 0, q_id)
+
+    result = {}
+    for (_, flag), (_, q_id) in edges.items():
+        result.setdefault(q_id, []).append(flag)
+    return {q_id: sorted(flags) for q_id, flags in result.items()}
 
 
 def merge_source_answer_units(results, source, problems):

@@ -57,7 +57,8 @@ class PreparedSubmissionSource:
     whole_source: bool = True
     closed_question_ids: frozenset[str] = frozenset()
     opening_candidates: dict[str, tuple[str, str | None]] | None = None
-    boundary_review_flags: dict[str, tuple[str, ...]] | None = None
+    read_pages: dict[int, str] | None = None
+    boundary_review_edges: dict[tuple[int, str], tuple[str, int]] | None = None
 
 
 def has_partial_page_failure(summary):
@@ -94,7 +95,6 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
         summary = source.recognition
         closed = getattr(source, "closed_question_ids", ())
         candidates = getattr(source, "opening_candidates", None) or {}
-        boundary_reviews = getattr(source, "boundary_review_flags", None) or {}
         uncertain = "provider_submit_uncertain" in {result.stable_error_code, summary.get("error_code")}
         openings = (result.student.get("recognition") or {}).get("source_opening_hashes", {})
         verified = set(verified_question_ids)
@@ -114,6 +114,11 @@ def attach_submission_recognition(results, sources, *, verified_question_ids=())
         if recognition_has_failure(summary):
             coverage = summary.get("coverage") or {}
             partial_page_failure = not uncertain and has_partial_page_failure(summary)
+            boundary_reviews = {}
+            if partial_page_failure and (read_pages := getattr(source, "read_pages", None)):
+                from backend.services.submission_incremental import page_gap_review_flags
+                boundary_reviews = page_gap_review_flags(read_pages, coverage["failed_pages"],
+                    source.boundary_review_edges or {}, student.get("stu_ans", []))
             flags = ["recognition_needs_review"]
             if summary.get("error_code") or partial_page_failure or coverage.get("missing_targets"):
                 flags.append("recognition_failed")

@@ -448,6 +448,65 @@ async def test_pdf_page_gap_advises_at_page_boundaries_and_blocks_missing_work(m
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("headings", [
+    ("Question 4:", "Question 2:", "Question 3:", "Question 1:"),
+    ("4.", "2.", "3.", "1."),
+    ("Question 4:", "2.", "3.", "Question 1:"),
+    ("4.", "2.", "", "1."),
+])
+async def test_pdf_page_gap_uses_the_positions_of_matched_answers(monkeypatch, headings):
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    for number in range(1, 5):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{number}", order_index=number - 1,
+            number=str(number), type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
+    contents = {
+        "q1": "The final answer is complete.",
+        "q2": "The first half of the group proof.\n1. Pair each element with its inverse.",
+        "q3": "The proof resumes with its last claim.",
+        "q4": "A complete answer before the proof.",
+    }
+    pages = {
+        1: f"{headings[0]} {contents['q4']}\n{headings[1]}\n{contents['q2']}",
+        3: f"{headings[2]} {contents['q3']}\n{headings[3]} {contents['q1']}",
+    }
+
+    async def read(**kwargs):
+        await kwargs["on_pages"]([dict(page_number=page, text=value) for page, value in pages.items()])
+        coverage = {"processed_pages": [1, 3], "failed_pages": [2], "unprocessed_pages": [], "total_pages": 3}
+        return SimpleNamespace(text="\n\n".join(pages.values()), recognition={
+            "error_code": "image_recognition_unconfirmed", "coverage": coverage, "page_diagnostics": coverage,
+        })
+
+    async def invoke(messages):
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
+            dict(q_id=q["q_id"], number=q["number"], type="concept", content=contents[q["q_id"]],
+                 flag=["recognition_incomplete"] if q["q_id"] == "q2" else [])
+            for q in _questions(messages)
+        ])))
+
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner,
+        filename="S1.pdf", content=pdf([pages[1], "Unread", pages[3]]),
+        content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    before = task_facade.get_task(task_id=task, owner_id=owner)
+    assert before["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
+    await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                            expected_revision=before["workflow_revision"])
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {answer["q_id"]: answer for answer in after["student_data"]["S1"]["stu_ans"]}
+    assert {q_id: answer["content"] for q_id, answer in answers.items()} == contents
+    assert {q_id: answer["flag"] for q_id, answer in answers.items()} == {
+        "q1": [], "q2": ["recognition_boundary_uncertain", "recognition_boundary_next_page_failed"],
+        "q3": ["recognition_boundary_uncertain", "recognition_boundary_previous_page_failed"], "q4": [],
+    }
+    registry.provider.ainvoke.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(("continued_heading", "next_answer"), [
     ("1.1.29（续）", True),
     ("1.1.29（续上页）", True),
