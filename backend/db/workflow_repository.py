@@ -41,6 +41,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.db.base import Base
+from backend.db.execution_admission import WORKLOAD_TYPES
 # Import the normalized records before configuring string-based foreign keys.
 from backend.db.models import (  # noqa: F401
     AssignmentRecord,
@@ -1229,10 +1230,15 @@ def create_operation(
     def existing_result(session, existing: WorkflowOperationRecord):
         if not retry_existing:
             return _detach_operation(existing), False
+        # Published workloads are reclaimed by lease. A historical expiry
+        # must not let a duplicate submit reset their attempt or checkpoints.
+        expirable_statuses = (
+            ("preparing",) if operation_type in WORKLOAD_TYPES else ("preparing", "pending", "running")
+        )
         retryable = or_(
             WorkflowOperationRecord.status == "error",
             and_(
-                WorkflowOperationRecord.status.in_(("preparing", "pending", "running")),
+                WorkflowOperationRecord.status.in_(expirable_statuses),
                 WorkflowOperationRecord.expires_at.is_not(None),
                 WorkflowOperationRecord.expires_at <= now,
             ),

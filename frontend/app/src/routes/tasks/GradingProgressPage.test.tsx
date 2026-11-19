@@ -281,8 +281,8 @@ describe("GradingProgressPage completion routing", () => {
   });
 
   it.each([
-    ["grading_time_limit_reached", "active processing limit", "2.5 hours of active processing, excluding queue time"],
-    ["grading_wall_time_limit_reached", "total time limit", "3.5-hour total time limit, counted from the first start, including later waits"],
+    ["grading_time_limit_reached", "active processing limit", "active processing limit, excluding queue time"],
+    ["grading_wall_time_limit_reached", "total time limit", "total time limit, counted from the first start, including later waits"],
   ])("renders %s with retained results and recovery actions", (code, title, timing) => {
     taskStatus = "error";
     vi.mocked(useTaskProgress).mockReturnValue({

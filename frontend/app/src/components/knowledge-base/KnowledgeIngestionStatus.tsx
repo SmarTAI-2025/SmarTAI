@@ -7,6 +7,8 @@ import { useFrontierWorkspace } from "@/lib/frontierContext";
 import { listStageProviders } from "@/api/experts";
 import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
+import { useWorkflowTimeouts } from "@/providers/WorkflowTimeouts";
+import { isWorkflowTimeout, workflowTimeoutNote } from "@/lib/workflowTimeouts";
 
 interface Coverage {
   summary: KnowledgeIngestionSummary;
@@ -70,6 +72,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [frontier, active, documentId, summary?.id, poll]);
   const effectiveStatus = summary?.status ?? status;
+  const limits = useWorkflowTimeouts(isWorkflowTimeout(summary?.error_code));
   const label = summary?.error_code === "knowledge_wall_time_limit_reached" ? (zh ? "已超时，已完成内容保留" : "Timed out; completed content retained") : paused ? (zh ? "已暂停" : "Paused") : active ? (zh ? "后台处理中" : "Processing")
     : effectiveStatus === "partial" ? (zh ? "部分可检索" : "Partial coverage")
     : effectiveStatus === "failed" ? (zh ? "处理未完成" : "Incomplete")
@@ -109,7 +112,7 @@ export function KnowledgeIngestionStatus({ documentId, status = "ready", ingesti
     <div className="mt-2 max-w-xs space-y-2 break-words">
       {summary.total_pages ? <p>{zh ? "可检索 / 空白 / 未完整识别" : "Searchable / blank / incomplete"}: {summary.searchable_pages ?? 0} / {summary.blank_pages ?? 0} / {summary.failed_pages ?? 0}</p> : null}
       {summary.partially_searchable_pages ? <p>{zh ? "可检索页中仍有内容缺口" : "Searchable pages with content gaps"}: {summary.partially_searchable_pages}</p> : null}
-      {summary.error_code ? <p role="status">{summary.error_code.startsWith("source_docx_") ? userFacingError(summary.error_code, zh ? "zh-CN" : "en-US") : backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}</p> : null}
+      {summary.error_code ? <p role="status">{summary.error_code.startsWith("source_docx_") ? userFacingError(summary.error_code, zh ? "zh-CN" : "en-US") : backgroundErrorTitle(summary.error_code, zh ? "zh-CN" : "en-US")}{workflowTimeoutNote(summary.error_code, zh ? "zh-CN" : "en-US", limits)}</p> : null}
       <div className="max-h-60 space-y-2 overflow-y-auto">
         {coverage?.pages.filter((page) => !["searchable", "searchable_with_warning", "blank_confirmed"].includes(page.state)).map((page) => <p key={page.page_number}>{page.page_number}: {pageStateLabel(page.state, zh)}{page.error_code ? ` · ${backgroundErrorTitle(page.error_code, zh ? "zh-CN" : "en-US")}` : ""}</p>)}
       </div>

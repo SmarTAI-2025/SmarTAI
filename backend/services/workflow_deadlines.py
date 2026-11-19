@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 import logging
 import time
 
+from backend.config import settings
 from backend.domain.errors import DomainError, RecognitionError
 from backend.services import submission_work_budget as clocks
 
@@ -55,10 +56,10 @@ async def cancel_and_drain(task, *, deadline=None):
         raise asyncio.CancelledError
     return False
 
-QUESTION_WALL_SECONDS = 150 * 60
-SUBMISSION_WALL_SECONDS = 210 * 60
-GRADING_WALL_SECONDS = 210 * 60
-KNOWLEDGE_WALL_SECONDS = 120 * 60
+QUESTION_WALL_SECONDS = settings.question_preparation_timeout_minutes * 60
+SUBMISSION_WALL_SECONDS = settings.submission_recognition_timeout_minutes * 60
+GRADING_WALL_SECONDS = settings.grading_timeout_minutes * 60
+KNOWLEDGE_WALL_SECONDS = settings.knowledge_ingestion_timeout_minutes * 60
 QUESTION_TYPES = frozenset({"question_preparation", "problem_extraction", "material_import", "ai_completion"})
 BUDGET_TYPES = QUESTION_TYPES | {"submission_recognition"}
 CHECKPOINT_KEY = "execution_deadline"

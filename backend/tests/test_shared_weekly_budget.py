@@ -12,12 +12,16 @@ from sqlalchemy import select
 from backend.config import settings
 from backend.db.model_quota_models import SharedModelChargeRecord, ModelDailyUsageRecord
 from backend.db.session import session_scope
-from backend.llm.providers import OpenAIProvider, VisionImage
+from backend.domain.errors import RecognitionError
+from backend.llm.providers import OpenAIProvider, ProviderRequestError, VisionImage
 from backend.llm.registry import _GuardedSharedProvider, SharedPoolLimitError
+from backend.llm.request_timeouts import response_timeout_scope
 from backend.models import ProviderConfig
 from backend.services.model_quota import ModelQuotaError, model_usage
 from backend.services.shared_weekly_budget import actual_charge, reserve, finish, week_window
+from backend.services.workflow_deadlines import processing_budget
 from backend.tests.test_admin_business_config import client, save
+from backend.tests.test_provider_response_deadlines import scheduler  # noqa: F401
 
 
 def usage(inputs=1000, outputs=100, cached=200, written=300):
@@ -103,6 +107,8 @@ def metered(client,monkeypatch):
     async def count(**kwargs):
         calls.append(("count",kwargs))
         if state.get("count_failure"):raise state["count_failure"]
+        if count_gate := state.get("count_gate"):
+            await count_gate.wait()
         return SimpleNamespace(input_tokens=1000)
     async def create(**kwargs):
         calls.append(("create",kwargs))
@@ -121,6 +127,109 @@ def metered(client,monkeypatch):
     monkeypatch.setattr(provider,"_record_duration",lambda _:None)
     monkeypatch.setattr(_GuardedSharedProvider,"_admit",lambda *a,**kw:pytest.fail("weekly path reached daily admission"))
     return _GuardedSharedProvider(provider,"teacher"),calls,state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recognition", [False, True])
+async def test_weekly_metering_wait_does_not_consume_generation_deadline(
+    metered, scheduler, monkeypatch, recognition,
+):
+    from backend.llm import shared_weekly
+
+    provider, calls, state = metered
+    underlying = provider._provider
+    monkeypatch.setattr(underlying, "_call_capacity", OpenAIProvider._call_capacity.__get__(underlying))
+    state["count_gate"] = asyncio.Event()
+    generation_markers = []
+    pending = asyncio.Event()
+    held = [reserve("teacher", "gpt-6.1-sol", 0, max_output_tokens=100000)[0] for _ in range(5)]
+    original_reserve = shared_weekly.reserve
+
+    def observe_reserve(*args, **kwargs):
+        try:
+            return original_reserve(*args, **kwargs)
+        except ModelQuotaError:
+            pending.set()
+            raise
+
+    monkeypatch.setattr(shared_weekly, "reserve", observe_reserve)
+    loop = asyncio.get_running_loop()
+    real_time, offset = loop.time, 0
+    monkeypatch.setattr(loop, "time", lambda: real_time() + offset)
+    monkeypatch.setattr(shared_weekly, "time", SimpleNamespace(
+        monotonic=loop.time, perf_counter=shared_weekly.time.perf_counter,
+    ))
+
+    async def invoke():
+        if recognition:
+            with response_timeout_scope(180, response_only=True,
+                                        on_send=lambda: generation_markers.append("sent")):
+                return await provider.ainvoke_vision("read", [VisionImage(b"synthetic", "image/png")])
+        return await provider.ainvoke([HumanMessage(content="read")])
+
+    task = asyncio.create_task(invoke())
+    try:
+        async with asyncio.timeout(2):
+            while not calls and not task.done():
+                await asyncio.sleep(0)
+        assert [name for name, _ in calls] == ["count"]
+        offset = 61
+        for _ in range(6):
+            await asyncio.sleep(0)
+        assert not task.done() and not generation_markers
+        state["count_gate"].set()
+        await asyncio.wait_for(pending.wait(), 2)
+        offset += 181
+        for _ in range(6):
+            await asyncio.sleep(0)
+        assert not task.done() and not generation_markers
+        assert [name for name, _ in calls] == ["count"]
+        finish("teacher", held[0], usage=usage(0, 100, 0, 0))
+        response = await asyncio.wait_for(task, 2)
+        assert response.content == "valid response"
+        assert generation_markers == (["sent"] if recognition else [])
+        assert [name for name, _ in calls] == ["count", "create"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_weekly_token_count_has_its_own_response_timeout(metered):
+    provider, calls, state = metered
+    state["count_gate"] = asyncio.Event()
+    with response_timeout_scope(0.02, response_only=True) as generation:
+        with pytest.raises(ProviderRequestError, match="^provider_timeout$"):
+            await provider.ainvoke_vision("read", [VisionImage(b"synthetic", "image/png")])
+    assert generation.attempt_count == 0 and not generation.submission_may_exist
+    assert [name for name, _ in calls] == ["count"]
+    assert rows() == []
+
+
+@pytest.mark.asyncio
+async def test_workflow_stop_interrupts_weekly_balance_wait(metered, monkeypatch):
+    from backend.llm import shared_weekly
+
+    provider, calls, _ = metered
+    waiting = asyncio.Event()
+
+    def pending(*args, **kwargs):
+        waiting.set()
+        raise ModelQuotaError("shared_pool_budget_pending")
+
+    monkeypatch.setattr(shared_weekly, "reserve", pending)
+    async with processing_budget("weekly-test", kind="question_preparation", raise_on_blocked=False) as budget:
+        task = asyncio.create_task(provider.ainvoke([HumanMessage(content="read")]))
+        try:
+            await asyncio.wait_for(waiting.wait(), 2)
+            budget.expire()
+            with pytest.raises(RecognitionError, match="question_preparation_wall_time_limit_reached"):
+                await asyncio.wait_for(task, 2)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert [name for name, _ in calls] == ["count"]
+    assert rows() == []
 
 
 @pytest.mark.asyncio

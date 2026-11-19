@@ -514,14 +514,14 @@ async def test_proxy_slot_wait_has_no_local_deadline_and_can_be_cancelled(schedu
 @pytest.mark.parametrize("response_only", [False, True])
 async def test_workflow_deadline_still_cancels_queued_request(scheduler, monkeypatch, response_only):
     from backend.domain.errors import DomainError
-    from backend.services.workflow_deadlines import processing_budget
+    from backend.services import workflow_deadlines as limits
 
     scheduler.host_capacity.capacity = 0
     deadlines, budgets = [], []
     original_timeout = asyncio.timeout
     def capture(seconds):
         deadline = original_timeout(seconds)
-        if seconds is not None and seconds > 10000:
+        if seconds is not None and limits.GRADING_WALL_SECONDS - 100 < seconds <= limits.GRADING_WALL_SECONDS:
             deadlines.append(deadline)
         return deadline
     monkeypatch.setattr(asyncio, "timeout", capture)
@@ -531,7 +531,7 @@ async def test_workflow_deadline_still_cancels_queued_request(scheduler, monkeyp
 
     async with provider_for("openai", invoke, monkeypatch) as provider:
         async def work():
-            async with processing_budget("queued-workflow", kind="grading") as budget:
+            async with limits.processing_budget("queued-workflow", kind="grading") as budget:
                 budgets.append(budget)
                 with response_timeout_scope(300, response_only=response_only):
                     await provider.ainvoke(MESSAGES)
