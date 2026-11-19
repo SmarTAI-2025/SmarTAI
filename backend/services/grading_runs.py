@@ -294,11 +294,11 @@ async def process_run(*, run_id: str, worker_id: str, registry=None, language: s
                 )
                 grading_repository.mark_failed(
                     run_id=run_id, worker_id=worker_id,
-                    error_message="grading_execution_interrupted",
+                    error_message=grading_repository.GRADING_INTERRUPTED,
                 )
                 grading_repository.record_event(
                     run_id=run_id, level="error", message="run_interrupted",
-                    payload={"code": "grading_execution_interrupted"},
+                    payload={"code": grading_repository.GRADING_INTERRUPTED},
                 )
             except DomainError:
                 pass

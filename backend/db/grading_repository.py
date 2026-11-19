@@ -17,10 +17,12 @@ and a teacher decision for provisional programming grades.
 """
 from __future__ import annotations
 
+import logging
+import math
 import time
 import uuid
-import math
 
+from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import JSON, case, exists, func, literal, select, update
 
 from backend.db.models import (
@@ -47,6 +49,10 @@ from backend.domain.errors import (
     ValidationError,
     VersionConflict,
 )
+
+
+GRADING_INTERRUPTED = "grading_execution_interrupted"
+logger = logging.getLogger(__name__)
 
 
 def _new_run_id() -> str:
@@ -825,6 +831,17 @@ def _terminal_update(run_id: str, *, worker_id: str, status: str,
             # Raising rolls back the terminal run update above.  A tombstoned
             # task cannot acquire new result state while deletion is draining.
             raise LeaseLost("task_deleted")
+
+        if error_message == GRADING_INTERRUPTED:
+            from backend.services.grading_checkpoints import CheckpointWriteError, persist_paused_results
+
+            try:
+                with session.begin_nested():
+                    persist_paused_results(session, record)
+            except (CheckpointWriteError, PydanticValidationError) as exc:
+                # Incompatible evidence must not keep the dead run active.
+                logger.warning("Could not recover interrupted grading results; run=%s type=%s",
+                               run_id, type(exc).__name__)
 
         workflow_values = {
             "presentation_status": (
