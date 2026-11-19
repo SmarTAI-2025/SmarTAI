@@ -215,8 +215,8 @@ jobs:
         run: npm ci
       - name: Install Playwright browsers
         run: |
-          # The runner's preferred Azure mirror can stall dependency downloads.
-          sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
+          # Avoid slow regional mirrors and keep the official Ubuntu archive fallback.
+          sudo sed -Ei '/(azure|ec2)\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt
           npx playwright install --with-deps --only-shell chromium
       - name: Run E2E
         run: |
