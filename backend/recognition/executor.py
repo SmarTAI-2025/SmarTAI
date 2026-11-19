@@ -309,6 +309,8 @@ checks here do not replace the caller's storage ACL and operation lease.
                 document_pages=numbers if mode == "document" else [],
                 content_type=rendered.content_type, payload=payload, max_output_tokens=token_limit,
             )
+            if call_session is not None:
+                request = call_session.initial_request(request, policy=plan.policy, capabilities=plan.engine_capabilities, budget=budget)
             if progress:
                 await progress.set_current_step("recognition_read", message="Reading source evidence")
             outcome = await run_initial_read(

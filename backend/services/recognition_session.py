@@ -15,13 +15,26 @@ from backend.recognition.workflow_v2 import CallEvidenceV2
 
 
 class RecognitionCallSessionV2:
-    def __init__(self, service, *, source, authorized_owner_id):
+    def __init__(self, service, *, source, authorized_owner_id, truncated_read_keys=()):
         self.source = RecognitionSourceRefV1.model_validate(source.model_dump(warnings=False))
         if service.owner != authorized_owner_id or self.source.owner_id != authorized_owner_id:
             raise RecognitionError("recognition_source_mismatch")
         if service.binding.business_id != self.source.business_id:
             raise RecognitionError("recognition_source_mismatch")
         self.service, self._records, self._pending = service, [], None
+        self.truncated_read_keys = frozenset(truncated_read_keys)
+
+    def initial_request(self, request, *, policy, capabilities, budget):
+        if not self.truncated_read_keys or not capabilities.bounded_output_tokens or request.max_output_tokens != 4096:
+            return request
+        from backend.skills.recognition_reader import PROMPT_VERSION
+        identity = model_cache_identity(self.source, request, capabilities=capabilities, policy=policy,
+                                        prompt_version=PROMPT_VERSION)
+        if identity.key not in self.truncated_read_keys:
+            return request
+        # The user explicitly retried this exact, completed but truncated
+        # read. Keep the same call count and the existing total output budget.
+        return request.model_copy(update={"max_output_tokens": budget.output_limit(8192)})
 
     def records(self, kind):
         return [record.model_copy(deep=True) for record in self._records if record.kind == kind]

@@ -111,8 +111,8 @@ describe("one-click grading review", () => {
     show();
     const queue = screen.getByRole("region", { name: locale === "en-US" ? "Review queue" : "待复核队列" });
     const expected = locale === "en-US"
-      ? ["Some experts completed", "low confidence (0.4)", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
-      : ["部分专家完成", "置信度 0.4 较低", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
+      ? ["Some experts did not finish", "low confidence (0.4)", "Verification evidence still needs checking.", "Key reasoning evidence needs checking."]
+      : ["部分专家未完成", "置信度较低（0.4）", "核验结果与评分依据待核对。", "关键推理依据待核对。"];
     for (const label of expected) expect(queue).toHaveTextContent(label);
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "Expert disagreement; review suggested." : "专家分歧，建议复核。");
     expect(queue).not.toHaveTextContent(locale === "en-US" ? "The model suggests human review." : "模型建议人工复核。");
@@ -165,7 +165,7 @@ describe("one-click grading review", () => {
   it.each([0.25, 0.5999, 0.60])("shows optional confidence text only beside detail confirmation at %s", confidence => {
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { confidence, review_status: "pending" })] }];
     show(true);
-    const hint = screen.queryByText(`Low confidence (${confidence}); review suggested.`);
+    const hint = screen.queryByText(`Low confidence (${confidence}). Review suggested.`);
     if (confidence < 0.60) {
       expect(hint?.closest("ul")).toHaveClass("text-[11px]");
       expect(hint?.closest("header")).toContainElement(screen.getByRole("button", { name: /Q1.*Confirm review/ }));
@@ -374,6 +374,18 @@ describe("one-click grading review", () => {
       expect(within(panel).getByText(explanation)).toHaveClass("text-red-700");
     }
     expect(screen.getByRole("tab", {name: "建议处理 (2)"})).toBeInTheDocument();
+  });
+
+  it("shows student interface failures only in the yellow advisory queue", async () => {
+    state.locale = "zh-CN";
+    state.result.results = [{student_id: "S1", corrections: [
+      correction("Q1", {type: "programming", confidence: .95, score: 8, provisional_score: 8, review_reasons: ["programming_interface_only"]}),
+    ]}];
+    show();
+    expect(screen.getByRole("tab", {name: "需要处理 (0)"})).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", {name: "建议处理 (1)"}));
+    const advisory = screen.getByRole("tabpanel", {name: "建议处理 (1)"});
+    expect(within(advisory).getByText(/无法按题目要求调用函数/)).toHaveClass("text-amber-700");
   });
 
   it.each([

@@ -1,3 +1,4 @@
+import type { StudentAnswerInfo } from "@/types";
 import { normalizeFilterType } from "./taskFilterIntent";
 
 export const QUESTION_TYPES = ["calculation", "concept", "reasoning", "programming", "other"];
@@ -22,7 +23,21 @@ export function testCaseLabel(title: string | undefined, index: number, locale: 
   return title && !standard ? title : `${locale === "zh-CN" ? "样例" : "Example"} ${standard?.[1] ?? index + 1}`;
 }
 
+export const unclearAnswerLabel = (locale: string, confidence?: number) => locale === "zh-CN"
+  ? `部分作答识别不清${confidence === undefined ? "" : `（置信度 ${confidence}）`}，建议对照原文件核对。`
+  : `Some of the answer was unclear${confidence === undefined ? "" : ` (confidence ${confidence})`}. Check it against the original.`;
+
+export function isUnclearAnswerFlag(flag: string): boolean {
+  return ["recognition_unclear", "recognition_unreadable", "unclear_text", "unreadable_text", "unreadable",
+    "unreadable_text_present", "recognition_uncertain", "unreadable_content"]
+    .includes(flag.trim().toLowerCase().replace(/^recongnition_/, "recognition_"));
+}
+
+export const genericAnswerReviewLabel = (locale: string) => locale === "zh-CN"
+  ? "建议对照原文件核对作答。" : "Check the answer against the original.";
+
 export function formatSubmissionFlag(flag: string, locale: string): string {
+  if (isUnclearAnswerFlag(flag)) return unclearAnswerLabel(locale);
   if (flag.startsWith("recognition_invalid_fields:")) {
     const fields: Record<string, [string, string]> = {
       number: ["题号", "question number"], type: ["题型", "question type"],
@@ -35,38 +50,48 @@ export function formatSubmissionFlag(flag: string, locale: string): string {
       : `Review needed: ${names.join(", ") || "some recognition details"}`;
   }
   const labels: Record<string, [string, string]> = {
-    answer_assignment_conflict: ["同一题号有多份作答，请更正题号", "Multiple answers use this question; correct the assignment"],
-    recognition_matching_review: ["请对照原件核对作答归属与原文，修正后保存", "Check the question assignment and transcription against the original, then save corrections"],
+    answer_assignment_conflict: ["同一学生的该题有多份作答，请更正题号。", "This student has multiple answers assigned to this question. Correct the assignments."],
+    recognition_matching_review: ["请对照学生作答原文件，确认该题对应的题号。", "Check the student's original submission and confirm the corresponding question number."],
+    question_identifier_mismatch: ["建议对照原文件核对作答题号。", "Check the answer’s question number against the original."],
+    identifier_mismatch: ["建议对照原文件核对作答题号。", "Check the answer’s question number against the original."],
+    recognition_boundary_uncertain: ["作答可能未识别完整，请对照原文件核对。", "This answer may be incomplete. Check it against the original."],
     recognition_needs_review: ["识别结果需对照原件核对", "Check transcription against the original"],
-    recognition_uncertain: ["识别结果需对照原件核对", "Check transcription against the original"],
-    recognition_boundary_uncertain: ["作答可能未识别完整，请对照原文件核对", "This answer may be incomplete. Check it against the original."],
-    external_annotation_present: ["原件含外部批注，不属于学生作答", "External annotations are not student answers"],
-    authorship_uncertain: ["部分笔迹归属不明，需核对", "Some writing has uncertain authorship"],
+    external_annotation_present: ["原件含外部批注，不属于学生作答。", "External annotations are not student answers."],
+    authorship_uncertain: ["部分笔迹归属不明，建议对照原文件核对。", "The author of some writing is unclear. Check the original."],
     ocr_only_structure_requires_teacher_review: ["题号匹配需教师核对", "Question matching needs teacher review"],
     recognition_failed: ["识别失败，请修正", "Recognition failed; correct"],
     recognition_manual_pending: ["等待人工补齐", "Awaiting manual completion"],
     recognition_metadata_review: ["识别元信息待核对确认", "Confirm the recognition metadata"],
-    recognition_paused: ["已暂停，尚未完成识别", "Paused before recognition completed"],
-    recognition_incomplete: ["作答识别不完整，请对照原文件补全", "Answer transcription is incomplete. Complete it using the original."],
+    recognition_paused: ["作答识别已暂停，可继续识别或人工补齐。", "Answer recognition is paused. Resume recognition or complete it manually."],
+    recognition_incomplete: ["作答识别不完整，请对照原文件补齐。", "The answer transcription is incomplete. Check the original and complete it."],
     manual_blank_confirmed: ["教师已确认未作答", "Teacher confirmed no answer"],
-    parse_failed: ["作答解析失败，请修正", "Answer parsing failed; correct"],
-    no_matching_answer: ["未识别到对应作答，请对照原件修正", "No matching answer recognized; correct against the source"],
+    parse_failed: ["作答解析未完成，请重试或对照原文件补齐。", "Answer parsing did not complete. Retry or complete the answer using the original."],
+    no_matching_answer: ["未找到与本题对应的作答，请核对原文件和题号。", "No answer was matched to this question. Check the original and the question number."],
   };
-  const label = labels[flag];
-  return label ? label[locale === "zh-CN" ? 0 : 1] : flag;
+  const key = flag.trim().toLowerCase();
+  const label = Object.hasOwn(labels, key) ? labels[key] : undefined;
+  return label?.[locale === "zh-CN" ? 0 : 1] ?? genericAnswerReviewLabel(locale);
 }
 
-export function incompleteSubmissionLabel(flags: string[], locale: string, presentation: "queue" | "detail"): string {
-  const pages = [...new Set(flags.flatMap(flag =>
-    flag.match(/^recognition_failed_pages:(\d+(?:,\d+)*)$/)?.[1].split(",") ?? []))];
+export function incompleteSubmissionLabel(answer: StudentAnswerInfo, locale: string, compact: boolean): string {
   const zh = locale === "zh-CN";
-  if (!pages.length) return presentation === "detail" ? formatSubmissionFlag("recognition_incomplete", locale)
-    : zh ? "作答识别不完整" : "Incomplete answer transcription";
-  const failure = zh ? `第 ${pages.join("、")} 页识别失败`
-    : `Recognition failed on ${pages.length === 1 ? "page" : "pages"} ${pages.join(", ")}`;
-  if (presentation === "queue") return failure;
-  return zh ? `${failure}，作答内容缺失，请对照原文件补全。`
-    : `${failure}. Answer content is missing. Complete it using the original.`;
+  const pageReasons = ["failed", "unprocessed"].flatMap(kind => {
+    const prefix = `recognition_${kind}_pages:`;
+    const pages = [...new Set((answer.flag ?? []).filter(flag => flag.startsWith(prefix))
+      .flatMap(flag => flag.slice(prefix.length).split(",")).filter(page => /^\d+$/.test(page)))];
+    if (!pages.length) return [];
+    if (zh) return [`第 ${pages.join("、")} 页${kind === "failed" ? "识别失败" : "尚未识别"}`];
+    const description = kind === "failed" ? "Recognition failed on" : "Recognition did not reach";
+    return [`${description} ${pages.length === 1 ? "page" : "pages"} ${pages.join(", ")}`];
+  });
+  const failure = pageReasons.join(zh ? "，" : ". ");
+  const issue = answer.content?.trim()
+    ? (zh ? "作答识别不完整" : "Answer transcription is incomplete")
+    : (zh ? "作答内容缺失" : "Answer content is missing");
+  if (compact) return zh ? `${failure ? `${failure}，` : ""}${issue}。`
+    : `${failure ? `${failure}. ` : ""}${issue}.`;
+  return zh ? `${failure ? `${failure}，` : ""}${issue}，请对照原文件补全。`
+    : `${failure ? `${failure}. ` : ""}${issue}. Complete it using the original.`;
 }
 
 export function questionIssueCodeLabel(code: string, locale: string) {

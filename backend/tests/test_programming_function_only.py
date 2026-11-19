@@ -150,9 +150,7 @@ async def test_generation_failure_uses_no_grading_vote_or_execution(language):
 
 
 @pytest.mark.asyncio
-async def test_programming_skill_zero_pass_rate_caps_confidence():
-    """If sandbox runs ≥3 LLM-generated cases and 0 pass, confidence ≤ 0.5
-    even when the LLM said it was confident."""
+async def test_programming_skill_zero_pass_rate_does_not_cap_confidence():
     provider = MagicMock()
     provider.provider_id = "mock:test"
     skill = ProgrammingSkill(provider)
@@ -193,9 +191,8 @@ async def test_programming_skill_zero_pass_rate_caps_confidence():
     with patch("backend.skills.programming.structured_llm_call", new=fake_structured):
         result = await skill.grade(problem, answer, student_id="S1")
 
-    assert result.confidence <= 0.5, (
-        f"Expected confidence cap to ≤ 0.5 on 0% pass-rate, got {result.confidence}"
-    )
-
-    assert result.programming_evidence.generated_tests.total == 3
-    assert result.programming_evidence.requires_human_review
+    assert result.confidence == 0.95 and result.score == 8
+    evidence = result.programming_evidence
+    assert evidence.generated_tests.total == 3 and evidence.generated_tests.passed == 0
+    assert evidence.primary_reason == "wrong_answer"
+    assert evidence.score_status == "final" and not evidence.requires_human_review

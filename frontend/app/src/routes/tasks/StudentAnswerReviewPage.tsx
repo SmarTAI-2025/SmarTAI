@@ -58,7 +58,7 @@ import {
   buildSubmissionQuestions,
   buildStudentAnswerQuestions,
   getAnswerState,
-  formatSubmissionFlag,
+  answerReviewQueueReason,
   type SubmissionAnswerState,
   type SubmissionQuestion,
 } from "@/lib/submissionReview";
@@ -1154,7 +1154,7 @@ function AnswerStateBadge({ state, answer, locale, t }: {
       state === "reviewed" && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
       state === "flagged" && "bg-red-100 text-red-700 dark:bg-red-950/70 dark:text-red-200",
       (state === "empty" || state === "missing") && "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-200",
-    )} title={answerReviewAttention(answer) === "blocking" ? (answer?.flag ?? []).map((flag) => formatSubmissionFlag(flag, locale)).join(" · ") || undefined : undefined}>
+    )} title={answerReviewQueueReason(answer, locale)}>
       {state === "flagged" && lowConfidence ? tx(locale, "低置信", "Low confidence") : t(STATUS_KEYS[state])}
     </span>
   );

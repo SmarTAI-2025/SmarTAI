@@ -222,13 +222,14 @@ class RecognitionAgent:
                  progress: ProgressReporter | None = None, clock: Callable[[], float] = time.monotonic,
                  local_reader: RecognitionLocalEvidenceReader | None = None,
                  call_service=None, elapsed_seconds: float = 0, repair_admission=None,
-                 truncated_locator_key: str | None = None):
+                 truncated_locator_key: str | None = None, truncated_read_keys=()):
         self.engine, self.capacity, self.progress, self.clock = engine, capacity, progress, clock
         self.local_reader = local_reader
         self.call_service = call_service
         self.elapsed_seconds = elapsed_seconds
         self.repair_admission = repair_admission
         self.truncated_locator_key = truncated_locator_key
+        self.truncated_read_keys = frozenset(truncated_read_keys)
 
     async def read(self, request: RecognitionReadRequestV1, source_bytes: bytes, *, authorized_owner_id: str) -> RecognitionWorkflowReadV1:
         raw, _budget = await self._read(request, source_bytes, authorized_owner_id=authorized_owner_id)
@@ -259,7 +260,8 @@ class RecognitionAgent:
         if self.call_service is not None:
             from backend.services.recognition_session import RecognitionCallSessionV2
             call_session = RecognitionCallSessionV2(self.call_service, source=source,
-                                                    authorized_owner_id=authorized_owner_id)
+                                                    authorized_owner_id=authorized_owner_id,
+                                                    truncated_read_keys=self.truncated_read_keys)
         total, indexed, details, native, calls, selected, stops, batch = None, [], [], None, [], [], [], None
         locator_halted = False
         unresolved = list(request.targets) if request.scope == "targets" else []

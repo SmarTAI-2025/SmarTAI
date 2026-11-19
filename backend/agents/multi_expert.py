@@ -55,7 +55,7 @@ from typing import List, Optional, Tuple, TYPE_CHECKING
 from pydantic import Field
 
 from backend.config import settings as _settings
-from backend.domain.grading_review import expert_disagreement_signal, programming_evidence_review_reason
+from backend.domain.grading_review import expert_disagreement_signal, programming_evidence_review_reason, programming_interface_only
 from backend.models import Correction, ExpertResult, GradingModelOutput, ProblemInfo, StudentAnswerInfo, StepScore, TaskGradingSetup
 from backend.llm.providers import BaseProvider
 from backend.llm.registry import ExpertRegistry
@@ -197,10 +197,13 @@ def _project_programming_result(correction: Correction, language: str) -> Correc
         correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "programming_extra_boundary"]))
         if boundary not in correction.comment:
             correction.comment += "\n" + boundary
+    if evidence.execution_status == "executed" and programming_interface_only(
+        evidence.failure_counts, evidence.teacher_tests.passed + evidence.generated_tests.passed,
+    ):
+        correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, "programming_interface_only"]))
     for vote in votes:
         facts = vote.programming_evidence
-        if facts and facts.requires_human_review:
-            reason = programming_evidence_review_reason(facts.model_dump())
+        if facts and facts.requires_human_review and (reason := programming_evidence_review_reason(facts.model_dump())):
             correction.review_reasons = list(dict.fromkeys([*correction.review_reasons, reason]))
             correction.requires_human_review = True
     return correction
