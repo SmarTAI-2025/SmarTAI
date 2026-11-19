@@ -60,12 +60,12 @@ export function ProblemRecognitionProgressPage() {
   const [retryFailure, setRetryFailure] = useState<unknown>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
-  const [providerChoice, setProviderChoice] = useState<{ jobId: string; id: string } | null>(null);
+  const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const retrying = useRef(false);
   // The polled snapshot also owns recovery metadata; detail can predate the failure.
   const taskState = progressQuery.data ?? taskQuery.data;
   const status = taskState?.status as TaskStatus | undefined;
-  const recognitionProviderId = providerChoice && providerChoice.jobId === taskState?.last_failed_job_id ? providerChoice.id : taskState?.question_recognition_provider_id ?? "";
+  const recognitionProviderId = providerChoice && providerChoice.taskId === taskId ? providerChoice.id : taskState?.question_recognition_provider_id ?? "";
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);
 
   if (taskId && status === "draft" && !taskQuery.isFetching && !progressQuery.isFetching) {
@@ -95,15 +95,30 @@ export function ProblemRecognitionProgressPage() {
     ?? progressQuery.error
     ?? taskQuery.error;
 
+  const retryModelSelect = (
+    <StageProviderSelect
+      id="question-retry-provider"
+      label={locale === "zh-CN" ? "题目准备模型" : "Question preparation model"}
+      hint={locale === "zh-CN" ? "可选择继续处理或重试时使用的模型。" : "Choose the model for continuing or retrying question preparation."}
+      experts={enabledExperts}
+      value={recognitionProviderId}
+      disabled={openingManual || retryPreparation.isPending || expertsQuery.isLoading}
+      locale={locale}
+      onChange={(id) => setProviderChoice({ taskId, id })}
+    />
+  );
   if (!taskId) {
     return (
       <ProgressPageFrame title={t("problemProgressTitle")}>
-        <RecoveryState
-          title={t("problemProgressTaskMissing")}
-          description={t("problemProgressTaskMissingDescription")}
-          primaryLabel={t("problemProgressViewTasks")}
-          onPrimary={() => navigate(taskWorkspacePath(taskId, "/history"))}
-        />
+        <div className="grid gap-4">
+          {retryModelSelect}
+          <RecoveryState
+            title={t("problemProgressTaskMissing")}
+            description={t("problemProgressTaskMissingDescription")}
+            primaryLabel={t("problemProgressViewTasks")}
+            onPrimary={() => navigate(taskWorkspacePath(taskId, "/history"))}
+          />
+        </div>
       </ProgressPageFrame>
     );
   }
@@ -175,20 +190,7 @@ export function ProblemRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
         <div className="grid grid-cols-1 gap-4">
-          {failedJobId && !info.retryUnavailable ? (
-            <StageProviderSelect
-              id="question-retry-provider"
-              label={locale === "zh-CN" ? "题目准备模型" : "Question preparation model"}
-              hint={paused ? (locale === "zh-CN" ? "继续准备题目时将使用此模型。" : "This model will be used when question preparation continues.") : locale === "zh-CN"
-                ? "原资料已保留。可以改选模型后重试，无需重新上传。"
-                : "Your source materials are preserved. Choose a model and retry without uploading again."}
-              experts={enabledExperts}
-              value={recognitionProviderId}
-              disabled={openingManual || retryPreparation.isPending || expertsQuery.isLoading}
-              locale={locale}
-              onChange={(id) => { setProviderChoice({ jobId: failedJobId, id }); setRetryFailure(null); }}
-            />
-          ) : null}
+          {retryModelSelect}
           {!paused && <QuestionGenerationFailureSummary
             progress={progressQuery.progress}
             locale={locale}
@@ -239,13 +241,16 @@ export function ProblemRecognitionProgressPage() {
       returnTo: `/tasks/${taskId}/problems/progress`,
     });
     return (
-      <ProgressPageFrame title={t("problemProgressTitle")}>
-        <RecoverableActionState
-          info={info}
-          locale={locale}
-          className="min-h-[430px]"
-          workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: isRefreshing }, configurationHref: `/tasks/${taskId}/upload/problems` }}
-      />
+      <ProgressPageFrame title={t("problemProgressTitle")} returnState={{ imageRecoveryModel: recognitionProviderId }}>
+        <div className="grid gap-4">
+          {retryModelSelect}
+          <RecoverableActionState
+            info={info}
+            locale={locale}
+            className="min-h-[430px]"
+            workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: isRefreshing }, configurationHref: `/tasks/${taskId}/upload/problems`, configurationState: { imageRecoveryModel: recognitionProviderId } }}
+          />
+        </div>
       </ProgressPageFrame>
     );
   }

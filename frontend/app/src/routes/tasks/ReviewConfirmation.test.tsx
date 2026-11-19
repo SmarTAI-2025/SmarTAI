@@ -204,10 +204,11 @@ describe("one-click grading review", () => {
   it("keeps the completed run's primary model after setup changes and switches only with a new result", async () => {
     state.primaryProviderId = "A";
     state.result.primary_provider_id = "A";
-    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [
+    const originalCorrection = correction("Q1", { expert_results: [
       { provider_id: "B", provider: "Model B", score: 4, max_score: 10, confidence: 1, comment: "B comment", steps: [{ step_no: 1, desc: "B step", score: 4, is_correct: false }] },
       { provider_id: "A", provider: "Model A", score: 10, max_score: 10, confidence: 1, comment: "A comment", steps: [{ step_no: 1, desc: "A step", score: 10, is_correct: true }] },
-    ] })] }];
+    ] });
+    state.result.results = [{ student_id: "S1", corrections: [originalCorrection] }];
     const originalResults = JSON.stringify(state.result.results);
     const router = show(true);
     const expectPrimary = (name: string) => {
@@ -228,6 +229,10 @@ describe("one-click grading review", () => {
     state.result = { ...state.result, primary_provider_id: "B" };
     await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
     expectPrimary("B");
+    await act(() => router.navigate("/tasks/T1/results"));
+    state.result.results = [{ student_id: "S1", corrections: [{ ...originalCorrection, primary_provider_id: "A" }] }];
+    await act(() => router.navigate("/tasks/T1/review/S1/Q1"));
+    expectPrimary("A");
   });
 
   it("uses the frozen primary model rather than the first result and keeps compact scores outside the disclosure", async () => {

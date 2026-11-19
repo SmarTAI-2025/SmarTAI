@@ -360,6 +360,7 @@ def _install_incremental_preparer(
     cancel_after_question=None, cancel_after_question_started=None,
     cancel_after_extraction_started=False, known_failure_question=None,
     failure_questions=None, record_base_provider_calls=False, generation_languages=None,
+    generation_routes=None,
 ):
     """Fake only model boundaries; exercise real incremental artifacts and fences."""
     stopped = False
@@ -380,12 +381,14 @@ def _install_incremental_preparer(
             provider_calls.append("questions_extracted")
         return _questions(question_count)
 
-    async def generate(data, targets, *_args, **_kwargs):
+    async def generate(data, targets, _multi_sample, provider, **_kwargs):
         nonlocal stopped
         if generation_languages is not None:
             generation_languages.append(_kwargs.get("generation_language"))
         row = data["q1"]
         q_id = "q" + row["number"]
+        if generation_routes is not None:
+            generation_routes.append((q_id, provider.provider_id))
         identity = incremental._base_identity({key: value for key, value in row.items() if key != "teacher_subpart_points"})
         identities[identity] = q_id
         if q_id == cancel_after_question_started:
@@ -1482,6 +1485,86 @@ async def test_safe_retry_reuses_four_successful_questions_and_calls_only_q5(
     } == {1}
     assert {artifact_attempts[file_id] for file_id in _generated_artifacts(completed)["q5"].values()} == {2}
     assert artifact_attempts[completed.checkpoint["questions_extracted_artifact_id"]] == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_unavailable", [None, "retry_same_model", "switch_immediately"])
+async def test_switching_back_to_prior_model_only_retries_latest_failed_questions(monkeypatch, provider_unavailable):
+    class RegistryWithReplacement(_RecoveryRegistry):
+        replacement = _RecoveryRegistry.Provider()
+        replacement.provider_id = "replacement-byok"
+
+        def get(self, provider_id):
+            return self.replacement if provider_id == self.replacement.provider_id else super().get(provider_id)
+
+        def list_configs(self):
+            return [*super().list_configs(), {
+                "provider_id": self.replacement.provider_id,
+                "provider_type": "openai",
+                "model": "replacement-model",
+                "enabled": True,
+                "scope": "owner",
+            }]
+
+    owner, task = _seed_task()
+    registry = RegistryWithReplacement()
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
+    _, started, _ = await _queue_question_preparation(
+        owner, task, registry=registry, source_text="1. First.\n2. Second.\n3. Third.",
+    )
+    generation_routes = []
+
+    async def finish(job_id, failures):
+        _install_incremental_preparer(monkeypatch, [], question_count=3,
+            failure_questions=failures, generation_routes=generation_routes)
+        await task_preparation.run_durable_question_preparation(_claim(owner, job_id, "retry-worker"))
+        return workflow_repository.get_operation(job_id, owner_id=owner)
+
+    async def retry(failed, provider_id):
+        return await task_preparation.retry_question_preparation(task, failed.id,
+            task_preparation.RetryQuestionPreparationRequest(
+                expected_workflow_revision=workflow_repository.get_workflow(task, owner_id=owner).workflow_revision,
+                recognition_provider_id=provider_id, use_current_configuration=True,
+            ),
+            _BackgroundTasks(), SimpleNamespace(id=owner), registry)
+
+    original = await finish(started["job_id"], ["q2", "q3"])
+    assert _completed_questions(original) == ["q1"]
+    generation_routes.clear()
+    switched = await retry(original, "replacement-byok")
+    if provider_unavailable:
+        with monkeypatch.context() as unavailable:
+            unavailable.setattr(task_facade, "_registry_for_owner", lambda _owner: _RecoveryRegistry())
+            failed_before_copy = await finish(switched["job_id"], [])
+        assert failed_before_copy.status == "error"
+        assert generation_routes == []
+        if provider_unavailable == "switch_immediately":
+            switched_back = await retry(failed_before_copy, "test-provider")
+            completed = await finish(switched_back["job_id"], [])
+            assert generation_routes == [("q2", "test-provider"), ("q3", "test-provider")]
+            assert completed.status == "done"
+            assert _completed_questions(completed) == ["q1", "q2", "q3"]
+            return
+        resumed = await retry(failed_before_copy, "replacement-byok")
+        assert resumed["job_id"] == switched["job_id"]
+    second = await finish(switched["job_id"], ["q3"])
+    assert _completed_questions(second) == ["q1", "q2"]
+    assert generation_routes == [("q2", "replacement-byok"), ("q3", "replacement-byok")]
+
+    generation_routes.clear()
+    resumed = await retry(second, "replacement-byok")
+    assert resumed["job_id"] == second.id
+    second = await finish(resumed["job_id"], ["q3"])
+    assert _completed_questions(second) == ["q1", "q2"]
+    assert generation_routes == [("q3", "replacement-byok")]
+
+    generation_routes.clear()
+    switched_back = await retry(second, "test-provider")
+    last = await finish(switched_back["job_id"], [])
+    assert generation_routes == [("q3", "test-provider")]
+    assert last.status == "done"
+    assert last.payload["retry_origin_id"] == second.id
+    assert _completed_questions(last) == ["q1", "q2", "q3"]
 
 
 @pytest.mark.asyncio

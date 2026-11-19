@@ -14,6 +14,7 @@ export function StageProviderSelect({
   onChange,
   className,
   placeholder,
+  allowEmpty = false,
 }: {
   id: string;
   label: string;
@@ -25,6 +26,7 @@ export function StageProviderSelect({
   onChange: (providerId: string) => void;
   className?: string;
   placeholder?: string;
+  allowEmpty?: boolean;
 }) {
   const selected = experts.find((expert) => expert.provider_id === value);
   const zh = locale === "zh-CN";
@@ -47,7 +49,7 @@ export function StageProviderSelect({
             onChange={(event) => onChange(event.target.value)}
             className="h-10 min-w-0 flex-1 rounded-[7px] border bg-background px-3 text-sm font-semibold text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {!value && experts.length > 0 ? <option value="" disabled>{placeholder ?? (zh ? "正在选择默认模型…" : "Selecting the default model…")}</option> : null}
+            {(!value || allowEmpty) && experts.length > 0 ? <option value="" disabled={!allowEmpty}>{placeholder ?? (zh ? "正在选择默认模型…" : "Selecting the default model…")}</option> : null}
             {value && !selected ? <option value={value} disabled>{zh ? "原模型不可用，请重新选择" : "Previous model unavailable; choose again"}</option> : null}
             {experts.length === 0 ? (
               <option value="">{zh ? "暂无已启用模型" : "No enabled model"}</option>

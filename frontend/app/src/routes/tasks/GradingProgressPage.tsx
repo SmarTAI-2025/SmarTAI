@@ -4,6 +4,8 @@ import { useMemo, useState, type ReactNode } from "react";
 import { continueTaskRun } from "@/api/tasks";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { useStartGrading, useTask } from "@/api/hooks/tasks";
+import { useStageProviders } from "@/api/hooks/experts";
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { SmarTAIMascot } from "@/components/brand/SmarTAIMascot";
 import { NewTaskStepper } from "@/components/new-task/NewTaskStepper";
 import { TaskExecutionControls } from "@/components/tasks/TaskExecutionControls";
@@ -35,13 +37,23 @@ export function GradingProgressPage() {
   const taskQuery = useTask(taskId);
   const progressQuery = useTaskProgress(taskId);
   const retryGrading = useStartGrading();
+  const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const intent = useGradingIntent();
   const [manualBusy, setManualBusy] = useState(false);
   const [manualError, setManualError] = useState(false);
   const task = taskQuery.data;
   const state = progressQuery.data;
+  // Job IDs must come from the same snapshot. A fresh grading failure may
+  // arrive before the detail query refreshes its previous failed-job pointer.
+  const workflow = state?.grading_job_id !== undefined || state?.last_failed_job_id !== undefined ? state : task ?? state;
   const status = (state?.status ?? task?.status) as TaskStatus | undefined;
   const progress = progressQuery.progress;
+  const hasReadableState = Boolean(status || task || state);
+  const readFailed = !hasReadableState && (taskQuery.isError || progressQuery.isError);
+  const expertsQuery = useStageProviders(!taskId || readFailed || status === "error" || status === "grading_paused");
+  const retryProviderId = providerChoice?.taskId === taskId ? providerChoice?.id : undefined;
+  const retryExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled && expert.provider_kind !== "ocr");
+  const retryProviderUnavailable = Boolean(retryProviderId && !retryExperts.some((expert) => expert.provider_id === retryProviderId));
   const completedView = hasTaskCompletedGrading(status);
 
   const queue = useMemo(
@@ -66,11 +78,11 @@ export function GradingProgressPage() {
   if (taskId && completedView) {
     return <Navigate replace to={`/tasks/${taskId}/review`} />;
   }
-  if (taskId && task && status && !hasTaskReachedStep(task, 5)) {
-    return <Navigate replace to={getTaskDestination(task)} />;
+  if (taskId && workflow && status && !hasTaskReachedStep(workflow, 5)) {
+    return <Navigate replace to={getTaskDestination(workflow)} />;
   }
-  if (taskId && status === "error" && task?.last_failed_job_id && task.last_failed_job_id !== task.grading_job_id) {
-    return <Navigate replace to={getTaskDestination(task)} />;
+  if (taskId && status === "error" && workflow?.last_failed_job_id && workflow.last_failed_job_id !== workflow.grading_job_id) {
+    return <Navigate replace to={getTaskDestination(workflow)} />;
   }
 
   const refresh = () => {
@@ -79,9 +91,12 @@ export function GradingProgressPage() {
   };
 
   async function handleRetry() {
-    if (!taskId || !task) return;
+    const revision = state?.workflow_revision ?? task?.workflow_revision;
+    if (!taskId || revision === undefined || retryProviderUnavailable || manualBusy) return;
     try {
-      const response = await intent.execute(state?.workflow_revision ?? task.workflow_revision, (request) => retryGrading.mutateAsync({ taskId, ...request, retryScope: "failed_only" }));
+      const response = await intent.execute(revision, (request) => retryGrading.mutateAsync({
+        taskId, ...request, retryScope: "failed_only", ...(retryProviderId ? { retryProviderId } : {}),
+      }), JSON.stringify([taskId, retryProviderId]));
       if (!response) return;
       if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });
@@ -94,11 +109,11 @@ export function GradingProgressPage() {
   }
 
   async function handleManual() {
-    if (!taskId || !task?.grading_job_id || manualBusy) return;
+    if (!taskId || !workflow?.grading_job_id || manualBusy) return;
     setManualBusy(true);
     setManualError(false);
     try {
-      await continueTaskRun(taskId, task.grading_job_id, state?.workflow_revision ?? task.workflow_revision, true);
+      await continueTaskRun(taskId, workflow.grading_job_id, state?.workflow_revision ?? workflow.workflow_revision, true);
       await taskQuery.refetch();
       navigate(`/tasks/${taskId}/review`);
     } catch {
@@ -107,8 +122,6 @@ export function GradingProgressPage() {
     } finally { setManualBusy(false); }
   }
 
-  const hasReadableState = Boolean(status || task || state);
-  const readFailed = !hasReadableState && (taskQuery.isError || progressQuery.isError);
   const isFinalizing = status === "grading" && progress?.phase === "done";
   const waitingLabel = state?.active_operation_status === "pending" ? (locale === "zh-CN" ? "排队中" : "Queued") : null;
   const percent = completedView ? 100 : state?.active_operation_status === "pending" ? null : progress ? progressQuery.percent : null;
@@ -116,11 +129,29 @@ export function GradingProgressPage() {
     ? classifyRecoverableError(retryGrading.error ?? latestError, {
       locale,
       phase: progress?.current_step ?? progress?.phase ?? "grading",
-      jobId: task?.last_failed_job_id ?? task?.grading_job_id,
+      jobId: workflow?.last_failed_job_id ?? workflow?.grading_job_id,
       taskId,
       returnTo: `/tasks/${taskId}/grading/progress`,
     })
     : null;
+
+  const retryModelSelect = (
+    <StageProviderSelect
+      id="grading-retry-provider"
+      label={locale === "zh-CN" ? "重试批改模型" : "Grading retry model"}
+      hint={locale === "zh-CN"
+        ? "可选一个模型重试缺少有效分数的题次，保留已有分数和教师修改。"
+        : "Choose one model to retry responses without a valid score and keep saved scores and teacher edits."}
+      experts={retryExperts}
+      value={retryProviderId ?? ""}
+      placeholder={locale === "zh-CN" ? "使用已保存的批改模型" : "Use saved grading models"}
+      allowEmpty
+      disabled={retryGrading.isPending || manualBusy || expertsQuery.isLoading}
+      locale={locale}
+      onChange={(id) => setProviderChoice({ taskId, id })}
+      className="mb-4"
+    />
+  );
 
   return (
     <div className="w-full max-w-[1300px]">
@@ -133,22 +164,24 @@ export function GradingProgressPage() {
         onChanged={() => Promise.all([taskQuery.refetch(), progressQuery.refetch()])} />
 
       {!taskId ? (
-        <PageState
-          title={copy(locale, "missingTask")}
-          action={copy(locale, "viewHistory")}
-          href="/history"
-        />
+        <>
+          {retryModelSelect}
+          <PageState title={copy(locale, "missingTask")} action={copy(locale, "viewHistory")} href="/history" />
+        </>
       ) : readFailed ? (
-        <RecoverableActionState info={classifyRecoverableError(progressQuery.error ?? taskQuery.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/progress` })} locale={locale} workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: refresh }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }} />
+        <>
+          {retryModelSelect}
+          <RecoverableActionState info={classifyRecoverableError(progressQuery.error ?? taskQuery.error, { locale, taskId, returnTo: `/tasks/${taskId}/grading/progress` })} locale={locale} workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: refresh }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }} />
+        </>
       ) : !status ? (
         <PageState title={copy(locale, "reading")} busy />
       ) : (
         <div>
               {manualError ? <p role="alert">{locale === "zh-CN" ? "暂时无法进入复核，请刷新状态后重试。" : "Could not open review. Refresh and try again."}</p> : null}
-          {status === "error" ? <p className="mb-4 text-sm text-muted-foreground">{locale === "zh-CN" ? "仅重试缺少有效结果的题次，保留成功结果及教师修改。可先在模型配置中调整模型；返回批改设置再开始会重新批改整批。" : "Retry only items without a valid result; keep successful results and teacher edits. You can adjust models first. Starting from grading settings reruns the full batch."}</p> : null}
+          {status === "grading_paused" || recoveryInfo ? retryModelSelect : null}
           {(status === "error" || status === "grading_paused") && <GradingFailureDiagnostics progress={progress} task={task} locale={locale} />}
           {status === "grading_paused" && !retryGrading.error ? (
-            <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} onManual={() => void handleManual()} busy={retryGrading.isPending || manualBusy} manualBusy={manualBusy}>
+            <TaskPausedState status="grading_paused" onContinue={() => void handleRetry()} onManual={() => void handleManual()} busy={retryGrading.isPending || manualBusy} manualBusy={manualBusy} disabled={retryProviderUnavailable}>
               <p className="text-sm text-muted-foreground">{locale === "zh-CN" ? "已保存 AI 评分" : "Saved AI grades"} {progress?.saved_units ?? queue.completed} / {queue.total} {copy(locale, "unitSuffix")} · {locale === "zh-CN" ? "已汇总" : "Aggregated"} {queue.completed} / {queue.total}</p>
               <GradingStageCounts progress={progress} total={queue.total} locale={locale} />
               <ModelProgressRows models={progress?.model_progress ?? []} locale={locale} stopped />
@@ -157,9 +190,9 @@ export function GradingProgressPage() {
             <RecoverableActionState
               info={recoveryInfo}
               locale={locale}
-              usageContext={{ gradingTaskId: taskId }}
+              usageContext={retryProviderId ? { providerIds: [retryProviderId], providers: retryExperts } : { gradingTaskId: taskId }}
               className="min-h-[300px]"
-              workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending, disabled: manualBusy }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
+              workflowRecovery={{ retry: { onClick: () => void handleRetry(), busy: retryGrading.isPending, disabled: manualBusy || retryProviderUnavailable }, configurationHref: getTaskGradingSetupHref(taskId, `/tasks/${taskId}/grading/progress`) }}
               additionalActions={[{ label: copy(locale, "refresh"), onClick: refresh, busy: retryGrading.isPending, disabled: manualBusy }, { label: manualBusy ? (locale === "zh-CN" ? "正在打开…" : "Opening…") : (locale === "zh-CN" ? "人工继续处理" : "Continue manually"), onClick: () => void handleManual(), busy: manualBusy, disabled: retryGrading.isPending }]}
             />
           ) : (

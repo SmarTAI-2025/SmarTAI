@@ -172,6 +172,7 @@ _QUESTION_PREPARATION_RETRY_FROZEN_FIELDS = (
     "provider_configuration_fingerprint",
     "provider_capability",
     "prepared_source_provider_ids",
+    "model_retry_origin",
 )
 
 
@@ -1823,6 +1824,7 @@ def _question_preparation_retry_checkpoint(
                        incremental_saving_units=dict(checkpoint.get("incremental_saving_units") or {}),
                        incremental_source_invalidations=dict(checkpoint.get("incremental_source_invalidations") or {}),
                        incremental_completed_sources=list(checkpoint.get("incremental_completed_sources") or []),
+                       retry_origin_copied=checkpoint.get("retry_origin_copied"),
                        incremental_view_from_units=bool(checkpoint.get("incremental_view_from_units")),
                        incremental_source_plans=dict(checkpoint.get("incremental_source_plans") or {}),
                        incremental_errors={}, preparation_counts=dict(checkpoint.get("preparation_counts") or {}))
@@ -5315,7 +5317,10 @@ def start_task_grading(
     expected_workflow_revision: int,
     request_id: str | None = None,
     retry_scope: str = "full_batch",
+    retry_provider_id: str | None = None,
 ) -> dict:
+    if retry_provider_id is not None and retry_scope != "failed_only":
+        raise ValidationError("A retry model requires failed-only grading.", code="grading_retry_unavailable")
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -5391,6 +5396,25 @@ def start_task_grading(
         raise ValidationError(
             "grading_setup_invalid", code="grading_setup_invalid"
         ) from exc
+    run_setup = workflow.grading_setup
+    if retry_provider_id is not None:
+        registry = _registry_for_owner(owner_id)
+        try:
+            registry.select([retry_provider_id], primary_provider_id=retry_provider_id)
+        except ValueError as exc:
+            raise ValidationError("Selected provider configuration is unavailable.", code="provider_not_enabled") from exc
+        setup = setup.model_copy(update={
+            "selected_provider_ids": [retry_provider_id],
+            "primary_provider_id": retry_provider_id,
+            "aggregation_method": "single",
+            "expert_weights": {},
+            "multi_sample_n": (
+                setup.multi_sample_n
+                if setup.aggregation_method == "single" and not registry.is_shared(retry_provider_id)
+                else 1
+            ),
+        })
+        run_setup = setup.model_dump(mode="json")
     assert_grading_routes_supported(setup)
     from backend.services.grading_input_security import (
         provider_configuration_fingerprint,
@@ -5486,7 +5510,7 @@ def start_task_grading(
         if not presentation and isinstance(row.get("source"), dict):
             row["source"].pop("presentation", None)
     run_fingerprint = _hash_json({
-        "grading_setup": workflow.grading_setup,
+        "grading_setup": run_setup,
         "input_manifest": fingerprint_manifest,
     })
     latest = runs[-1] if runs else None
@@ -5515,7 +5539,9 @@ def start_task_grading(
                      **({"code_output": descriptor} if (descriptor := code_output_data(q)) else {})}
                     for q in items]
         stable_keys = ("submission_revision_ids", "knowledge_document_ids", "knowledge_content_versions")
-        if (previous.setup != workflow.grading_setup
+        saved_setup_fingerprint = _hash_json(workflow.grading_setup)
+        previous_setup_fingerprint = old.get("retry_base_setup_fingerprint") or _hash_json(previous.setup)
+        if (previous_setup_fingerprint != saved_setup_fingerprint
                 or any(old.get(key) != input_manifest.get(key) for key in stable_keys)
                 or content_questions(old.get("questions", [])) != content_questions(input_manifest["questions"])):
             raise VersionConflict("Grading inputs changed; review the setup before starting a new run.", code="grading_inputs_changed")
@@ -5533,7 +5559,14 @@ def start_task_grading(
             input_manifest["programming_preparation_config"] = old.get(
                 "programming_preparation_config", old.get("provider_configuration_fingerprint"))
             input_manifest["programming_artifacts"] = artifacts_for_retry(latest.id, old, owner_id)
-        previous_results = grading_repository.list_results_for_run(latest.id)
+        # A run can stop before its worker writes all inherited results.
+        previous_results_by_pair = {}
+        for snapshot in old.get("reused_results", []):
+            result = education.GradeResultDTO.model_validate(snapshot)
+            previous_results_by_pair[(result.submission_revision_id, result.q_id)] = result
+        for result in grading_repository.list_results_for_run(latest.id):
+            previous_results_by_pair[(result.submission_revision_id, result.q_id)] = result
+        previous_results = list(previous_results_by_pair.values())
         reusable = [result.model_dump(mode="json") for result in previous_results
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
@@ -5541,7 +5574,15 @@ def start_task_grading(
                     and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
+        # An inherited result keeps the source run's primary expert in review.
+        previous_primary_models = _inherited_primary_models(old)
+        for item in reusable:
+            item["source_primary_provider_id"] = previous_primary_models.get(
+                (item["submission_revision_id"], item["q_id"]), previous.setup.get("primary_provider_id")
+            )
         input_manifest.update(retry_from_run_id=latest.id, reused_results=reusable, retry_scope="failed_only")
+        if retry_provider_id is not None:
+            input_manifest["retry_base_setup_fingerprint"] = saved_setup_fingerprint
         input_manifest["teacher_review_overrides"] = teacher_review_snapshots(
             old, previous_results, questions=questions, revision_ids=frozen_revision_ids)
         if math_qids:
@@ -5551,7 +5592,8 @@ def start_task_grading(
         # Changing a provider still permits the established failed-item retry,
         # but partial expert votes from its previous configuration cannot mix in.
         input_manifest["reused_experts"] = (saved_experts(latest.id)
-            if old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
+            if previous.setup == run_setup
+            and old.get("provider_configuration_fingerprint") == input_manifest.get("provider_configuration_fingerprint") else [])
         if sandbox_qids and not compatible_programming:
             input_manifest["reused_experts"] = [item for item in input_manifest["reused_experts"]
                                                   if item.get("q_id") not in sandbox_qids]
@@ -5573,7 +5615,7 @@ def start_task_grading(
         run = grading_runs.start_run(
             assignment_id=task_id,
             teacher_id=owner_id,
-            grading_setup=dict(workflow.grading_setup),
+            grading_setup=run_setup,
             setup_fingerprint=run_fingerprint,
             input_manifest=input_manifest,
             workflow_expected_revision=expected_workflow_revision,
@@ -5623,6 +5665,14 @@ def _grading_request_response(task_id, run):
     }
 
 
+def _inherited_primary_models(manifest: dict) -> dict[tuple[str, str], str]:
+    return {
+        (item["submission_revision_id"], item["q_id"]): model_id
+        for item in manifest.get("reused_results", [])
+        if (model_id := item.get("source_primary_provider_id"))
+    }
+
+
 def task_results(*, task_id: str, owner_id: str) -> dict:
     from backend.services.math_final_feedback import final_result_feedback
     task = get_task(task_id=task_id, owner_id=owner_id, full=True)
@@ -5642,6 +5692,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
     frozen_setup = workflow_repository.get_run_setup(run.id)
     results = final_result_feedback(grading_repository.list_results_for_run(run.id, include_missing=True),
         language=frozen_setup.setup.get("feedback_language", "en") if frozen_setup else "en")
+    inherited_primary_models = _inherited_primary_models((frozen_setup.input_manifest or {}) if frozen_setup else {})
     presentations = workflow_repository.list_student_presentations(task_id)
     grouped: dict[str, list] = defaultdict(list)
     for result in results:
@@ -5654,7 +5705,12 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
         rendered.append({
             "student_id": display_id,
             "student_name": presentation.display_name if presentation else internal_id,
-            "corrections": [_serialize_correction(row) for row in rows],
+            "corrections": [
+                _serialize_correction(
+                    row, primary_provider_id=inherited_primary_models.get((row.submission_revision_id, row.q_id))
+                )
+                for row in rows
+            ],
             "student_answers": student_data.get(display_id, {}).get("stu_ans", []),
         })
     return {
@@ -5667,7 +5723,7 @@ def task_results(*, task_id: str, owner_id: str) -> dict:
     }
 
 
-def _serialize_correction(result) -> dict:
+def _serialize_correction(result, *, primary_provider_id: str | None = None) -> dict:
     review = result.teacher_review or {}
     score = result.effective_score
     review_status = (
@@ -5687,6 +5743,7 @@ def _serialize_correction(result) -> dict:
         "steps": result.ai_steps,
         "hits": None, "logs": None,
         "expert_results": result.ai_expert_results,
+        **({"primary_provider_id": primary_provider_id} if primary_provider_id else {}),
         "synthesis_method": result.ai_synthesis_method,
         "is_score": None,
         "requires_human_review": result.requires_review,

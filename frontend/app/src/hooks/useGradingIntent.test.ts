@@ -16,6 +16,14 @@ describe("explicit grading intents", () => {
     expect(submit.mock.calls[2][0].expectedWorkflowRevision).toBe(5);
   });
 
+  it("uses a new key for a changed model after an uncertain transport failure", async () => {
+    const { result } = renderHook(useGradingIntent);
+    const submit = vi.fn().mockRejectedValueOnce(new APIError(0, "Network timeout")).mockResolvedValue("done");
+    await act(async () => { await expect(result.current.execute(4, submit, "byok-a")).rejects.toThrow("Network timeout"); });
+    await act(async () => { await result.current.execute(4, submit, "byok-b"); });
+    expect(submit.mock.calls[1][0].requestId).not.toBe(submit.mock.calls[0][0].requestId);
+  });
+
   it("blocks a synchronous double click before mutation state rerenders", async () => {
     const { result } = renderHook(useGradingIntent);
     let resolve!: (value: string) => void;

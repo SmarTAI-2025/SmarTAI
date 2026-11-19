@@ -51,8 +51,16 @@ export function continueTaskRun(taskId: string, jobId: string, revision: number,
   );
 }
 
-export function buildGradePayload(options: { multiSampleN?: number | null; expectedWorkflowRevision?: number; requestId?: string; retryScope?: "full_batch" | "failed_only" } = {}) {
-  const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number; request_id?: string; retry_scope?: "full_batch" | "failed_only" } = {
+type GradeOptions = {
+  multiSampleN?: number | null;
+  expectedWorkflowRevision?: number;
+  requestId?: string;
+  retryScope?: "full_batch" | "failed_only";
+  retryProviderId?: string;
+};
+
+export function buildGradePayload(options: GradeOptions = {}) {
+  const payload: { language: string; multi_sample_n?: number; expected_workflow_revision?: number; request_id?: string; retry_scope?: "full_batch" | "failed_only"; retry_provider_id?: string } = {
     language: BACKEND_COMPAT_GRADING_LANGUAGE,
   };
 
@@ -64,6 +72,7 @@ export function buildGradePayload(options: { multiSampleN?: number | null; expec
   }
   if (options.requestId) payload.request_id = options.requestId;
   if (options.retryScope) payload.retry_scope = options.retryScope;
+  if (options.retryProviderId) payload.retry_provider_id = options.retryProviderId;
 
   return payload;
 }
@@ -247,7 +256,7 @@ export function uploadTestCases(taskId: string, file: File, options?: UploadOpti
 
 export function startGrading(
   taskId: string,
-  options: { multiSampleN?: number | null; expectedWorkflowRevision: number; requestId?: string; retryScope?: "full_batch" | "failed_only" },
+  options: GradeOptions & { expectedWorkflowRevision: number },
 ): Promise<TaskMutationResponse> {
   return postJSON<TaskMutationResponse>(`/tasks/${taskId}/grade`, buildGradePayload(options));
 }

@@ -12,11 +12,12 @@ export function useExperts(enabled = true) {
   });
 }
 
-export function useStageProviders() {
+export function useStageProviders(enabled = true) {
   const frontier = useFrontierWorkspace();
   return useQuery({
     queryKey: expertKeys.stage(),
     queryFn: () => frontier ? expertsApi.listExperts(true) : expertsApi.listStageProviders(),
+    enabled,
   });
 }
 

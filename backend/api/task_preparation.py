@@ -1746,7 +1746,16 @@ async def _start_question_preparation(
                 "The question-preparation input revision is invalid.",
                 code="stale_revision",
             )
-        restart_origin = acknowledged_restart_from or (retry_source_contract or {}).get("acknowledged_restart_from")
+        previous_input = retry_source_contract or {}
+        restart_origin = acknowledged_restart_from or previous_input.get("acknowledged_restart_from")
+        # Returning to an earlier model must inherit the latest retry's results,
+        # even when an older attempt used the exact same provider configuration.
+        model_retry_origin = previous_input.get("model_retry_origin")
+        if retry_origin_id and (
+            previous_input.get("recognition_provider_id") != recognition_provider_id
+            or previous_input.get("provider_configuration_fingerprint") != provider_configuration_fingerprint
+        ):
+            model_retry_origin = retry_origin_id
         operation_hash = _question_preparation_input_hash(
             ordered_source_inputs=ordered_source_inputs,
             logical_input_revision=logical_input_revision,
@@ -1759,6 +1768,7 @@ async def _start_question_preparation(
                 provider_configuration_fingerprint
             ),
             acknowledged_restart_from=restart_origin,
+            model_retry_origin=model_retry_origin,
         )
         replay = task_facade.find_task_operation(
             task_id=task_id, owner_id=current.id,
@@ -1806,9 +1816,11 @@ async def _start_question_preparation(
         # A retry must retain the original OCR identity, including legacy
         # timeouts, so a deployment cannot bypass a pending provider submit.
         timeout_contract = (replay.payload or {}) if replay is not None else retry_source_contract
+        inherited_from = (replay.payload or {}).get("retry_origin_id") if replay is not None else retry_origin_id
         operation_payload = {
             "question_preparation_version": 2,
-            **({"retry_origin_id": retry_origin_id} if retry_origin_id and replay is None else {}),
+            **({"retry_origin_id": inherited_from} if inherited_from else {}),
+            **({"model_retry_origin": model_retry_origin} if model_retry_origin else {}),
             **({"acknowledged_restart_from": restart_origin} if restart_origin else {}),
             "contract_version": 1,
             "owner_id": current.id,
@@ -2412,6 +2424,7 @@ def _rehydrate_question_preparation_inputs(operation):
         recognition_provider_id=recognition_provider_id,
         provider_configuration_fingerprint=frozen_provider_fingerprint,
         acknowledged_restart_from=payload.get("acknowledged_restart_from"),
+        model_retry_origin=payload.get("model_retry_origin"),
     )
     if expected_input_hash != operation.input_hash:
         raise _question_preparation_recovery_error(

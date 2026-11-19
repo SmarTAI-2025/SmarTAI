@@ -3,15 +3,20 @@ import { APIError } from "@/api/client";
 
 /** Keep an uncertain HTTP attempt stable; a later explicit retry gets a new id. */
 export function useGradingIntent() {
-  const pending = useRef<{ requestId: string; expectedWorkflowRevision: number } | null>(null);
+  type Intent = { requestId: string; expectedWorkflowRevision: number };
+  const pending = useRef<{ intent: Intent; selectionKey?: string } | null>(null);
   const inFlight = useRef(false);
   return {
-    async execute<T>(revision: number, submit: (intent: { requestId: string; expectedWorkflowRevision: number }) => Promise<T>) {
+    async execute<T>(revision: number, submit: (intent: Intent) => Promise<T>, selectionKey?: string) {
       if (inFlight.current) return undefined;
       inFlight.current = true;
-      pending.current ??= { requestId: crypto.randomUUID(), expectedWorkflowRevision: revision };
+      if (!pending.current || pending.current.selectionKey !== selectionKey) {
+        // A changed selection is a new intent. The server still fences the
+        // revision and deduplicates active grading runs for this task.
+        pending.current = { intent: { requestId: crypto.randomUUID(), expectedWorkflowRevision: revision }, selectionKey };
+      }
       try {
-        const response = await submit(pending.current);
+        const response = await submit(pending.current.intent);
         pending.current = null;
         return response;
       } catch (error) {

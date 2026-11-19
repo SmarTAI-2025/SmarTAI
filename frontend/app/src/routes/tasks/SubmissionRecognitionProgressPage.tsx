@@ -48,7 +48,7 @@ export function SubmissionRecognitionProgressPage() {
   const manualRecognition = useManuallyCompleteSubmissionRecognition();
   const expertsQuery = useStageProviders();
   const [retryError, setRetryError] = useState<unknown>(null);
-  const [providerChoice, setProviderChoice] = useState<{ jobId: string; id: string } | null>(null);
+  const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const retrying = useRef(false);
@@ -58,7 +58,7 @@ export function SubmissionRecognitionProgressPage() {
   // can still contain processing/failed files after the polled job has finished.
   const incomplete = submissionRecognitionIncomplete(taskState);
   const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
-  const providerId = providerChoice && providerChoice.jobId === failedJobId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
+  const providerId = providerChoice && providerChoice.taskId === taskId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
   // Use the retry endpoint's classification of errors that need another upload;
   // mixed batches may still recover other files, including with another model.
@@ -123,9 +123,23 @@ export function SubmissionRecognitionProgressPage() {
     ?? progressQuery.error
     ?? taskQuery.error;
 
+  const retryModelSelect = (
+    <StageProviderSelect
+      id="submission-retry-provider"
+      label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
+      hint={locale === "zh-CN" ? "可选择继续处理或重试时使用的模型。" : "Choose the model for continuing or retrying submission recognition."}
+      experts={(expertsQuery.data ?? []).filter((item) => item.enabled)}
+      value={providerId}
+      locale={locale}
+      disabled={openingManual || retryRecognition.isPending || expertsQuery.isLoading}
+      onChange={(id) => setProviderChoice({ taskId, id })}
+      className="mb-4"
+    />
+  );
   if (!taskId) {
     return (
       <ProgressPageFrame title={t("submissionProgressTitle")}>
+        {retryModelSelect}
         <RecoveryState
           title={t("submissionProgressTaskMissing")}
           description={t("submissionProgressTaskMissingDescription")}
@@ -149,11 +163,7 @@ export function SubmissionRecognitionProgressPage() {
     return (
       <ProgressPageFrame title={paused ? t("submissionProgressTitle") : locale === "en-US" ? "Submission recognition did not complete" : "作答识别未完成"} returnState={{ imageRecoveryModel: providerId }}>
         <>
-          {!info.retryUnavailable && !requiresReupload ? <StageProviderSelect id="submission-retry-provider" label={locale === "zh-CN" ? "作答识别模型" : "Submission recognition model"}
-            hint={paused ? (locale === "zh-CN" ? "继续识别时将使用此模型。" : "This model will be used when recognition continues.") : locale === "zh-CN" ? "只重试失败文件，成功结果保留；可先切换模型。返回修改配置后再开始识别，会重新处理全部文件。" : "Retry only failed files and keep successful results. You can switch models first. Starting again from settings processes all files."}
-            experts={(expertsQuery.data ?? []).filter((item) => item.enabled)} value={providerId} locale={locale}
-            disabled={openingManual || retryRecognition.isPending || expertsQuery.isLoading}
-            onChange={(id) => { if (failedJobId) setProviderChoice({ jobId: failedJobId, id }); setRetryError(null); }} className="mb-4" /> : null}
+          {retryModelSelect}
           {uncertain && failedJobId ? <label className="mb-4 flex items-center gap-2 text-sm"><input type="checkbox" checked={acknowledgedJobId === failedJobId} disabled={retryRecognition.isPending} onChange={(event) => setAcknowledgedJobId(event.target.checked ? failedJobId : null)} />{locale === "zh-CN" ? "我了解上次请求可能已计费，确认重试可能再次消耗额度" : "I understand the previous call may have been billed and retrying may incur additional charges"}</label> : null}
           {paused && !retryError && !info.retryUnavailable && !requiresReupload ? <TaskPausedState status="submissions_paused" onContinue={() => void retry()}
             onManual={failedJobId ? () => void continueManually() : undefined}
@@ -187,12 +197,13 @@ export function SubmissionRecognitionProgressPage() {
       returnTo: `/tasks/${taskId}/submissions/progress`,
     });
     return (
-      <ProgressPageFrame title={t("submissionProgressTitle")}>
+      <ProgressPageFrame title={t("submissionProgressTitle")} returnState={{ imageRecoveryModel: providerId }}>
+        {retryModelSelect}
         <RecoverableActionState
           info={info}
           locale={locale}
           className="min-h-[430px]"
-          workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: refreshing }, configurationHref: `/tasks/${taskId}/submissions/upload` }}
+          workflowRecovery={{ retry: { label: locale === "zh-CN" ? "刷新状态" : "Refresh status", onClick: () => void refresh(), busy: refreshing }, configurationHref: `/tasks/${taskId}/submissions/upload`, configurationState: { imageRecoveryModel: providerId } }}
       />
       </ProgressPageFrame>
     );

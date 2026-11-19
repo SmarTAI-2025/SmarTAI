@@ -96,6 +96,7 @@ class InterpretTaskQueryRequest(BaseModel):
 
 class GradeRequest(BaseModel):
     retry_scope: Literal["full_batch", "failed_only"] = "full_batch"
+    retry_provider_id: str | None = Field(default=None, min_length=1, max_length=240)
     language: str = "en"
     multi_sample_n: int | None = Field(default=None, ge=1, le=10)
     expected_workflow_revision: int = Field(ge=0)
@@ -708,6 +709,7 @@ def start_grading(
             expected_workflow_revision=request.expected_workflow_revision,
             request_id=request.request_id,
             retry_scope=request.retry_scope,
+            retry_provider_id=request.retry_provider_id,
         )
     except DomainError as exc:
         return domain_error_response(exc)

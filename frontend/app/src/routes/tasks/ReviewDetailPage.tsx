@@ -590,7 +590,7 @@ function ReviewDetailForm() {
                       student={student}
                       question={question}
                       correction={correction}
-                      primaryProviderId={resultQuery.data?.primary_provider_id ?? undefined}
+                      primaryProviderId={correction?.primary_provider_id ?? resultQuery.data?.primary_provider_id ?? undefined}
                       draft={draft}
                       previous={visibleQuestions[index - 1] ?? null}
                       next={visibleQuestions[index + 1] ?? null}
