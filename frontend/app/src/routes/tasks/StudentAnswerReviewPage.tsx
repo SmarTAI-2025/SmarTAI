@@ -223,7 +223,8 @@ function StudentAnswerReviewForm() {
   const identityDirty = identityOpen && (identityId !== (student?.stu_id ?? "") || identityName !== (student?.stu_name ?? ""));
   const isDirty = dirtyQuestionIds.size > 0 || identityDirty;
   const pendingAnswers = questions.filter((question) => answerNeedsConfirmation(answers.get(question.id)));
-  const pendingIdentity = student?.identity_status === "needs_review" || Boolean(student && studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources));
+  const identityBlocked = Boolean(student && studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources));
+  const pendingIdentity = student?.identity_status === "needs_review" || identityBlocked;
   const mutationBusy = savingQuestionId !== null || identityMutation.isPending || batchProgress !== null;
   const answerDrafts = useRef(new Map<string, DraftFieldHandle>());
   const mounted = useRef(true);
@@ -633,7 +634,7 @@ function StudentAnswerReviewForm() {
               label={t("studentSubmissionMetricIdentity")}
               value={t(pendingIdentity ? "studentSubmissionIdentityReview" : "studentSubmissionIdentityMatched")}
               detail={student.identity_match_method ? t(identityMethodKey(student.identity_match_method)) : "—"}
-              tone={studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources) ? "danger" : pendingIdentity ? "neutral" : "accent"}
+              tone={identityBlocked ? "danger" : pendingIdentity ? "neutral" : "accent"}
             />
             <ReviewMetric
               label={t("studentSubmissionMetricCoverage")}
@@ -716,9 +717,9 @@ function StudentAnswerReviewForm() {
           >
           <div className="min-w-0">
           {student.identity_status && !identityOpen ? (
-            <div className={cn("mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border bg-card p-4", studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources) && "border-red-200 text-red-700")}>
-              <p className="text-sm">{tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
-              <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={student.identity_status !== "needs_review" && !studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources)} blocked={studentIdentityReviewBlocked(student, taskQuery.data?.submission_sources)} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
+            <div className={cn("mb-3 flex flex-wrap items-center justify-between gap-3 rounded-[10px] border bg-card p-4", identityBlocked && "border-red-200 text-red-700 dark:text-red-300")}>
+              <p className="text-sm">{identityBlocked ? t("submissionReviewQueueIdentity") : tx(locale, "请核对姓名与学号；无误时可直接确认。", "Check the student name and ID, then confirm if correct.")}</p>
+              <ReviewConfirmButton locale={locale} title={tx(locale, "确认身份", "Confirm identity")} confirmed={!pendingIdentity} blocked={identityBlocked} busy={mutationBusy} onClick={() => void saveIdentity(true)} />
               {identityError ? <p role="alert" className="w-full text-xs text-danger">{identityError}</p> : null}
             </div>
           ) : null}
@@ -733,6 +734,7 @@ function StudentAnswerReviewForm() {
               <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:justify-between sm:gap-5">
                 <div>
                   <h3 className="text-sm font-semibold text-foreground">{t("studentSubmissionIdentityTitle")}</h3>
+                  {identityBlocked ? <p className="mt-1 text-xs font-medium text-red-700 dark:text-red-300">{t("submissionReviewQueueIdentity")}</p> : null}
                   <p className="mt-1 text-xs leading-5 text-muted-foreground">{t("studentSubmissionIdentityDescription")}</p>
                 </div>
                 {student.source_filename ? (

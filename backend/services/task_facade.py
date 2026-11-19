@@ -122,6 +122,7 @@ from backend.services.question_structure import (
 from backend.services.submission_source_pipeline import (
     PreparedSubmissionSource,
     attach_submission_recognition,
+    failed_pdf_without_identity,
     failure_phase_for_code,
     prepare_submission_sources,
 )
@@ -698,6 +699,7 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             "size_bytes": result.source.size_bytes,
             "status": external_status,
             "internal_status": internal_status,
+            "requires_identity_review": failed_pdf_without_identity(result),
             "reason_code": (
                 None
                 if outcome

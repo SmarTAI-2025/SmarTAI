@@ -206,6 +206,7 @@ export interface SubmissionSourceOutcome {
   size_bytes: number;
   status: SubmissionSourceStatus;
   internal_status: SubmissionSourceInternalStatus;
+  requires_identity_review?: boolean;
   reason_code?: string | null;
   recognition_reason_code?: string | null;
   page_diagnostics?: SubmissionPageDiagnostics | null;

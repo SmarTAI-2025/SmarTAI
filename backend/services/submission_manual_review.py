@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import time
 from copy import deepcopy
+from pathlib import PurePosixPath
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -16,7 +17,9 @@ from backend.services import task_facade
 from backend.services.submission_archive_ownership import (
     MULTIPLE_SOURCE_FILES, PROJECT_MESSAGE, archive_code_paths, archive_layout, apply_member_identity,
 )
-from backend.services.submission_source_pipeline import PreparedSubmissionSource, prepare_submission_sources
+from backend.services.submission_source_pipeline import (
+    PreparedSubmissionSource, failed_pdf_without_identity, prepare_submission_sources,
+)
 from backend.tools.file_processing import ARCHIVE_EXTENSIONS
 
 
@@ -67,7 +70,12 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
     try:
         # Reuse stored source identities; enumerate any untouched archive members
         # through the same bounded local extraction path used by recognition.
-        for source in source_outcome_repository.list_sources(operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt):
+        failed_pdf_files = set()
+        for result in source_outcome_repository.list_source_results(
+                operation_id=origin.id, owner_id=owner_id, attempt=origin.attempt):
+            source = result.source
+            if failed_pdf_without_identity(result):
+                failed_pdf_files.add(source.stored_file_id)
             source_outcome_repository.register_source(owner_id=owner_id, assignment_id=task_id,
                 operation_id=row.id, expected_attempt=row.attempt, order_index=source.order_index,
                 stored_file_id=source.stored_file_id,
@@ -143,6 +151,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
             had_saved_identity = saved is not None
             if source.text and may_contain_source(source.filename, problems):
                 saved = await recover_native_submission_result(source, problems, saved)
+            use_pdf_filename = False
             if saved is not None and saved.student is not None:
                 saved = apply_member_identity(saved, owners.get(source.filename), source.filename in uncertain,
                     mode if had_saved_identity else "manual_review", native=source.filename in codes)
@@ -156,10 +165,16 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                         or origin.error_code, "recognition")
                     outcome.update(status="parse_failed", stable_error_code=reason, failure_phase=phase)
             else:
-                candidate_id, candidate_name, _ = _ocr_identity_candidate("", source.filename)
-                if source.filename in owners:
+                use_pdf_filename = source.stored_file_id in failed_pdf_files
+                if use_pdf_filename:
+                    path = PurePosixPath(source.filename.replace("\\", "/"))
+                    # Identity fields are bounded to 160 characters, including the extension.
+                    candidate_id = candidate_name = f"{path.stem[:160 - len(path.suffix)]}{path.suffix}"
+                elif source.filename in owners:
                     hint = owners[source.filename]
                     candidate_id, candidate_name = hint.student_id, hint.name or "[Unknown Student]"
+                else:
+                    candidate_id, candidate_name, _ = _ocr_identity_candidate("", source.filename)
                 if unknown_count:
                     candidate_id, candidate_name = f"manual-{student_index + 1}", "[Unknown Student]"
                 student = dict(stu_id=candidate_id, stu_name=candidate_name, stu_ans=[],
@@ -169,7 +184,9 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                 outcome = dict(status="parse_failed", stable_error_code=reason,
                     failure_phase=phase, matched_answer_count=0)
             if student["stu_id"] in used_ids or (not had_saved_identity and student["stu_id"] in saved_ids):
-                student["stu_id"] = f"{student['stu_id']}-{source.source_id[-8:]}"
+                suffix = f"-{source.source_id[-8:]}"
+                candidate_id = student["stu_id"][:160 - len(suffix)] if use_pdf_filename else student["stu_id"]
+                student["stu_id"] = candidate_id + suffix
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])
             fill_manual_answers(student, questions,

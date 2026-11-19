@@ -131,6 +131,57 @@ async function fixture(page: Page, stage: Stage) {
   } };
 }
 
+test("failed PDF uses the same required identity message in progress, queue and detail", async ({ page }) => {
+  const run = await fixture(page, "submissions");
+  const filename = "全体_2026001234_测试学生_3093.pdf";
+  const instruction = "请核对姓名与学号";
+  const source: SubmissionSourceOutcome = {
+    ...submissionSource("failed"), file_name: filename, content_type: "application/pdf",
+    internal_status: "parse_failed", reason_code: "image_recognition_unconfirmed",
+    matched_answer_count: 0, requires_identity_review: true,
+  };
+  Object.assign(run.task, {
+    status: "error", parse_job_id: "new-job", last_failed_job_id: "new-job", error: "submission_parse_failed",
+    submission_sources: [source],
+    submission_source_summary: { uploaded: 1, parsed: 0, failed: 1, identity_needs_review: 0, pending: 0 },
+  });
+  const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
+  await page.route(`${backend}/tasks/navigation-task/submission-recognition/new-job/manual-review`, async route => {
+    if (route.request().method() !== "POST") return route.fallback();
+    run.complete();
+    Object.assign(run.student, {
+      stu_id: filename, stu_name: filename, source_id: source.source_id, source_filename: filename,
+    });
+    Object.assign(run.student.stu_ans[0], { content: "", flag: ["recognition_manual_pending"] });
+    Object.assign(run.task, {
+      error: null, parse_job_id: "manual-job", last_failed_job_id: null,
+      student_data: { [filename]: run.student },
+      submission_sources: [{ ...source, status: "manual_review", requires_identity_review: false, student_candidate: filename }],
+      submission_source_summary: { uploaded: 1, parsed: 0, failed: 0, identity_needs_review: 0, pending: 0, manual_review: 1 },
+    });
+    await route.fulfill({ json: { status: "ready_for_review", task_id: run.task.task_id, workflow_revision: run.task.workflow_revision } });
+  });
+
+  await page.goto("/tasks/navigation-task/submissions/progress");
+  await expect(page.getByText(instruction, { exact: true })).toHaveClass(/text-red-700/);
+  await expect(page.getByText("图片识别尚未得到可靠内容", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "人工继续处理", exact: true }).click();
+  await expect(page).toHaveURL(/\/submissions$/);
+  const queue = page.getByRole("region", { name: "待复核队列" });
+  const identityIssue = queue.getByText(instruction, { exact: true });
+  await expect(identityIssue).toHaveClass(/text-red-700/);
+  await identityIssue.click();
+  await expect(page).toHaveURL(/identity=edit/);
+  await expect(page.getByText(instruction, { exact: true })).toHaveClass(/text-red-700/);
+  await expect(page.getByRole("textbox", { name: "学号", exact: true })).toHaveValue(filename);
+  const nameInput = page.getByRole("textbox", { name: "姓名", exact: true });
+  await expect(nameInput).toHaveValue(filename);
+  await nameInput.fill("测试学生");
+  await page.getByRole("button", { name: "保存并确认身份", exact: true }).click();
+  await expect(page.getByText(instruction, { exact: true })).toHaveCount(0);
+  expect(run.errors).toEqual([]);
+});
+
 test("empty question text blocks both countdown and manual grading without a mutation", async ({ page }) => {
   const run = await fixture(page, "grading");
   run.task.problem_data.q1!.stem = "";
