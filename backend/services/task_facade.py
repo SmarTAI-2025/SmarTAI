@@ -3468,6 +3468,16 @@ async def run_task_submission_parsing(
                 raise ValidationError("Recognition inputs changed.", code="recognition_plan_changed")
             vision = provider if can_attempt_images(provider) else None
             source_states = {}
+            from backend.services.question_matching import question_number_aliases
+            aliases = question_number_aliases(problem_data)
+            programming_questions = {
+                aliases[q.q_id][0]: (
+                    "python" if re.search(r"^\s*```(?:python|py)[ \t]*$|\b(?:write|implement|code)\b[^.\n]{0,60}\bin Python\b",
+                                          q.stem, re.I | re.M)
+                    else "code"
+                )
+                for q in questions if is_programming_question_type(q.type) and aliases[q.q_id]
+            }
 
             async def save_source_state(source_id, stored_file_id, **changes):
                 if leased_operation is None:
@@ -3519,6 +3529,7 @@ async def run_task_submission_parsing(
                         execution_scope=frozen.get("recognition_execution_scope"),
                         allow_partial=True,
                         media_slot_timeout_seconds=None,
+                        programming_questions=programming_questions,
                         on_pages=lambda pages: on_saved_pages(raw, stored_file_id, pages),
                     )
                 except DomainError as exc:

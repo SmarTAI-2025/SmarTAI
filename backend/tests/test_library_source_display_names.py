@@ -44,7 +44,7 @@ def offline_registry(monkeypatch):
     engines = []
 
     @asynccontextmanager
-    async def engine(*, owner_id, route, registry):
+    async def engine(*, owner_id, route, registry, programming_questions=None):
         if route is None or not route.provider.supports_vision:
             yield None
             return

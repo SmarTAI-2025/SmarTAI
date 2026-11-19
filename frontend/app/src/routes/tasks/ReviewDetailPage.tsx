@@ -32,6 +32,7 @@ import {
   correctionReviewDraftScore,
   effectiveCorrectionScore,
   formatConfidence,
+  formatEvidenceAmount,
   formatScore,
   scoringRows,
   formatScoringRow,
@@ -814,7 +815,9 @@ function expertStepScores(expert: ExpertResult) {
   for (const step of expert.steps) {
     const key = step.part_id ?? `row:${step.step_no}`;
     const scores = groups.get(key) ?? [];
-    scores.push(formatScore(step.score, undefined, step.part_id ? 2 : 1));
+    scores.push(expert.programming_evidence && step.awards?.length
+      ? `[${step.awards.map(award => formatEvidenceAmount(award.points)).join(",")}]`
+      : formatScore(step.score, undefined, step.part_id ? 2 : 1));
     groups.set(key, scores);
   }
   if (groups.size === 1) return `[${Array.from(groups.values())[0].join(",")}]`;

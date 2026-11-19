@@ -270,6 +270,24 @@ describe("one-click grading review", () => {
     expect(state.update).not.toHaveBeenCalled();
   });
 
+  it("shows ordered test awards inside a single programming scoring step", () => {
+    const testPoints = [0.4, 0, 0.4, 0.4, 0.4, 0, 0, 0.4, 0.4, 0.4];
+    const steps = [
+      { step_no: 1, part_id: "p1", desc: "Code criterion", score: 5, is_correct: false },
+      { step_no: 2, part_id: "p1", desc: "Tests passed 7/10. Failed cases 2, 6, 7.", score: 2.8, is_correct: false,
+        awards: testPoints.map((points, index) => ({ item_id: `case-${index + 1}`, desc: `Case ${index + 1}`, points, is_correct: points > 0 })) },
+    ];
+    const expert = { provider: "programming-model", score: 7.8, max_score: 10, confidence: 0.9, steps, comment: "",
+      programming_evidence: { contract: "smartai.programming_evidence", execution_status: "executed", score_status: "final" } };
+    state.result.results = [{ student_id: "S1", corrections: [correction("Q1", {
+      type: "programming", score: 7.8, provisional_score: 7.8, expert_results: [expert], steps,
+    })] }];
+    show(true);
+    const result = screen.getByRole("region", { name: "SmarTAI Grading Result" });
+    expect(result).toHaveTextContent("[5,[0.4,0,0.4,0.4,0.4,0,0,0.4,0.4,0.4]]");
+    expect(within(within(result).getAllByRole("list")[0]).getByText("Tests passed 7/10. Failed cases 2, 6, 7.")).toBeVisible();
+  });
+
   it("falls back to a valid model when the primary failed and preserves its failure in the model tab", async () => {
     state.result.primary_provider_id = "failed";
     state.result.results = [{ student_id: "S1", corrections: [correction("Q1", { expert_results: [

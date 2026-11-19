@@ -4,13 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from backend.agents.ingest_agent import generate_missing_question_materials
+from backend.agents.ingest_agent import _extract_problems_call, generate_missing_question_materials
+from backend.agents.question_preparation_agent import requested_major_question_materials
 from backend.llm.providers import LLMResponse
 from backend.models import ProblemInfo, StudentAnswerInfo, TestCase
 from backend.services.programming_materials import resolve_generated_outputs
 from backend.services.programming_rubric import frozen_programming_steps, grading_steps, settle_test_award, suite_award
 from backend.services.rubric_drafts import RubricDefinition, generated_rubric
 from backend.skills.programming import ProgrammingGradingOutput, ProgrammingSkill, _validate_awards
+from backend.tools.code_interpreter import ExecutionReport, TestResult as Observation
 
 
 def source(**changes):
@@ -95,8 +97,24 @@ async def test_short_or_repeated_inputs_are_rejected_before_execution(cases):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("criterion", ["10 points", "（满分10分）", "10 points for correct code"])
+async def test_programming_total_in_question_source_is_not_a_grading_criterion(criterion):
+    row = {**source(), "criterion": criterion}
+    provider = SimpleNamespace(provider_id="synthetic", ainvoke=AsyncMock(return_value=LLMResponse(
+        content=json.dumps({"problems": [row]}), provider="synthetic", model="synthetic", duration_ms=1)))
+    extracted = await _extract_problems_call(f"1. {row['stem']}\n{criterion}", provider)
+    extracted["q1"]["question_structure"] = None
+    from backend.services.question_structure import annotate_major_question_structures
+    targets = requested_major_question_materials(annotate_major_question_structures(extracted))
+    assert extracted["q1"]["max_score"] == 10
+    assert ("q1:criterion" in {target["target_id"] for target in targets}) == ("correct code" not in criterion)
+
+
+@pytest.mark.asyncio
 async def test_generation_freezes_executed_outputs_and_one_test_rubric_item():
-    candidates = [dict(target_id="q1:criterion", rubric_definition=definition()),
+    generated_definition = definition()
+    generated_definition["part_rubric"]["parts"][0].pop("alternative")
+    candidates = [dict(target_id="q1:criterion", rubric_definition=generated_definition),
                   dict(target_id="q1:test_cases", test_cases=[case.model_dump() for case in inputs()])]
     provider = SimpleNamespace(provider_id="synthetic", ainvoke=AsyncMock(return_value=LLMResponse(
         content=json.dumps({"candidates": candidates}), provider="synthetic", model="synthetic", duration_ms=1)))
@@ -113,22 +131,32 @@ async def test_generation_freezes_executed_outputs_and_one_test_rubric_item():
 
 def test_test_award_is_computed_from_frozen_budget_and_execution_once():
     row = source()
-    criterion, draft = generated_rubric(row, RubricDefinition.model_validate(definition()))
+    definition_with_four_test_points = definition()
+    suite, code = definition_with_four_test_points["part_rubric"]["parts"][0]["steps"]
+    suite["total_pts"], code["total_pts"] = 4, 6
+    criterion, draft = generated_rubric(row, RubricDefinition.model_validate(definition_with_four_test_points))
     row.update(criterion=criterion, rubric_draft=draft.model_dump(mode="json"), ai_completion_provenance={"criterion": {"source_kind": "ai_generated"}})
     problem = ProblemInfo.model_validate(row)
     problem._math_rubric_source = {"presentation": row}
     rows = frozen_programming_steps(problem)
-    run = SimpleNamespace(status="executed", report=SimpleNamespace(passed_count=7, total_count=10))
-    assert grading_steps(rows, run)[0]["score"] == 4.2
+    misses = {2, 6, 7}
+    run = SimpleNamespace(status="executed", report=ExecutionReport(7, 10, .7, [
+        Observation(case, number not in misses, "", "", 1,
+                    exit_reason="wrong_answer" if number in misses else "success")
+        for number, case in enumerate(inputs(), 1)
+    ]))
+    assert grading_steps(rows, run)[0]["score"] == 2.8
     output = ProgrammingGradingOutput(steps=[
-        dict(step_no=1, score=6, max_points=6, is_correct=True, desc="Model incorrectly says all pass"),
-        dict(step_no=2, score=3, max_points=4, is_correct=False, desc="Independent code criterion")], max_score=10, confidence=.9)
+        dict(step_no=1, score=4, max_points=4, is_correct=True, desc="Model incorrectly says all pass"),
+        dict(step_no=2, score=5, max_points=6, is_correct=False, desc="Independent code criterion")], max_score=10, confidence=.9)
     settle_test_award(output, rows, run, "zh")
     _validate_awards(output, 10)
-    assert output.score == 7.2 and output.steps[0].score == 4.2
+    assert output.score == 7.8 and output.steps[0].score == 2.8
     assert output.steps[0].part_id == "p1" and output.steps[0].item_id == "tests"
     assert "7/10" in output.steps[0].desc and not output.steps[0].is_correct
-    assert output.steps[1].score == 3
+    assert [case.points for case in output.steps[0].awards] == [.4, 0, .4, .4, .4, 0, 0, .4, .4, .4]
+    assert all(f"样例 {number}（结果与预期不符）" in output.steps[0].desc for number in misses)
+    assert output.steps[1].score == 5
     output.steps.append(output.steps[0].model_copy())
     with pytest.raises(ValueError, match="exactly once"):
         settle_test_award(output, rows, run, "zh")
