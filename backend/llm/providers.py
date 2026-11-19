@@ -160,8 +160,8 @@ async def _wait_provider_local(awaitable):
         raise ProviderRequestError("provider_capacity_unavailable") from None
 
 
-def _request_definitely_rejected(exc: BaseException) -> bool:
-    """Only concrete request-local evidence can clear a submission marker."""
+def _request_rejection_evidence(exc: BaseException, *, connect_error_only: bool = False) -> bool:
+    """Only concrete evidence from this request can establish rejection."""
     import httpx2  # The locked Anthropic SDK uses distinct transport exceptions.
     from backend.domain.errors import DomainError
     seen = set()
@@ -169,19 +169,28 @@ def _request_definitely_rejected(exc: BaseException) -> bool:
         seen.add(id(exc))
         if isinstance(exc, DomainError):
             return False  # Application/fencing HTTP statuses are not upstream evidence.
-        if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout,
-                            httpx2.ConnectError, httpx2.ConnectTimeout, httpx2.PoolTimeout)):
+        if isinstance(exc, (httpx.ConnectError, httpx2.ConnectError)):
             return True
+        if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout, httpx2.ConnectTimeout, httpx2.PoolTimeout)):
+            return not connect_error_only
         # Google SDK errors use integer `code`; OpenAI/Anthropic use status_code.
         status = getattr(exc, "status_code", None)
         if status is None:
             status = getattr(exc, "code", None)
         if type(status) is int and status in {400, 401, 402, 403, 404, 413, 415, 422, 429}:
-            return True
+            return not connect_error_only
         # __context__ can refer to an earlier retry. Only explicit cause chains
         # describe this request; never clear an unknown attempt from old 429s.
         exc = exc.__cause__
     return False
+
+
+def _request_definitely_rejected(exc: BaseException) -> bool:
+    return _request_rejection_evidence(exc)
+
+
+def is_preconnection_error(exc: BaseException) -> bool:
+    return _request_rejection_evidence(exc, connect_error_only=True)
 
 
 def validate_provider_api_key(api_key: str) -> None:

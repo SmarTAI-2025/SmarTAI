@@ -156,10 +156,12 @@ async def test_manual_handoff_preserves_saved_answers_and_queues_every_unfinishe
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure_mode,edited_after_restart,from_retry", [
     ("503", False, False), ("503", True, False), ("stopped", False, False), ("stopped", False, True),
+    ("503", False, True),
 ])
 async def test_failed_only_keeps_successful_pages_but_configuration_restart_rereads_all(monkeypatch, failure_mode, edited_after_restart, from_retry):
     import asyncio
     import json
+    from dataclasses import replace
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -172,7 +174,11 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
     from backend.tests.test_recognition_reader import llm
 
     owner, task = _seed_task(with_question=True)
-    with fitz.open(stream=pdf(["First page answer", "Second page answer"]), filetype="pdf") as original, fitz.open() as scanned:
+    across_gap = failure_mode == "503" and from_retry
+    snippets = ["Literal answer, including a mistake.", "Second page reasoning."]
+    if across_gap:
+        snippets.append("Third page conclusion.")
+    with fitz.open(stream=pdf(snippets), filetype="pdf") as original, fitz.open() as scanned:
         for page in original:
             copied = scanned.new_page(width=page.rect.width + 50 * page.number, height=page.rect.height)
             copied.insert_image(copied.rect, stream=page.get_pixmap().tobytes("png"))
@@ -193,24 +199,34 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
     monkeypatch.setattr(RecognitionRunService, "run", observe_page)
 
     async def network_response(_prompt, images, **_kwargs):
-        # Select page 2 by its distinct aspect ratio rather than call order.
+        # Identify the physical page independently of the concurrent call order.
         with Image.open(io.BytesIO(images[0].data)) as image:
-            second_page = image.width / image.height > 0.8
-        if second_page:
+            ratio = image.width / image.height
+        index = 2 if ratio > 0.92 else 1 if ratio > 0.8 else 0
+        if index == 1:
             failed_page_images.append(images[0].data)
             if len(failed_page_images) == 1:
                 if failure_mode == "stopped":
                     await asyncio.wait_for(page_one_saved.wait(), 5)
                     raise asyncio.CancelledError()
                 raise ProviderRequestError("provider_upstream_unavailable", status_code=503)
-        return provider.ainvoke_vision.return_value
+        if not across_gap:
+            return provider.ainvoke_vision.return_value
+        return replace(provider.ainvoke_vision.return_value,
+                       content=("Question 1: " if index == 0 else "") + snippets[index])
 
     provider.ainvoke_vision.side_effect = network_response
-    provider.ainvoke = AsyncMock(return_value=SimpleNamespace(content=json.dumps({
-        "stu_id": "S1", "stu_name": "Synthetic learner",
-        "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept",
-                     "content": "Literal answer, including a mistake.", "flag": []}],
-    })))
+    async def parse(messages):
+        if across_gap:
+            text = messages[-1].content.split("**[Student Submission Content]**:", 1)[1]
+            answer = "\n".join(snippet for snippet in snippets if snippet in text)
+        else:
+            answer = snippets[0]
+        return SimpleNamespace(content=json.dumps({
+            "stu_id": "S1", "stu_name": "Synthetic learner",
+            "stu_ans": [{"q_id": "q1", "number": "1", "type": "concept", "content": answer, "flag": []}],
+        }))
+    provider.ainvoke = AsyncMock(side_effect=parse)
     registry = _Registry()
     registry.provider = provider
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _owner: registry)
@@ -237,14 +253,15 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
     assert before["student_data"] == {}
     if failure_mode != "stopped":
         assert before["submission_sources"][0]["page_diagnostics"]["failed_pages"] == [2]
-    assert provider.ainvoke_vision.await_count == 2
+    initial_reads = len(snippets)
+    assert provider.ainvoke_vision.await_count == initial_reads
     parsed_before_retry = int(failure_mode != "stopped")
     assert provider.ainvoke.await_count == parsed_before_retry
     if parsed_before_retry:
         artifact = task_facade._submission_result_artifact(owner_id=owner, task_id=task,
             job_id=failed.id, job_attempt=failed.attempt)
         answer = task_facade._load_submission_results(artifact)[0].student["stu_ans"][0]
-        assert answer["content"] == "Literal answer, including a mistake."
+        assert answer["content"] == ("\n".join([snippets[0], snippets[2]]) if across_gap else snippets[0])
         assert task_facade._answer_recognition_failures(answer["flag"])
 
     async def restart(acknowledge):
@@ -272,7 +289,7 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
     duplicate = await restart(True)
     assert duplicate.status_code == (422 if from_retry else 409)
     assert "stale_revision" in duplicate.body.decode()
-    assert provider.ainvoke_vision.await_count == 2
+    assert provider.ainvoke_vision.await_count == initial_reads
 
     if edited_after_restart:
         question = assignment_repository.list_questions(task, teacher_id=owner)[0]
@@ -290,11 +307,15 @@ async def test_failed_only_keeps_successful_pages_but_configuration_restart_rere
     else:
         assert after["status"] == "submissions_ready"
         assert after["submission_source_summary"]["failed"] == 0
-        assert provider.ainvoke_vision.await_count == (3 if from_retry else 4)
+        assert provider.ainvoke_vision.await_count == (initial_reads + 1 if from_retry else 4)
         assert provider.ainvoke.await_count == parsed_before_retry + 1
         assert len(failed_page_images) == 2 and failed_page_images[0] == failed_page_images[1]
         if from_retry:
-            assert provider.ainvoke_vision.await_args_list[2].args[1][0].data == failed_page_images[0]
+            assert provider.ainvoke_vision.await_args_list[initial_reads].args[1][0].data == failed_page_images[0]
+        if across_gap:
+            answer = next(iter(after["student_data"].values()))["stu_ans"][0]
+            assert answer["content"] == "\n".join(snippets)
+            assert not task_facade._answer_recognition_failures(answer["flag"])
     # Restarting never rewrites the old failure or its page evidence.
     if restarted["job_id"] != failed.id:
         original = workflow_repository.get_operation(failed.id, owner_id=owner)

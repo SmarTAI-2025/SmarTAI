@@ -65,12 +65,23 @@ def test_connection_establishment_failure_does_not_claim_possible_paid_submissio
 
 
 @pytest.mark.asyncio
-async def test_ocr_connection_failure_is_retryable_but_response_timeout_is_uncertain():
+@pytest.mark.parametrize(("attempts", "uncertain"), [
+    (("connect", "connect", "connect"), False),
+    (("read", "read", "read"), True),
+    (("read", "connect", "connect"), True),
+])
+async def test_ocr_connection_failure_is_retryable_but_response_timeout_is_uncertain(monkeypatch, attempts, uncertain):
     import httpx
+    from backend.config import settings
     from backend.domain.errors import RecognitionError
+    from backend.tools.structured_llm import _invoke_with_rate_retry
+
+    monkeypatch.setattr(settings, "llm_max_retries", 3)
+    monkeypatch.setattr(_invoke_with_rate_retry.retry, "sleep", AsyncMock())
     provider, engine = llm()
-    for error, uncertain in [(httpx.ConnectError("TLS EOF"), False), (httpx.ReadTimeout("response"), True)]:
-        provider.ainvoke_vision.side_effect = error
-        with pytest.raises(RecognitionError) as caught:
-            await engine.recognize(request())
-        assert caught.value.submission_may_exist is uncertain
+    errors = {"connect": httpx.ConnectError, "read": httpx.ReadTimeout}
+    provider.ainvoke_vision.side_effect = [errors[attempt](attempt) for attempt in attempts]
+    with pytest.raises(RecognitionError) as caught:
+        await engine.recognize(request())
+    assert caught.value.submission_may_exist is uncertain
+    assert provider.ainvoke_vision.await_count == len(attempts)

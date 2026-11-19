@@ -2591,7 +2591,7 @@ async def generate_missing_question_materials(
     ]
     expected_targets = {row["target_id"]: row for row in target_rows}
 
-    def retain_review(item):
+    def retain_review(item, *, findings=(), missing_parts=()):
         if review_feedback is None:
             return
         if isinstance(item, AICompletionCandidateOutput):
@@ -2606,9 +2606,14 @@ async def generate_missing_question_materials(
         if not target or target["target"] != "criterion":
             return
         from backend.services.rubric_review import review_extraction
-        extraction = review_extraction(proposal,
-            {**problems_data[target["q_id"]], "q_id": target["q_id"]})
+        problem = {**problems_data[target["q_id"]], "q_id": target["q_id"]}
+        extraction = review_extraction(proposal, problem, generated=not problem.get("criterion")
+                                       and not is_programming_question_type(problem.get("type")))
         if extraction:
+            if findings:
+                extraction["findings"] = findings
+            if missing_parts:
+                extraction["missing_parts"] = missing_parts
             review_feedback[target["target_id"]] = extraction
 
     def source_bound_candidate(raw):
@@ -2658,7 +2663,10 @@ async def generate_missing_question_materials(
         if isinstance(definition, dict):
             from backend.services.rubric_drafts import _point_budget, source_bound_definition
             row = {**problems_data[target["q_id"]], "q_id": target["q_id"]}
-            bound = source_bound_definition(definition, row, check_labels=item["target_id"] in part_targets)
+            bound = source_bound_definition(
+                definition, row, check_labels=item["target_id"] in part_targets,
+                normalize_generated_points=target["target"] == "criterion" and not is_programming_question_type(row.get("type")),
+            )
             rubric = bound.get("part_rubric")
             if (is_programming_question_type(row.get("type")) and not (row.get("criterion") or "").strip()
                     and isinstance(rubric, dict) and isinstance(rubric.get("parts"), list)):
@@ -2877,7 +2885,8 @@ async def generate_missing_question_materials(
                         candidate = AICompletionCandidateOutput.model_validate({**bound, "rubric_definition": None})
                     validate_targets(AICompletionOutput(candidates=[candidate]))
                 except ValueError as exc:
-                    retain_review(bound if isinstance(bound, dict) else item)
+                    retain_review(bound if isinstance(bound, dict) else item,
+                                  missing_parts=getattr(exc, "review_missing_parts", ()))
                     if repair_feedback is not None and isinstance(item, dict):
                         key = item.get("target_id")
                         if isinstance(key, str) and key in expected_targets:
@@ -2944,28 +2953,32 @@ async def generate_missing_question_materials(
         reference = next((s.text_value for s in parsed.candidates
                           if s.q_id == candidate.q_id and s.target == "reference_answer"),
                          original.get("reference_answer") or "")
+        material = {**original, "q_id": candidate.q_id}
+        if reference:
+            material["reference_answer"] = reference
+
+        def bind_proof_rubric(rules):
+            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": rules})
+            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
+                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks],
+                verified_policy_checks=current.semantic_policy_checks)
+            return proposal, rendered, draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
+
         try:
             verified = await prepare_proof_steps(provider, original["stem"], current.plan.part_rubric,
-                                                reference_answer=reference, language=generation_language or "zh")
+                                                reference_answer=reference, language=generation_language or "zh",
+                                                validate_refinement=bind_proof_rubric)
         except ProofRubricUnverified as exc:
             if not allow_partial:
                 raise
             parsed.candidates.remove(candidate)
-            retain_review(candidate)
+            retain_review(candidate, findings=exc.findings)
             if repair_feedback is not None:
                 repair_feedback[candidate.target_id] = str(exc)
             continue
         if verified is not None:
-            # Audit preserves the original steps. Rebind only to include a
-            # reference returned in this response before sealing the draft.
-            proposal = candidate.rubric_definition.model_copy(update={"part_rubric": verified})
-            material = {**original, "q_id": candidate.q_id}
-            if reference:
-                material["reference_answer"] = reference
-            rendered, draft = generated_rubric(material, proposal, language=generation_language or "zh",
-                verified_policy_ids=[check["policy_id"] for check in current.semantic_policy_checks],
-                verified_policy_checks=current.semantic_policy_checks)
-            draft = draft.model_copy(update={"semantic_policy_checks": current.semantic_policy_checks})
+            # Rebind the accepted steps with any reference returned in this response.
+            proposal, rendered, draft = bind_proof_rubric(verified)
             candidate.text_value = rendered
             candidate.rubric_definition = proposal
             candidate.rubric_draft = draft.model_dump(mode="json")

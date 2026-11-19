@@ -2,6 +2,7 @@ import type { PreparationIssue, ProblemInfo, StudentAnswerInfo, StudentSubmissio
 import { confidenceValue, confidenceNeedsAttention } from "./confidencePolicy";
 import { formatSubmissionFlag, genericAnswerReviewLabel, hasQuestionType, incompleteSubmissionLabel, isUnclearAnswerFlag, questionIssueCodeLabel, unclearAnswerLabel } from "./reviewLabels";
 import { isProgrammingProblem } from "./questionPreparation";
+import { rubricReviewDetail } from "./rubricReviewText";
 
 export type ReviewAttention = "none" | "advisory" | "blocking";
 export function questionConfidence(issue: PreparationIssue, problem?: ProblemInfo): number | null {
@@ -53,7 +54,7 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
     && !["failed_pages", "unprocessed_pages", "missing_targets"].some(key => coverage?.[key]?.length));
 }
 
-export function recognitionIssueLabel(issue: PreparationIssue, locale: string): string | null {
+export function recognitionIssueLabel(issue: PreparationIssue, locale: string, view: "overview" | "detail" = "overview"): string | null {
   if (issue.details?.reason === "required_programming_tests_missing") return locale === "zh-CN"
     ? "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。"
     : "The rubric awards test points, but the test cases are missing. Retry or complete them before grading.";
@@ -66,11 +67,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
     return locale === "zh-CN" ? `其他解法${amounts ? `设为${amounts}，` : "的得分上限偏低，"}未找到对应的教师限制，请确认。`
       : `Alternative methods ${amounts || "have a reduced score cap"}; no corresponding teacher restriction was found. Please review.`;
   }
-  const invalidFields = (issue.details?.rubric_review_draft as { invalid_fields?: string[] } | undefined)?.invalid_fields
-    ?? issue.details?.invalid_fields;
-  if (Array.isArray(invalidFields) && invalidFields.some(path => typeof path === "string" && /\.alternative(?:\.|$)/.test(path))) return locale === "zh-CN"
-    ? "评分标准缺少其他正确解法的扣分规则，请补齐。"
-    : "The rubric lacks deduction rules for alternative correct methods. Complete them.";
+  if (issue.field === "rubric" && (issue.details?.rubric_review_draft || issue.details?.invalid_fields
+    || issue.details?.reason === "invalid_structured_rubric")) return view === "detail"
+    ? rubricReviewDetail(issue, locale) : locale === "zh-CN" ? "评分标准待补全。" : "Complete the rubric.";
   if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
     ? "请选择题型。" : "Select the question type.";
   if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
@@ -78,14 +77,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string): 
   if (issue.code === "source_conflict" && issue.details?.reason === "test_case_output_conflict") return locale === "zh-CN"
     ? "测试用例中，同一输入对应了不同预期输出，请核对。"
     : "Test cases have different expected outputs for the same input. Please review.";
-  if (issue.details?.rubric_review_draft) return locale === "zh-CN"
-    ? "已保留已识别评分项，请核对分值和适用条件后保存。"
-    : "Extracted scoring details are saved. Review the points and conditions, then save your corrections.";
   if (issue.details?.reason === "programming_test_award_unset") return locale === "zh-CN"
     ? "请在评分标准中保存测试配分。填 0 表示测试不单独计分。"
     : "Save the test points in the rubric. Enter 0 for no separate test award.";
-  if (issue.details?.reason === "invalid_structured_rubric") return locale === "zh-CN"
-    ? "请对照教师原文补全评分标准。" : "Complete the scoring rules using the original teacher rubric.";
   if (issue.details?.review_display_reason === "missing_answer") return locale === "zh-CN"
     ? "缺少标答（可选），可按需补充。" : "The reference answer is optional; add one if helpful.";
   if (issue.details?.review_display_reason === "missing_tests") return locale === "zh-CN"
@@ -244,7 +238,7 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
         ? issue.details.message : undefined;
       return {
         label: typeof rubricMessage === "string" && rubricMessage.trim()
-          ? rubricMessage : recognitionIssueLabel(issue, locale) ?? fallbackLabel(issue.code),
+          ? rubricMessage : recognitionIssueLabel(issue, locale, view) ?? fallbackLabel(issue.code),
         severity: issue.severity === "blocking" ? "blocking" as const : "advisory" as const,
       };
     });

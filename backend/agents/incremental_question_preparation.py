@@ -44,7 +44,7 @@ from backend.services.question_structure import annotate_major_question_structur
 from backend.services.teacher_score_constraints import explicit_teacher_scores, normalize_question_number
 from backend.skills.question_score import resolve_question_score_policy
 from backend.tools.problem_dedup import dedupe_extracted_problems
-from backend.tools.structured_llm import llm_attempt_budget, structured_llm_call
+from backend.tools.structured_llm import StructuredOutputInvalidError, llm_attempt_budget, structured_llm_call
 from backend.services.question_preparation_diagnostics import normalize_formula_issue, preparation_review, bounded_preparation_review
 
 
@@ -1158,10 +1158,17 @@ class IncrementalQuestionPreparation:
                 feedback = self.repair_feedback.setdefault(key, {})
                 with llm_attempt_budget():
                     for _ in range(3):
-                        candidates = await generate_missing_question_materials(data, pending, 6, self.provider,
-                            reporter=self.reporter, manage_progress_lifecycle=False, generation_language=self.language,
-                            allow_partial=True, repair_feedback=feedback, review_feedback=review_feedback,
-                            follow_through_strictness=self.policy.follow_through_strictness)
+                        try:
+                            candidates = await generate_missing_question_materials(data, pending, 6, self.provider,
+                                reporter=self.reporter, manage_progress_lifecycle=False, generation_language=self.language,
+                                allow_partial=True, repair_feedback=feedback, review_feedback=review_feedback,
+                                follow_through_strictness=self.policy.follow_through_strictness)
+                        except StructuredOutputInvalidError as exc:
+                            if provider_submission_is_uncertain(exc):
+                                raise
+                            for target in pending:
+                                feedback.setdefault(target["target_id"], "Return a valid response for this target.")
+                            continue
                         for candidate in candidates:
                             target = next((target for target in pending if target["target_id"] == candidate.target_id), None)
                             if target is None:
@@ -1349,16 +1356,14 @@ class IncrementalQuestionPreparation:
                 await asyncio.gather(*pending)
             if self.operation.checkpoint_data.get("incremental_inflight_units"):
                 raise RuntimeError("provider_submit_uncertain")
-            # A bounded, known failure of supplementary programming materials
-            # goes to the same review state as manual handoff. Do not turn a
-            # test/code warning into a task-wide error, or hide source, rubric,
-            # transport and uncertain-submission failures behind this rule.
+            # Exhausted per-question material candidates go to the existing
+            # review gate with successful siblings and usable partial content.
+            # Source and unknown-submission failures keep their retry path.
             for key, failure in self.failures.items():
                 unfinished = (getattr(failure, "details", None) or {}).get("unfinished_targets")
                 if not (key.startswith("generation:") and isinstance(failure, ValidationError)
                         and failure.code == "provider_response_invalid" and unfinished
-                        and not failure.details.get("required_tests_missing")
-                        and set(unfinished) <= {"solution_code", "test_cases"}):
+                        and not failure.details.get("required_tests_missing")):
                     raise failure
             await self.reporter.set_stage_progress("detecting_conflicts", total_steps=8, completed_steps=6)
             self.latest = self.project()

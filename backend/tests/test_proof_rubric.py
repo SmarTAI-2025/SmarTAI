@@ -31,6 +31,24 @@ def rubric():
                     alternative=dict(deduct_per_error=1.5))]))
 
 
+def bundled_rubric():
+    rules = rubric()
+    part = rules.parts[0]
+    bundled = part.steps[1].model_copy(update={"total_pts": 5,
+        "criterion": "Prove the square equals 1 and prove the element is not the identity."})
+    return rules.model_copy(update={"parts": (part.model_copy(update={
+        "steps": (part.steps[0], bundled, part.steps[3])}),)})
+
+
+def split_reply(points=(3, 2), *, target="square"):
+    goals = ["Use the group relation to prove the square equals 1.",
+             "Show that an element outside the rotation subgroup is not the identity."]
+    return json.dumps({"splits": [{"part_id": "p1", "step_id": target, "steps": [
+        {"id": key, "criterion": goal, "total_pts": score}
+        for key, goal, score in zip(("square", "nonidentity"), goals, points)
+    ]}]})
+
+
 def audit(verdict="consistent", reason="Concrete proof obligations, no duplicate awards.", part_id="p1", *, bundled_steps=()):
     return json.dumps({"parts": [dict(part_id=part_id, verdict=verdict, reason=reason, bundled_steps=list(bundled_steps))]})
 
@@ -183,21 +201,100 @@ async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
 
 
 @pytest.mark.asyncio
-async def test_reported_bundle_cannot_be_accepted_by_an_overall_consistent_verdict():
+@pytest.mark.parametrize("verdict", ["consistent", "inconsistent"])
+async def test_complete_bundle_is_split_and_reaudited_while_real_defects_block(verdict):
     feedback = {}
     issue = "square: computing the square and proving nonidentity are independently earnable goals"
+    if verdict == "inconsistent":
+        issue = "The square step assumes commutativity, which the question does not provide."
+    rules = bundled_rubric()
+    responses = [initial(rules), audit(verdict=verdict, reason=issue, bundled_steps=["square"])]
+    provider = Provider(responses + ([split_reply(), audit()] if verdict == "consistent" else []))
+    review = {}
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    if verdict == "consistent":
+        criterion = next(c for c in candidates if c.target == "criterion")
+        frozen = RubricDraft.model_validate(criterion.rubric_draft).plan.part_rubric
+        steps = frozen.parts[0].steps
+        assert [(step.id, step.total_pts) for step in steps] == [
+            ("normal", 3), ("square", 3), ("nonidentity", 2), ("generate", 2)]
+        assert frozen.parts[0].alternative == rules.parts[0].alternative
+        assert not frozen.low_confidence
+        recheck = json.loads(provider.calls[3][-1].content)
+        assert recheck["source"]["original_bundled_steps"][0]["replacement_ids"] == ["square", "nonidentity"]
+        partial = "The group relation gives (sr^k)^2 = r^{-k}r^k = 1."
+        decision = dict(part_id="p1", target_quote="part:p1", student_quote="student:1", method="reference",
+                        relevance="partial", progress="The student proved the square equals 1.",
+                        inferences=[dict(evidence="student:1", reasoning=step.criterion,
+                                         result="written" if step.id == "square" else "gap",
+                                         step_ids=[step.id]) for step in steps])
+        assessment = ProofPartAssessment.model_validate(dict(comment="Partial credit", part_decisions=[decision])).assessment()
+        assert settle_parts(frozen, assessment.part_decisions, partial, STEM)[0] == 3
+        assert not feedback and not review
+    else:
+        assert [c.target for c in candidates] == ["reference_answer"]
+        assert issue in feedback["q1:criterion"]
+        assert review["q1:criterion"]["findings"] == [{"part": None, "reason": issue}]
+    assert len(provider.calls) == (4 if verdict == "consistent" else 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first", ["wrong_budget", "wrong_step", "semantic_rejection"])
+async def test_retry_repairs_only_the_replacement(first):
+    rules = bundled_rubric()
+    rejected = {
+        "wrong_budget": [split_reply((3, 3))],
+        "wrong_step": [split_reply(target="generate")],
+        "semantic_rejection": [split_reply(), audit("inconsistent", "The revision assumes nonidentity without proof.")],
+    }[first]
+    provider = Provider([audit(bundled_steps=["square"]), *rejected, split_reply(), audit()])
+    result = await proof.prepare_proof_steps(provider, STEM, rules, language="zh")
+    assert [s.total_pts for s in result.parts[0].steps] == [3, 3, 2, 2]
+    request = json.loads(provider.calls[1 + len(rejected)][-1].content)
+    assert request["validation_feedback"]
+    assert [target["step_id"] for target in request["targets"]] == ["square"]
+    assert len(provider.calls) == 3 + len(rejected)
+
+
+@pytest.mark.asyncio
+async def test_exhausted_optional_split_keeps_the_original_without_a_review_flag():
+    provider = Provider([initial(bundled_rubric()), audit(bundled_steps=["square"]),
+                         split_reply(), audit("uncertain"), split_reply((4, 4))])
+    feedback, review = {}, {}
+    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    candidate = next(item for item in candidates if item.target == "criterion")
+    frozen = RubricDraft.model_validate(candidate.rubric_draft).plan.part_rubric
+    assert [step.total_pts for step in frozen.parts[0].steps] == [3, 5, 2]
+    assert not frozen.low_confidence and not feedback and not review
+    assert len(provider.calls) == 5
+
+
+@pytest.mark.asyncio
+async def test_single_provider_attempt_still_allows_the_refinement_to_be_reaudited(monkeypatch):
+    from backend.tools.structured_llm import settings
+    monkeypatch.setattr(settings, "llm_max_retries", 1)
+    provider = Provider([audit(bundled_steps=["square"]), split_reply(), audit()])
+    result = await proof.prepare_proof_steps(provider, STEM, bundled_rubric(), language="zh")
+    assert len(provider.calls) == 3
+    assert [step.id for step in result.parts[0].steps] == ["normal", "square", "nonidentity", "generate"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scores,possible", [
+    ([5, .5, .5, .5, .5, 1, 1, 1], False),
+    ([2, 1, 1, 1, 1, 1, 1, 2], True),
+])
+async def test_split_only_when_granularity_permits_it(scores, possible):
     rules = rubric()
     part = rules.parts[0]
-    bundled = part.steps[1].model_copy(update={"total_pts": 5,
-        "criterion": "Prove the square equals 1 and prove the element is not the identity."})
-    rules = rules.model_copy(update={"parts": (part.model_copy(update={
-        "steps": (part.steps[0], bundled, part.steps[3])}),)})
-    provider = Provider([initial(rules), audit(reason=issue, bundled_steps=["square"])])
-    candidates = await generate(provider, allow_partial=True, repair_feedback=feedback)
-    assert [c.target for c in candidates] == ["reference_answer"]
-    assert issue in feedback["q1:criterion"]
-    assert "without changing the part budget" in feedback["q1:criterion"]
-    assert len(provider.calls) == 2
+    steps = tuple(part.steps[0].model_copy(update={
+        "id": "square" if i == 0 else f"s{i}", "criterion": f"Achievement {i}", "total_pts": score,
+    }) for i, score in enumerate(scores))
+    rules = rules.model_copy(update={"parts": (part.model_copy(update={"steps": steps}),)})
+    provider = Provider([audit(bundled_steps=["square"]), *([split_reply((1, 1)), audit()] if possible else [])])
+    result = await proof.prepare_proof_steps(provider, STEM, rules, language="zh")
+    assert len(provider.calls) == (3 if possible else 1)
+    assert len(result.parts[0].steps) == (9 if possible else 8)
 
 
 @pytest.mark.asyncio

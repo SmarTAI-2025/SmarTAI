@@ -30,6 +30,10 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
     async def complete(data, targets, *args, **kwargs):
         number = data["q1"]["number"]
         calls.append((number, [target["target"] for target in targets]))
+        if not retrying and number == "1.8" and [target["target"] for target in targets] == ["criterion"]:
+            # A provider protocol error still uses the explicit retry view.
+            # Exhausted but usable per-field drafts enter question review directly.
+            raise ValidationError("The provider returned an invalid response envelope.", code="provider_response_invalid")
         return [generated(t["target"], "Valid saved material.") for t in targets
                 if retrying or number != "1.8" or t["target"] != "criterion"]
 

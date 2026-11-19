@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from backend.agents import incremental_question_preparation as inc
-from backend.domain.errors import ValidationError
 from backend.services.question_structure import summarize_rubric_points
 from backend.services.rubric_drafts import RubricDefinition, generated_rubric
 from backend.skills import math_grading
@@ -95,19 +94,18 @@ async def test_retry_uses_measured_defect_then_persists_only_corrected_criterion
 
 
 @pytest.mark.asyncio
-async def test_manual_retry_starts_with_last_subpart_diagnostic(monkeypatch):
-    from backend.services import task_facade
-    from backend.db import workflow_repository
-
+async def test_exhausted_retry_preserves_the_precise_missing_subpart_for_review(monkeypatch):
     owner, _, op, pipeline = await setup(monkeypatch)
     p = problem()
     monkeypatch.setattr(inc, "_extract_problems_call", AsyncMock(return_value={"q1": p}))
     invalid = reply([item(i, 2) for i in range(1, 5)])
     pipeline.provider = Provider([invalid] * 3)
-    with pytest.raises(ValidationError):
-        await pipeline.run()
+    await pipeline.run()
     saved, rows = persisted(owner, op)
     assert rows["q1"]["criterion"] == ""
     reasons, = saved.checkpoint["material_repair_feedback"].values()
     assert "Missing subparts: (5)" in reasons["q1:criterion"]
+    blocking = next(issue for issue in rows["q1"]["preparation_issues"] if issue["field"] == "rubric")
+    assert blocking["severity"] == "blocking"
+    assert blocking["details"]["rubric_review_draft"]["missing_parts"] == ["(5)"]
     assert len(pipeline.provider.calls) == 3

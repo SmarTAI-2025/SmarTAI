@@ -55,7 +55,7 @@ vi.mock("@/i18n/I18nProvider", () => ({
 }));
 
 describe("ProblemRecognitionProgressPage generation failure", () => {
-  it("shows all saved stems and the exact missing rubric rule before manual review", () => {
+  it("shows all saved stems and the shared incomplete rubric label before manual review", () => {
     failureCode = "provider_response_invalid";
     generationProgress = {
       preparation_counts: { questions: 3, stems: 3, reference_answers: 2, rubrics: 1 },
@@ -74,7 +74,7 @@ describe("ProblemRecognitionProgressPage generation failure", () => {
     expect(screen.getByText("需要处理 2 题")).toBeVisible();
     expect(screen.getByText(/已保存 3 个题干、2 份标答、1 份评分标准/)).toBeVisible();
     expect(screen.getByText("第 1.8 题")).toBeVisible();
-    expect(screen.getByText(/评分标准缺少其他正确解法的扣分规则/)).toBeVisible();
+    expect(screen.getByText(/评分标准待补全。/)).toBeVisible();
     expect(screen.queryByText(/建议复核：/)).not.toBeInTheDocument();
     expect(screen.queryByText("未找齐指定题目")).toBeNull();
   });

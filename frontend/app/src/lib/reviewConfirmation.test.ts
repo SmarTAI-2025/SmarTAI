@@ -60,8 +60,10 @@ describe("review hard failures", () => {
     const row = question({ preparation_issues: [conflict] });
     expect(questionReviewNextBlocked(row)).toBe(true);
     expect(questionReviewNotes(row, locale, code => code)).toContainEqual({ severity: "blocking",
-      label: locale === "zh-CN" ? "已保留已识别评分项，请核对分值和适用条件后保存。"
-        : "Extracted scoring details are saved. Review the points and conditions, then save your corrections." });
+      label: locale === "zh-CN" ? "评分标准待补全。" : "Complete the rubric." });
+    expect(questionReviewNotes(row, locale, code => code, { view: "detail" })).toContainEqual({ severity: "blocking",
+      label: locale === "zh-CN" ? "评分标准未通过校验，请核对下方草稿。"
+        : "The rubric could not be validated. Review the draft below." });
     expect(questionReviewNextBlocked({ ...row, preparation_issues: [{ ...conflict, status: "resolved" }] })).toBe(false);
   });
   it.each(["zh-CN", "en-US"])("lists invalid identity fields individually and omits valid fields (%s)", locale => {

@@ -169,11 +169,12 @@ async def test_postgres_incremental_question_results_survive_independent_work(pg
     from backend.tests import test_incremental_question_preparation as cases
     if case == "28_questions":
         await cases.test_real_worker_roundtrip_multiple_snapshot_sizes(monkeypatch, 28)
+    elif case == "fields":
+        await cases.test_failed_field_keeps_valid_answer_and_retries_only_rubric(monkeypatch, malformed_reply=False)
     else:
         run = {
             "pause": cases.test_one_chunk_is_durable_while_another_waits_and_manual_never_calls_model,
             "failure": cases.test_one_chunk_failure_does_not_cancel_other_questions,
-            "fields": cases.test_failed_field_keeps_valid_answer_and_retries_only_rubric,
         }[case]
         await run(monkeypatch)
 

@@ -7,7 +7,7 @@ still uses the final question identity. Teacher text remains the source of truth
 from __future__ import annotations
 
 import re
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from collections.abc import Mapping
 from typing import Literal
 
@@ -121,7 +121,97 @@ def _complete_step_budget(part):
     ]}
 
 
-def source_bound_definition(definition, source, *, check_labels=True, singleton_id="p1"):
+def _proportional_points(weights, total):
+    cent = Decimal("0.01")
+    if total != total.quantize(cent) or total < len(weights) * cent:
+        return None
+    weight_sum = sum(weights)
+    exact = [weight * total / weight_sum for weight in weights]
+    rounded = [amount.quantize(cent, rounding=ROUND_HALF_UP) for amount in exact]
+    cents_left = int((total - sum(rounded)) / cent)
+    if cents_left:
+        direction = 1 if cents_left > 0 else -1
+        order = sorted(range(len(weights)), key=lambda i: (rounded[i] - exact[i]) * direction)
+        eligible = [i for i in order if rounded[i] + direction * cent > 0]
+        if len(eligible) < abs(cents_left):
+            return None
+        for i in eligible[:abs(cents_left)]:
+            rounded[i] += direction * cent
+    return rounded if all(value > 0 for value in rounded) else None
+
+
+def _normalize_generated_points(proposal, source):
+    """Use the known question budget and preserve all explicitly fixed allocations."""
+    from backend.services.part_rubric import canonical_label, has_explicit_scoring_policy, parallel_part_budgets
+
+    total = _point_budget(source.get("max_score"))
+    parts = proposal["parts"]
+    structure = source.get("question_structure") or {}
+    subparts = structure.get("subparts") or []
+    if (not total or not parts or not all(isinstance(part, dict) and
+            (part.get("label") is None or isinstance(part["label"], str)) for part in parts)
+            or _point_budget(proposal.get("total_pts")) is None
+            or (source.get("criterion") and source.get("criterion_source") != "ai")
+            or source.get("rubric_draft")
+            or has_explicit_scoring_policy(structure.get("shared_stem") or source.get("stem") or "", total)):
+        return proposal
+    labels = [canonical_label(part.get("label"), source.get("number")) for part in parts]
+    source_parts = {canonical_label(part["label"]): part for part in subparts}
+    if len(labels) != len(set(labels)) or set(labels) != (source_parts.keys() if subparts else {""}):
+        return proposal
+    fixed = {canonical_label(label): _point_budget(points) for label, points in (
+        source.get("teacher_subpart_points") or parallel_part_budgets(source)).items()}
+    if not set(fixed) <= set(labels) or any(value is None for value in fixed.values()):
+        return proposal
+    stated = [_point_budget(part.get("total_pts")) for part in parts]
+    if any(amount is None for amount in stated):
+        return proposal
+    flexible = [label for label in labels if label not in fixed]
+    remaining = total - sum(fixed.values())
+    weights = [amount for label, amount in zip(labels, stated) if label in flexible]
+    if weights:
+        apportioned = weights if remaining == sum(weights) and all(w == w.quantize(Decimal("0.01")) for w in weights) else _proportional_points(weights, remaining)
+        if apportioned is None:
+            return proposal
+        fixed.update(zip(flexible, apportioned))
+    if sum(fixed.values()) != total:
+        return proposal
+
+    normalized = []
+    for part, label, previous in zip(parts, labels, stated):
+        budget = fixed[label]
+        steps = part.get("steps")
+        source_stem = source_parts.get(label, {}).get("stem") or ""
+        if not isinstance(steps, list) or not steps:
+            if budget != previous:
+                return proposal  # Deduction rules use absolute caps.
+            normalized.append(part)
+            continue
+        scores = [_point_budget(step.get("total_pts")) if isinstance(step, dict) else None for step in steps]
+        if any(value is None for value in scores):
+            return proposal
+        if sum(scores) == budget and all(s == s.quantize(Decimal("0.01")) for s in scores):
+            normalized.append({**part, "total_pts": float(budget)})
+            continue
+        if (part.get("deductions") or has_explicit_scoring_policy(source_stem, budget)
+                or any(step.get("source_quote") or (isinstance(step.get("criterion"), str)
+                       and has_explicit_scoring_policy(step["criterion"], score))
+                       for step, score in zip(steps, scores))):
+            return proposal
+        adjusted = _proportional_points(scores, budget)
+        if adjusted is None:
+            return proposal
+        updated_steps = []
+        for step, amount in zip(steps, adjusted):
+            # A generated rate binds against the adjusted budget. Keep explicit
+            # absolute follow-through awards and let schema checks enforce them.
+            updated_steps.append({**step, "total_pts": float(amount)})
+        normalized.append({**part, "total_pts": float(budget), "steps": updated_steps})
+    return {**proposal, "total_pts": float(total), "parts": normalized}
+
+
+def source_bound_definition(definition, source, *, check_labels=True, singleton_id="p1",
+                            normalize_generated_points=False):
     """Decode an untrusted proposal using the destination question at either input entry."""
     from backend.tools.structured_llm import StructuredOutputInvalidError
     from backend.services.part_rubric import ordinary_criterion, question_floor_amounts
@@ -196,6 +286,7 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
                            + f". Return each known part once. Budgets must total {source.get('max_score', 10)}.")
                 error = StructuredOutputInvalidError("Missing required rubric parts.")
                 error.repair_context = message
+                error.review_missing_parts = missing
                 raise error
         if isinstance(proposal.get("parts"), list):
             parts = []
@@ -216,6 +307,8 @@ def source_bound_definition(definition, source, *, check_labels=True, singleton_
                         proposal["teacher_gaps"] = list(dict.fromkeys((*previous, *gaps)))
                 parts.append(_complete_step_budget(part))
             proposal["parts"] = parts
+            if normalize_generated_points:
+                proposal = _normalize_generated_points(proposal, source)
         # The envelope is identity checked separately. Question text, display
         # number and ID come from storage and cannot be changed by a model.
         return {**definition, "part_rubric": {

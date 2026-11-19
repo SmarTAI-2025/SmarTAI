@@ -92,6 +92,22 @@ def test_step_difference_uses_own_part_budget_not_whole_question():
     assert [step.total_pts for step in rules.parts[0].steps] == [2, 1, 2]
 
 
+def test_weight_repair_uses_fixed_part_totals_and_never_rewrites_teacher_steps():
+    row, raw = multipart()
+    row["teacher_subpart_points"] = {"(a)": 5, "(b)": 3}
+    first = raw["part_rubric"]["parts"][0]
+    first["steps"][1]["total_pts"] = 0.7
+    before = deepcopy(raw)
+    bound = source_bound_definition(raw, row, normalize_generated_points=True)
+    first_repaired, second = RubricDefinition.model_validate(bound).part_rubric.parts
+    assert [first_repaired.total_pts, second.total_pts] == [5, 3]
+    assert [s.total_pts for s in first_repaired.steps] == [2.13, 0.74, 2.13]
+    assert raw == before
+    locked = source_bound_definition(raw, {**row, "criterion": "Part (a) steps are worth 2, 1 and 2 points."},
+                                    normalize_generated_points=True)
+    assert locked["part_rubric"]["parts"] == before["part_rubric"]["parts"]
+
+
 def test_missing_multipart_budget_is_not_inferred():
     row, raw = multipart()
     del raw["part_rubric"]["parts"][0]["total_pts"]
@@ -207,6 +223,32 @@ async def test_generation_accepts_missing_budgets_in_one_model_call(allow_partia
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("weights,expected", [
+    ((0.4, 0.3, 3.5, 0.5), [0.43, 0.32, 3.72, 0.53]),
+    ((1, 1, 1), [1.66, 1.67, 1.67]),
+])
+async def test_generated_weighted_totals_are_corrected_before_validation(weights, expected):
+    from decimal import Decimal
+    from backend.agents.ingest_agent import generate_missing_question_materials
+    row, raw = sample()
+    raw["part_rubric"]["parts"][0]["steps"] = [
+        {"id": f"s{i}", "criterion": f"Scored achievement {i}", "total_pts": weight}
+        for i, weight in enumerate(weights)
+    ]
+    provider = Provider([json.dumps({"candidates": [dict(target_id="q1:criterion", rubric_definition=raw)]})])
+    feedback, review = {}, {}
+    candidates = await generate_missing_question_materials({"q1": row},
+        [dict(q_id="q1", target_id="q1:criterion", target="criterion")], 6, provider,
+        allow_partial=True, repair_feedback=feedback, review_feedback=review)
+    assert len(candidates) == len(provider.calls) == 1
+    assert not feedback and not review
+    steps = candidates[0].rubric_draft["plan"]["part_rubric"]["parts"][0]["steps"]
+    assert [step["total_pts"] for step in steps] == expected
+    assert sum(Decimal(str(step["total_pts"])) for step in steps) == 5
+    assert source_bound_definition(raw, row)["part_rubric"]["parts"][0]["steps"][0]["total_pts"] == weights[0]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("missing", ["part", "step", "both"])
 async def test_teacher_rubric_compiler_uses_the_same_completion(missing):
     from backend.services.question_structure import build_major_question_structure
@@ -230,7 +272,6 @@ async def test_teacher_rubric_compiler_uses_the_same_completion(missing):
 @pytest.mark.parametrize("recovers", [True, False])
 async def test_ambiguous_missing_steps_keep_targeted_retries_and_existing_results(monkeypatch, recovers):
     from unittest.mock import AsyncMock
-    from backend.domain.errors import ValidationError
     from backend.tests.test_incremental_question_preparation import inc, persisted, setup
     owner, _, operation, pipeline = await setup(monkeypatch)
     row, raw = sample(10, (4, 2, 4))
@@ -244,11 +285,7 @@ async def test_ambiguous_missing_steps_keep_targeted_retries_and_existing_result
     def reply(value):
         return json.dumps({"candidates": [dict(target_id="q1:criterion", rubric_definition=value)]})
     pipeline.provider = Provider([reply(invalid), reply(raw)] if recovers else [reply(invalid)] * 3)
-    if recovers:
-        await pipeline.run()
-    else:
-        with pytest.raises(ValidationError):
-            await pipeline.run()
+    await pipeline.run()
     assert len(pipeline.provider.calls) == (2 if recovers else 3)
     requests = [json.loads(call[1].content.split("\n", 1)[1]) for call in pipeline.provider.calls]
     assert "total_pts" in requests[1]["validation_feedback"]["q1:criterion"]
@@ -256,3 +293,5 @@ async def test_ambiguous_missing_steps_keep_targeted_retries_and_existing_result
     saved, rows = persisted(owner, operation)
     assert rows["q1"]["reference_answer"] == row["reference_answer"]
     assert saved.checkpoint["preparation_counts"]["rubrics"] == int(recovers)
+    assert any(i["field"] == "rubric" and i["code"] == "generation_failed"
+               for i in rows["q1"]["preparation_issues"]) is not recovers
