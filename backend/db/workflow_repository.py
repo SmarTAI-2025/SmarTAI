@@ -80,6 +80,11 @@ MAX_OPERATION_CLAIM_BATCH = 100
 MAX_LEASE_OWNER_LENGTH = 128
 MAX_LEASE_TOKEN_LENGTH = 64
 
+_OPERATIONS_ALLOWED_DURING_TASK_DELETION = (
+    TASK_DELETE_OPERATION,
+    SOURCE_RESERVATION_CLEANUP_OPERATION,
+)
+
 
 def _validate_json_object(
     value: Any,
@@ -1672,10 +1677,7 @@ def claim_operation(
             )
         )
         assert row is not None
-        if row.operation_type not in {
-            TASK_DELETE_OPERATION,
-            SOURCE_RESERVATION_CLEANUP_OPERATION,
-        }:
+        if row.operation_type not in _OPERATIONS_ALLOWED_DURING_TASK_DELETION:
             session.scalar(
                 select(AssignmentWorkflowRecord)
                 .where(
@@ -1932,6 +1934,18 @@ def list_claimable_operations(
             select(WorkflowOperationRecord)
             .where(
                 WorkflowOperationRecord.operation_type.in_(types),
+                # Filter before the batch limit so a deleted task cannot
+                # crowd out the cleanup that would retire its expired work.
+                or_(
+                    WorkflowOperationRecord.operation_type.in_(
+                        _OPERATIONS_ALLOWED_DURING_TASK_DELETION
+                    ),
+                    select(AssignmentRecord.id).where(
+                        AssignmentRecord.id == WorkflowOperationRecord.assignment_id,
+                        AssignmentRecord.teacher_id == WorkflowOperationRecord.owner_id,
+                        AssignmentRecord.deletion_requested_at.is_(None),
+                    ).exists(),
+                ),
                 or_(WorkflowOperationRecord.operation_type.not_in(WORKLOAD_TYPES),
                     ~owner_running_predicate(WorkflowOperationRecord.owner_id)),
                 WorkflowOperationRecord.status.in_(("pending", "running")),

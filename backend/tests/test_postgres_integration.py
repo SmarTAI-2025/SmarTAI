@@ -91,6 +91,17 @@ def test_postgres_shared_slot_is_claimed_in_queue_order(pg_database, monkeypatch
     ]) == ["server_capacity_full", "running"]
 
 
+@pytest.mark.asyncio
+async def test_postgres_expired_demo_work_does_not_block_last_worker_slot(
+    pg_database, tmp_path, monkeypatch,
+):
+    from backend.tests import test_workflow_worker
+
+    await test_workflow_worker.test_expired_demo_work_does_not_block_last_worker_slot(
+        tmp_path, monkeypatch,
+    )
+
+
 def test_postgres_progress_omits_trace_json_and_preserves_checkpoints(pg_database, monkeypatch):
     from backend.services import grading_runs
     from backend.tests.test_task_grading_retry import Registry
