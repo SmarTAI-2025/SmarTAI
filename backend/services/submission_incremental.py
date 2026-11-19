@@ -196,6 +196,10 @@ _PAGE_GAP_PREFIX = re.compile(
     r"(?:\s*[（(](?:[a-z]|\d+|续[^()（）]*|continued)[）)])*\s*",
     re.IGNORECASE,
 )
+_PAGE_NUMBER_FOOTER = re.compile(
+    r"(?:[-–—][ \t]+([0-9]+)[ \t]+[-–—]|Page[ \t]+([0-9]+)|第[ \t]*([0-9]+)[ \t]*页)",
+    re.IGNORECASE,
+)
 _SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 _EXPONENT = re.compile(rf"[{_SUPERSCRIPT_DIGITS}]+|\^([0-9])(?![0-9])")
 _EXPONENT_DIGITS = str.maketrans(_SUPERSCRIPT_DIGITS, "0123456789")
@@ -281,14 +285,21 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
     pages = sorted(read_pages)
     failed = set(failed_pages)
     aliases = number_aliases or {}
-    text, offsets, ends, previous = [], [], [], None
+    text, offsets, ends, body_ends, previous = [], [], [], [], None
     offset = 0
     for page in pages:
         if previous is not None:
             text.append(" " if page == previous + 1 else "\n")
             offset += 1
         offsets.append(offset)
-        normalized = _page_gap_text(read_pages[page])
+        raw = read_pages[page].rstrip()
+        normalized = _page_gap_text(raw)
+        body, _, last_line = raw.rpartition("\n")
+        footer = _PAGE_NUMBER_FOOTER.fullmatch(last_line.strip())
+        # Keep the original OCR for locating answers. Only an independent
+        # trailing marker with the actual page number can shorten the edge.
+        body_length = len(_page_gap_text(body)) if footer and str(page) in footer.groups() else len(normalized)
+        body_ends.append(offset + body_length)
         text.append(normalized)
         offset += len(normalized)
         ends.append(offset)
@@ -345,7 +356,9 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
                 matching_label = label and unicodedata.normalize("NFKC", label["number"]) in aliases.get(q_id, ())
                 if not prefix or matching_label:
                     edges.setdefault((first, PREVIOUS_PAGE_FAILED), set()).add(q_id)
-            if last + 1 in failed and end == ends[last_index]:
+            body_end = body_ends[last_index]
+            if (last + 1 in failed and max(start, offsets[last_index]) < body_end
+                    and end in (body_end, ends[last_index])):
                 edges.setdefault((last, NEXT_PAGE_FAILED), set()).add(q_id)
 
     # An explicit heading at the very top can identify the first answer

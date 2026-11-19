@@ -134,6 +134,23 @@ def test_empty_successful_page_separates_the_previous_answer_from_a_failure():
                                  [{"q_id": "q1", "content": "Answer"}]) == {}
 
 
+def test_page_gap_excludes_only_a_matching_standalone_page_number_from_the_tail():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    answer = {"q_id": "q1", "content": "The proof begins here."}
+    start = "1. The proof begins here."
+    expected = {"q1": ["recognition_boundary_next_page_failed"]}
+    for footer in ("- 1 -", "— 1 —", "Page 1", "第 1 页"):
+        page = start + "\r\n" + footer + "\r\n"
+        assert page_gap_review_flags({1: page}, [2], {}, [answer]) == expected
+        assert page_gap_review_flags({1: page}, [2], {}, [
+            {**answer, "content": answer["content"] + "\n" + footer},
+        ]) == expected
+        assert page_gap_review_flags({1: footer}, [2], {}, [{**answer, "content": footer}]) == {}
+    for tail in (" - 1 -", "\n1", "\n- 2 -", "\n- 1 - x", "\n- 1 -\nMore work"):
+        assert page_gap_review_flags({1: start + tail}, [2], {}, [answer]) == {}
+
+
 def test_matched_fragments_can_bound_the_same_answer_on_both_sides_of_a_failed_page():
     from backend.services.submission_incremental import page_gap_review_flags
 
