@@ -1203,7 +1203,7 @@ async def review_math_experts(problem, answer, experts, provider, *, language="e
         # pending evidence are intact. Always finish the admitted joint review.
 
     from backend.services.grading_memory import prepared_grading
-    async with prepared_grading(provider):
+    async with prepared_grading(provider, review=True):
         reviewed = await _review_math_experts(problem, answer, experts, provider, language=language,
             grading_setup=grading_setup, plan=plan, traces=traces, assessments=assessments,
             disputed=disputed, other_dispute=other_dispute, relevance_review=relevance_review,
@@ -1387,6 +1387,11 @@ async def _review_math_experts(problem, answer, experts, provider, *, language, 
                 "Identify what the text establishes before comparing the awards. A valid alternative proof "
                 "can meet the same obligation; a missing substantive implication cannot be supplied by you. "
                 "Keep defensible differences in partial credit. Never average or aim for consensus here. "
+                "For each disputed scoring obligation, check every expert's judgment against the same "
+                "student evidence and frozen rule. An explanation supporting one expert alone does not "
+                "resolve a contradictory judgment by another; identify any evidenced error in that "
+                "other judgment and revise its expert_index. Retain both judgments when both remain "
+                "defensible. Rewording feedback alone does not correct a scoring disagreement. "
                 + ("Grouped proof entries contain mathematical_observations, not authoritative verdicts. "
                    "Their old completion and loss tiers are intentionally withheld. Check each claimed gap "
                    "against the whole submitted argument before choosing a frozen tier: carry out any "
