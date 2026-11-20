@@ -1,7 +1,7 @@
-import { questionSaveError } from "@/lib/questionSaveError";
+import { questionSaveError, questionSaveErrorCode } from "@/lib/questionSaveError";
 import { QuestionPreparationModelSelect, isQuestionModelError } from "@/components/tasks/QuestionPreparationModelSelect";
 import { rubricReviewText } from "@/lib/rubricReviewText";
-import { getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
+import { APIError, getAPIErrorCode, getAPIErrorDetail } from "@/api/client";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
@@ -29,6 +29,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 import { toast } from "sonner";
 import { useTask, useUpdateQuestionProvider } from "@/api/hooks/tasks";
 import { useQuestionReview } from "@/hooks/useQuestionReview";
+import { useQuestionStemSaves } from "@/hooks/useQuestionStemSaves";
 import { TaskQueryBar } from "@/components/tasks/AskQueryBar";
 import { useTaskFilterIntent } from "@/hooks/useTaskFilterIntent";
 import { resolvePreparationQuery, selectPreparationQuestions } from "@/lib/taskPreparationFilter";
@@ -46,7 +47,7 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { cn } from "@/lib/cn";
 import { isProgrammingProblem } from "@/lib/questionPreparation";
 import { parseScoreHundredths, summarizeRubricPoints } from "@/lib/rubricPoints";
-import type { ProblemInfo, ProgrammingScoringPolicy, TestCase } from "@/types";
+import type { ProblemInfo, ProgrammingScoringPolicy, QuestionStemSave, TestCase } from "@/types";
 
 type TextFieldKey = "number" | "type" | "stem" | "reference_answer" | "solution_code";
 
@@ -69,6 +70,8 @@ function QuestionPreparationDetailPageForm() {
   const navigate = useNavigate();
   const { locale, t } = useI18n();
   const taskQuery = useTask(taskId);
+  const stemSaves = useQuestionStemSaves(stableTaskId, taskQuery.data?.workflow_revision,
+    taskQuery.data?.status === "problems_ready");
   const updateModel = useUpdateQuestionProvider();
   const [modelFailure, setModelFailure] = useState<unknown>();
   const focusModelAfterClose = useRef(false);
@@ -85,6 +88,7 @@ function QuestionPreparationDetailPageForm() {
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const { updateProblem, latestRevision: latestWorkflowRevisionRef, confirming, confirm, failure, blocked, clearBlocked } = useQuestionReview(stableTaskId, taskQuery.data?.workflow_revision, locale);
+  const savingQuestion = updateProblem.isPending || confirming || updateModel.isPending || stemSaves.busy;
   useEffect(() => {
     if (failure && isQuestionModelError(failure.error)) setModelFailure(failure.error);
   }, [failure]);
@@ -234,6 +238,17 @@ function QuestionPreparationDetailPageForm() {
   }
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
+    const expectedRevision = latestWorkflowRevisionRef.current;
+    if (field === "stem" && problem.stem.trim() && expectedRevision !== undefined) {
+      if ([...dirtyKeys].some(key => key.startsWith(`${problem.q_id}:`) && key !== `${problem.q_id}:stem`)) {
+        throw new APIError(409, "The question has other unsaved edits.", { code: "question_stem_has_other_edits" });
+      }
+      const previousSave = stemSaves.byQuestion.get(problem.q_id);
+      const retryOf = previousSave?.status === "error" && previousSave.stem === value
+        ? previousSave.id : undefined;
+      await stemSaves.submit({ qId: problem.q_id, stem: value, expectedRevision, retryOf });
+      return;
+    }
     const response = await saveProblem({
       taskId: stableTaskId,
       qId: problem.q_id,
@@ -298,7 +313,7 @@ function QuestionPreparationDetailPageForm() {
       </div>
       {taskQuery.data && !readOnly ? <div className="mt-4">
         <QuestionPreparationModelSelect locale={locale} value={taskQuery.data.question_recognition_provider_id}
-          onChange={value => void chooseModel(value)} disabled={updateModel.isPending || updateProblem.isPending || confirming} />
+          onChange={value => void chooseModel(value)} disabled={savingQuestion} />
       </div> : null}
       {modelFailure ? <UnsavedChangesDialog
         title={tx(locale, "请检查题目准备模型", "Check the question preparation model")}
@@ -388,7 +403,9 @@ function QuestionPreparationDetailPageForm() {
                 previous={filtered[index - 1] ?? null}
                 next={filtered[index + 1] ?? null}
                 readOnly={readOnly}
-                saving={updateProblem.isPending || confirming || updateModel.isPending}
+                saving={savingQuestion}
+                stemSave={stemSaves.byQuestion.get(problem.q_id)}
+                submittingStem={stemSaves.submittingQuestion === problem.q_id}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
                 onSaveScoring={saveScoring}
@@ -401,9 +418,9 @@ function QuestionPreparationDetailPageForm() {
 
             <ReviewStageActions
               note={tx(locale, `共 ${problems.length} 道题`, `${problems.length} questions`)}
-              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending || updateModel.isPending} onClick={() => void confirmReview(problems)} />}
+              confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={savingQuestion} onClick={() => void confirmReview(problems)} />}
               back={{ href: overviewHref, label: tx(locale, "返回题目资料总览", "Back to Question Material Overview") }}
-              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: confirming || updateProblem.isPending || updateModel.isPending, onClick: () => {
+              next={{ label: tx(locale, "进入上传作答", "Continue to Upload Submissions"), disabled: savingQuestion, onClick: () => {
                 if (hasDirty) { setShowUnsavedReview(true); return; }
                 const issues = questionReviewBlockers(problems, taskId, locale);
                 if (issues.length) setNextBlockers(issues);
@@ -434,7 +451,7 @@ function QuestionPreparationDetailPageForm() {
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, stemSave, submittingStem, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -442,6 +459,8 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   next: ProblemInfo | null;
   readOnly: boolean;
   saving: boolean;
+  stemSave?: QuestionStemSave;
+  submittingStem: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
   onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, programmingScoring?: ProgrammingScoringPolicy) => Promise<void>;
@@ -480,7 +499,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
           <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={normalizeFilterType(problem.type ?? "")} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         </div>
-        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} stemSave={stemSave} submittingStem={submittingStem} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
           <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
@@ -607,6 +626,12 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
       setInputRulesDraft(originalInputRules);
     }
   }, [editing, editableCriterion, originalScore, originalTestPoints, originalInputRules]);
+  const lastCriterion = useRef(editableCriterion);
+  useEffect(() => {
+    if (lastCriterion.current !== editableCriterion && !localDraft.savedAt
+        && criterionDraft === lastCriterion.current) setCriterionDraft(editableCriterion);
+    lastCriterion.current = editableCriterion;
+  }, [editableCriterion, criterionDraft, localDraft.savedAt]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
 
   async function save() {
@@ -646,7 +671,7 @@ function EditableScoringField({ fieldKey, problem, readOnly, saving, locale, onD
             ? tx(locale, "测试配分和代码配分的合计等于本题满分。", "Test points and code points add up to the question maximum.")
             : tx(locale, "小问仍属于同一道大题；若评分标准写出分项分值，合计必须等于本题满分。", "Subparts remain inside one major question. Explicit rubric points must equal this maximum.")}</p>
         </div>
-        {!readOnly ? <button type="button" aria-label={tx(locale, `修改第 ${problem.number || "—"} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || "—"}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" disabled={saving} aria-label={tx(locale, `修改第 ${problem.number || "—"} 题满分与评分标准`, `Edit score and rubric for question ${problem.number || "—"}`)} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-45">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
@@ -759,7 +784,7 @@ function scoringValidationMessage(summary: NonNullable<ProblemInfo["rubric_point
   return tx(locale, "请检查本题满分与评分标准。", "Check the maximum score and rubric.");
 }
 
-function EditableTextField({ fieldKey, label, value, problem, field, readOnly, saving, locale, compact = false, onDirtyChange, onSave }: {
+function EditableTextField({ fieldKey, label, value, problem, field, readOnly, saving, stemSave, submittingStem, locale, compact = false, onDirtyChange, onSave }: {
   fieldKey: string;
   label: string;
   value: string;
@@ -767,6 +792,8 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   field: TextFieldKey;
   readOnly: boolean;
   saving: boolean;
+  stemSave?: QuestionStemSave;
+  submittingStem?: boolean;
   locale: string;
   compact?: boolean;
   onDirtyChange: (key: string, dirty: boolean) => void;
@@ -782,6 +809,19 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const dirty = editing && draft !== value;
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
+  const updatingStem = submittingStem || stemSave?.status === "pending" || stemSave?.status === "running";
+  const failedStem = stemSave?.status === "error" ? stemSave.stem : undefined;
+  const lastValue = useRef(value);
+  useEffect(() => {
+    if (field === "reference_answer" && value !== lastValue.current && !localDraft.savedAt
+        && draft === lastValue.current) setDraft(value);
+    lastValue.current = value;
+  }, [draft, field, localDraft.savedAt, value]);
+  useEffect(() => {
+    if (!editing || stemSave?.status !== "done" || value !== draft) return;
+    setError(null);
+    setEditing(false);
+  }, [editing, stemSave?.status, value, draft]);
 
   // Adjust a clean type editor before effects compare its new server version.
   // Pending saves and actual local edits/drafts retain their existing protection.
@@ -809,11 +849,22 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     <section className={cn("min-w-0 px-5 py-5 sm:px-6", compact && "px-4 py-4 sm:px-5")}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-sm font-bold text-foreground">{label}</h3>
-        {!readOnly ? <button type="button" aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted">
+        {!readOnly ? <button type="button" disabled={saving} aria-label={`${label} · ${editing ? tx(locale, "取消修改", "Cancel edit") : tx(locale, "修改", "Edit")}`} onClick={() => { if (editing) localDraft.requestLeave(() => { localDraft.discardEdits(); setEditing(false); setError(null); }); else setEditing(true); }} className="inline-flex h-8 items-center gap-1.5 rounded-[6px] border px-2.5 text-xs font-semibold text-foreground hover:bg-muted disabled:opacity-45">
           {editing ? <X aria-hidden="true" className="h-3.5 w-3.5" /> : <Pencil aria-hidden="true" className="h-3.5 w-3.5" />}
           {editing ? tx(locale, "取消", "Cancel") : tx(locale, "修改", "Edit")}
         </button> : null}
       </div>
+      {updatingStem ? <p role="status" className="mt-3 text-sm text-primary">
+        {tx(locale, "正在更新标答和评分标准…", "Updating the reference answer and scoring rubric…")}
+      </p> : null}
+      {failedStem && !updatingStem && !editing && !readOnly ? <div role="alert" className="mt-3 text-sm text-danger">
+        <p>{tx(locale, "这次题目修改已保留。", "Your changes are available to resume.")} {questionSaveErrorCode(stemSave?.error_code, locale)}</p>
+        <button type="button" disabled={saving} className="mt-1 rounded text-primary underline disabled:opacity-45" onClick={() => {
+          setDraft(failedStem);
+          setError(null);
+          setEditing(true);
+        }}>{tx(locale, "继续修改", "Resume editing")}</button>
+      </div> : null}
       {editing ? (
         <div className="mt-3">
           {field === "type" ? <select value={hasQuestionType(draft) ? normalizeFilterType(draft) : ""} onChange={event => setDraft(event.target.value)} aria-label={label} className="h-[50px] w-full rounded-[8px] border bg-background px-4 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15">
@@ -821,7 +872,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
             {QUESTION_TYPES.map(type => <option key={type} value={type}>{questionTypeLabel(type, locale)}</option>)}
           </select> : <textarea value={draft} onChange={(event) => setDraft(event.target.value)} aria-label={label} rows={field === "number" ? 1 : field === "stem" ? 7 : compact ? 6 : 8} className={cn("w-full resize-y rounded-[8px] border bg-background px-4 py-3 text-sm leading-6 text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/15", field === "solution_code" && "font-mono text-xs")} />}
           <div className="mt-3 flex items-center justify-between gap-3">
-            <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error
+            <p className={cn("text-xs", error && !updatingStem ? "text-danger" : "text-muted-foreground")}>{error && !updatingStem
               ? error
               : field === "solution_code"
                 ? tx(locale, "可直接编辑源码；保存后恢复语法高亮。", "Edit the source code directly; syntax highlighting returns after saving.")

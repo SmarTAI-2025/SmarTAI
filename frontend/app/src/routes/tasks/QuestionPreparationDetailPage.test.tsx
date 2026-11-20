@@ -24,6 +24,7 @@ vi.mock("@/api/hooks/experts", () => ({ useStageProviders: () => ({
 
 const testState = vi.hoisted(() => ({ locale: "zh-CN" }));
 const mutateAsync = vi.hoisted(() => vi.fn());
+const submitStem = vi.hoisted(() => vi.fn());
 const changeModel = vi.hoisted(() => vi.fn());
 const taskRefetch = vi.hoisted(() => vi.fn());
 const sourcePreviewApi = vi.hoisted(() => ({
@@ -141,6 +142,10 @@ vi.mock("@/api/hooks/tasks", () => ({
   }),
   useUpdateProblem: () => ({ isPending: false, mutateAsync }),
   useUpdateQuestionProvider: () => ({ isPending: false, mutateAsync: changeModel }),
+}));
+
+vi.mock("@/hooks/useQuestionStemSaves", () => ({
+  useQuestionStemSaves: () => ({ byQuestion: new Map(), busy: false, submit: submitStem }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
@@ -277,6 +282,7 @@ beforeEach(() => {
   taskData.problem_data.Q1.criterion = "Rubric one";
   taskData.problem_data.Q1.preparation_issues = [];
   mutateAsync.mockReset();
+  submitStem.mockReset();
   changeModel.mockReset().mockResolvedValue({ question_recognition_provider_id: "retry-model", workflow_revision: 8 });
   taskData.workflow_revision = 7;
   taskData.status = "problems_ready";
@@ -827,7 +833,7 @@ describe("QuestionPreparationDetailPage navigation", () => {
 });
 
 
-it("formal field save clears only its explicit snapshot; failure preserves the other saved field", async () => {
+it("protects a pending answer edit before submitting the stem and preserves the stem on failure", async () => {
   await clearPageDrafts();
   const user = userEvent.setup();
   mutateAsync.mockResolvedValue({ workflow_revision: 8 });
@@ -844,14 +850,18 @@ it("formal field save clears only its explicit snapshot; failure preserves the o
   await user.click(saveDraft);
   await screen.findByText(/已暂存 ·/);
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope).sort()).toEqual(["question:task-1:Q1:reference_answer", "question:task-1:Q1:stem"]);
-  const firstSave = question.getAllByRole("button", { name: "保存" })[0];
-  await user.click(firstSave);
-  await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]));
+  const [stemSave, answerSave] = question.getAllByRole("button", { name: "保存" });
+  await user.click(stemSave);
+  expect(await question.findByText("请先处理本题其他未保存的修改，再更新题干。")).toBeInTheDocument();
+  expect(submitStem).not.toHaveBeenCalled();
+  await user.click(answerSave);
+  await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]));
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
-  mutateAsync.mockRejectedValueOnce(new Error("QA failed save"));
+  submitStem.mockRejectedValueOnce(new Error("QA failed save"));
   await user.click(question.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(question.getByText(/请稍后重试保存/)).toBeInTheDocument());
-  expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:reference_answer"]);
+  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 8, qId: "Q1", stem: "explicit stem", retryOf: undefined });
+  expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]);
 });
 
 it.each([

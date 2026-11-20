@@ -7,6 +7,7 @@ export const taskKeys = {
   list: () => ["tasks", "list"] as const,
   history: (queryKey: string) => ["tasks", "history", queryKey] as const,
   detail: (taskId: string) => ["tasks", "detail", taskId] as const,
+  stemSaves: (taskId: string) => ["tasks", "stem-saves", taskId] as const,
   state: (taskId: string) => ["tasks", "state", taskId] as const,
   result: (taskId: string) => ["tasks", "result", taskId] as const,
   finalization: (taskId: string) => ["tasks", "finalization", taskId] as const,

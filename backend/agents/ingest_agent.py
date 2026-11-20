@@ -2436,6 +2436,8 @@ async def generate_missing_question_materials(
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
             ),
+            **({"required_programming_test_points": problem["required_programming_test_points"]}
+               if "required_programming_test_points" in problem else {}),
             "existing_solution_code": str(
                 problem.get("solution_code") or ""
             ),
@@ -2581,6 +2583,8 @@ async def generate_missing_question_materials(
             "test pass/fail is not a true/false answer key. A reference may be a Python function "
             "with literal JSON arguments, or a complete Python/C/C++ stdin program. Do not invent "
             "an input adapter for an ambiguous/incomplete teacher reference."
+            " When required_programming_test_points is given, preserve it exactly. A value of zero requires "
+            "only code steps with no test_suite marker; otherwise use that exact point value on the single test_suite step."
         )
     messages = [
         SystemMessage(content=guidance + language_instruction
@@ -2761,14 +2765,18 @@ async def generate_missing_question_materials(
                 error.repair_context = "Return rubric_definition.part_rubric with question total_pts and all required parts, including the singleton part for unnumbered questions."
                 raise error
             if candidate.target_id in part_targets:
-                programming = is_programming_question_type(problems_data[candidate.q_id].get("type"))
+                source = problems_data[candidate.q_id]
+                programming = is_programming_question_type(source.get("type"))
+                required_test_points = source.get("required_programming_test_points")
                 steps = [step for part in candidate.rubric_definition.part_rubric.parts for step in part.steps]
                 suites = [step for step in steps if step.test_suite]
-                if (suites and (not programming or any(part.deductions for part in candidate.rubric_definition.part_rubric.parts))) or (programming and not problems_data[candidate.q_id].get("criterion")
+                if programming and required_test_points is not None:
+                    if [step.total_pts for step in suites] != ([required_test_points] if required_test_points else []):
+                        raise StructuredOutputInvalidError("Keep the selected test points in the revised rubric.")
+                if (suites and (not programming or any(part.deductions for part in candidate.rubric_definition.part_rubric.parts))) or (programming and required_test_points != 0 and not source.get("criterion")
                         and (len(suites) != 1 or len(steps) < 2)):
                     raise StructuredOutputInvalidError("A new programming rubric needs one aggregate test_suite step and separate code criteria; other types cannot use test_suite.")
                 from backend.services.true_false_answers import is_decision_only
-                source = problems_data[candidate.q_id]
                 if (not programming and is_decision_only(source.get("stem") or "", source.get("criterion") or "") and
                         all(len(part.steps) == 1 for part in candidate.rubric_definition.part_rubric.parts)
                         and not candidate.rubric_definition.expected_truth_by_part):
