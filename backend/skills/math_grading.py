@@ -176,11 +176,12 @@ class AddressedPartAssessment(FrozenPartAssessment):
             "maxItems": 100,
             "description": "Original student line numbers, e.g. [1, 3].",
         }
-        for name, field in (
-            ("PartDecision", "student_quote"),
-            ("StepDecision", "evidence"),
-        ):
-            schema["$defs"][name]["properties"][field] = addresses
+        schema["$defs"]["PartDecision"]["properties"]["student_quote"] = addresses
+        step_evidence = schema["$defs"]["StepDecision"]["properties"]["evidence"]
+        schema["$defs"]["StepDecision"]["properties"]["evidence"] = {
+            "anyOf": [addresses, step_evidence],
+            "description": "Use line numbers, or a unique verbatim excerpt to distinguish two steps on one line.",
+        }
         return schema
 
     @model_validator(mode="before")
@@ -1920,8 +1921,8 @@ class MathGradingSkill(GradingSkill):
                            "step_ids": [step.id for step in p.steps],
                            "deduction_rule_ids": [rule.id for rule in p.deductions], "alternative_error_id": "alternative"}
                           for p in plan.part_rubric.parts],
-                "instruction": "For student_quote and each step.evidence return an array of source line numbers, "
-                               "e.g. [1,3] references student:1 and student:3. Use [] for an absent step. Keep any "
+                "instruction": "For student_quote return original line numbers. For step.evidence use line numbers or an exact excerpt, "
+                               "e.g. [1,3] references student:1 and student:3. For two steps on one line quote separate original excerpts. Use [] for an absent step. Keep any "
                                "paraphrase in progress/reason. On the points route put lost credit in "
                                "the corresponding missed step. Charge only explicitly listed deduction rules. For actual "
                                "deductions keep each independent error grounded at its source. For method=alternative, "
@@ -1930,7 +1931,7 @@ class MathGradingSkill(GradingSkill):
             prompt += "\nRepair the rejected decision from the original sources:\n" + _json(recovery)
             result, response = await self._assess(plan,
                 system_prompt=build_system_prompt(
-                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nRepair format: student_quote and step.evidence are arrays of original line numbers.\n" + _json(output_model.model_json_schema()),
+                    PART_SCORING_INSTRUCTION + _part_proof_evidence(problem, plan.part_rubric) + "\nRepair format: student_quote uses line numbers. Step evidence accepts line numbers or a unique verbatim excerpt.\n" + _json(output_model.model_json_schema()),
                     self.language, self.grading_setup),
                 user_prompt=prompt, validator=_assessment_validator(plan,answer,problem),part_output=output_model)
             score,steps=score_assessment(result,plan,answer.content,problem_text=problem.stem)
