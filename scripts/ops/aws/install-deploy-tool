@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+
+# Run as root from an administrator-staged copy of the reviewed source.
+[[ "$EUID" == 0 && $# == 1 && "$1" =~ ^[0-9a-f]{64}$ ]] || {
+    echo "Usage (as root): install-deploy-tool <expected installed smartai-deploy SHA-256>" >&2
+    exit 64
+}
+
+source_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+target=/usr/local/sbin/smartai-deploy
+dropin=/etc/systemd/system/smartai.service.d/40-release-runner.conf
+
+exec 9>/run/lock/smartai-deploy.lock
+flock -n 9 || { echo "A deployment is already running" >&2; exit 1; }
+bash -n "$source_dir/smartai-deploy"
+
+if [[ -e "$dropin" ]] && ! cmp -s "$source_dir/40-release-runner.conf" "$dropin"; then
+    echo "A different release-runner drop-in already exists" >&2
+    exit 1
+fi
+if cmp -s "$source_dir/smartai-deploy" "$target" && [[ -f "$dropin" ]]; then
+    "$target" --self-check
+    exit 0
+fi
+
+installed="$(sha256sum "$target")"
+[[ "${installed%% *}" == "$1" ]] || {
+    echo "Installed deploy script changed. Review that version before replacing it." >&2
+    exit 1
+}
+
+backup="$(mktemp -d /var/backups/smartai/deploy-tool.XXXXXX)"
+cp -p -- "$target" "$backup/smartai-deploy"
+echo "Previous deploy tool saved to $backup"
+new_target="$(mktemp "${target}.XXXXXX")"
+new_dropin=""
+dropin_added=0
+
+cleanup() {
+    rm -f -- "$new_target" "$new_dropin"
+    if [[ "$dropin_added" == 1 ]] && ! cmp -s "$source_dir/smartai-deploy" "$target"; then
+        rm -f -- "$dropin"
+        systemctl daemon-reload || true
+    fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+if [[ ! -f "$dropin" ]]; then
+    new_dropin="$(mktemp "${dropin}.XXXXXX")"
+    install -o root -g root -m 0644 "$source_dir/40-release-runner.conf" "$new_dropin"
+    dropin_added=1
+    mv -Tf -- "$new_dropin" "$dropin"
+    systemctl daemon-reload
+fi
+
+install -o root -g root -m 0755 "$source_dir/smartai-deploy" "$new_target"
+"$new_target" --self-check
+# Commit the installed tooling only after its read-only check succeeds.
+mv -Tf -- "$new_target" "$target"
+echo "Paired deployment installed. Application services were not restarted."

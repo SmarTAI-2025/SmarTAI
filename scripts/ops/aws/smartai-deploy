@@ -1,0 +1,767 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 027
+
+BASE="/opt/smartai"
+RELEASES="$BASE/releases"
+VENVS="$BASE/venvs"
+CURRENT="$BASE/current"
+
+ENV_FILE="/etc/smartai/smartai.env"
+CONDA="/opt/miniforge3/bin/conda"
+BACKUPS="/var/backups/smartai"
+SERVICE="smartai"
+ADMIN_SERVICE="smartai-admin"
+ADMIN_ENV_FILE="/etc/smartai/admin.env"
+NODE_BIN="/opt/node-v22.16.0/bin"
+
+REPO="SmarTAI-2025/SmarTAI"
+REPO_URL="https://github.com/${REPO}.git"
+TARBALL_BASE="https://codeload.github.com/${REPO}/tar.gz"
+
+LOCK_FILE="/run/lock/smartai-deploy.lock"
+RUNNER_ENV=".runner.env"
+
+KEEP_RELEASES=3
+KEEP_BACKUPS=5
+
+
+log() {
+    local message="$*"
+    printf '[%s] %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$message"
+    logger -t smartai-deploy -- "$message" 2>/dev/null || true
+}
+
+
+die() {
+    log "ERROR: $*"
+    exit 1
+}
+
+
+require_command() {
+    command -v "$1" >/dev/null 2>&1 || die "Missing command: $1"
+}
+
+
+self_check() {
+    echo "=== SmarTAI deploy self-check ==="
+
+    for cmd in \
+        git curl tar sha256sum flock runuser pg_dump \
+        systemctl logger find sort awk sed grep seq podman
+    do
+        require_command "$cmd"
+        printf '%-12s OK\n' "$cmd"
+    done
+
+    [[ -x "$CONDA" ]] || die "Conda missing: $CONDA"
+    echo "conda        OK"
+
+    [[ -x "$NODE_BIN/node" ]] || die "Node missing: $NODE_BIN/node"
+    [[ -x "$NODE_BIN/npm" ]] || die "npm missing: $NODE_BIN/npm"
+    [[ -r "$ADMIN_ENV_FILE" ]] || die "Admin environment file missing"
+
+    echo "node         OK"
+    echo "npm          OK"
+    [[ -d "$RELEASES" ]] || die "Missing releases directory"
+    [[ -d "$VENVS" ]] || die "Missing venv cache directory"
+    [[ -d "$BACKUPS" ]] || die "Missing backup directory"
+    [[ -r "$ENV_FILE" ]] || die "Environment file not readable"
+
+    runuser -u smartai -- test -r "$ENV_FILE" \
+        || die "smartai user cannot read environment file"
+
+    CURRENT_RELEASE="$(readlink -f "$CURRENT")"
+    [[ -d "$CURRENT_RELEASE" ]] || die "Current release is invalid"
+    [[ -f "$CURRENT_RELEASE/.deploy-success" ]] \
+        || die "Current release has no success marker"
+
+    CURRENT_ENV="$(readlink -f "$CURRENT_RELEASE/.venv")"
+    [[ "$CURRENT_ENV" == "$VENVS/"* ]] \
+        || die "Current release does not use shared venv cache"
+    [[ -f "$CURRENT_ENV/.smartai-env-ready" ]] \
+        || die "Current venv has no ready marker"
+    [[ -x "$CURRENT_ENV/bin/python" ]] \
+        || die "Current cached Python is missing"
+
+    systemctl is-active --quiet "$SERVICE" \
+        || die "$SERVICE is not active"
+
+    systemctl is-active --quiet "$ADMIN_SERVICE" \
+        || die "$ADMIN_SERVICE is not active"
+
+    local environment_files
+    environment_files="$(systemctl show "$SERVICE" -p EnvironmentFiles --value)"
+    [[ "$environment_files" == *"$CURRENT/$RUNNER_ENV (ignore_errors=yes)"* ]] \
+        || die "Missing the release runner EnvironmentFile drop-in"
+
+    curl -fsS --max-time 5 \
+        http://127.0.0.1:8000/ready >/dev/null \
+        || die "Public /ready check failed"
+
+    curl -fsS --max-time 5 \
+        http://127.0.0.1:8001/ready >/dev/null \
+        || die "Administrator /ready check failed"
+
+    echo "current_release=$CURRENT_RELEASE"
+    echo "current_env=$CURRENT_ENV"
+    echo "service=active"
+    echo "admin_service=active"
+    echo "ready=OK"
+    echo "SELF-CHECK PASS"
+}
+
+
+cache_valid() {
+    local cache_env="$1"
+    local pyver="$2"
+    local lock_hash="$3"
+    local marker="$cache_env/.smartai-env-ready"
+
+    [[ -x "$cache_env/bin/python" ]] || return 1
+    [[ -f "$marker" ]] || return 1
+
+    grep -Fxq "python=$pyver" "$marker" || return 1
+    grep -Fxq "lock_sha256=$lock_hash" "$marker" || return 1
+
+    [[ "$("$cache_env/bin/python" -c \
+        'import platform; print(platform.python_version())')" == "$pyver" ]] \
+        || return 1
+
+    "$cache_env/bin/python" -m pip check >/dev/null 2>&1 || return 1
+
+    return 0
+}
+
+
+cleanup_releases() {
+    log "Cleaning old successful releases; keeping at most $KEEP_RELEASES"
+
+    local current_real
+    current_real="$(readlink -f "$CURRENT")"
+
+    declare -A keep=()
+    keep["$current_real"]=1
+
+    mapfile -t successful < <(
+        find "$RELEASES" \
+            -mindepth 2 -maxdepth 2 \
+            -type f -name '.deploy-success' \
+            -printf '%T@ %h\n' |
+        sort -nr |
+        awk '{print $2}'
+    )
+
+    local release
+    for release in "${successful[@]}"; do
+        if [[ ${#keep[@]} -ge $KEEP_RELEASES ]]; then
+            break
+        fi
+        keep["$release"]=1
+    done
+
+    for release in "${successful[@]}"; do
+        [[ -n "${keep[$release]:-}" ]] && continue
+        log "Removing old release: $release"
+        rm -rf -- "$release"
+    done
+}
+
+
+cleanup_venvs() {
+    log "Cleaning unreferenced cached environments"
+
+    declare -A used=()
+    local release env
+
+    shopt -s nullglob
+
+    for release in "$RELEASES"/*; do
+        [[ -d "$release" ]] || continue
+        [[ -L "$release/.venv" ]] || continue
+
+        env="$(readlink -f "$release/.venv" 2>/dev/null || true)"
+        [[ "$env" == "$VENVS/"* ]] || continue
+        used["$env"]=1
+    done
+
+    for env in "$VENVS"/*; do
+        [[ -d "$env" ]] || continue
+        [[ -f "$env/.smartai-env-ready" ]] || continue
+        [[ -n "${used[$env]:-}" ]] && continue
+
+        log "Removing unreferenced environment: $env"
+        rm -rf -- "$env"
+    done
+
+    shopt -u nullglob
+}
+
+
+cleanup_backups() {
+    log "Cleaning old pre-deploy backups; keeping $KEEP_BACKUPS"
+
+    mapfile -t backups < <(
+        find "$BACKUPS" \
+            -maxdepth 1 \
+            -type f \
+            -name 'predeploy-*.dump' \
+            -printf '%T@ %p\n' |
+        sort -nr |
+        awk '{print $2}'
+    )
+
+    local i
+    for ((i=KEEP_BACKUPS; i<${#backups[@]}; i++)); do
+        log "Removing old backup: ${backups[$i]}"
+        rm -f -- "${backups[$i]}"
+    done
+}
+
+
+# Call with the same account, runtime environment and privilege boundary as
+# the public service. Do not load the real application credentials.
+runner_as_service() {
+    runuser -u smartai -- env -i \
+        PATH=/usr/bin:/bin HOME=/var/lib/smartai XDG_RUNTIME_DIR="/run/user/$(id -u smartai)" \
+        PYTHONDONTWRITEBYTECODE=1 "$@"
+}
+
+
+prepare_runner() (
+    local release="$1" runner_dir="$1/tools/runner_spike"
+    local fingerprint tag image
+
+    # Use the entire context so new build inputs participate in the cache key.
+    # Normalize timestamps and ownership, which change when a release is extracted.
+    cd "$runner_dir" || return 1
+    fingerprint="$(
+        tar --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner -cf - . |
+            sha256sum
+    )" || return 1
+    tag="localhost/smartai-runner:inputs-${fingerprint%% *}"
+
+    if ! runner_as_service podman image exists "$tag"; then
+        log "Building runner image $tag" >&2
+        runner_as_service podman build --tag "$tag" "$runner_dir" >&2 || return 1
+    fi
+
+    image="$(runner_as_service podman image inspect --format '{{.Id}}' "$tag")" || return 1
+    image="${image#sha256:}"
+    [[ "$image" =~ ^[0-9a-f]{64}$ ]] || return 1
+    image="sha256:$image"
+
+    cd "$release" || return 1
+    runner_as_service .venv/bin/python tools/runner_spike/harness.py \
+        probe --runtime podman --image "$image" --json >&2 || return 1
+
+    runner_as_service .venv/bin/python - "$image" >&2 <<'PY' || return 1
+import asyncio
+import os
+import secrets
+import sys
+
+os.environ.update(
+    SMARTAI_RUNTIME_ENVIRONMENT="production",
+    SMARTAI_JWT_SECRET=secrets.token_urlsafe(48),
+    SMARTAI_PROVIDER_ENCRYPTION_KEY=secrets.token_urlsafe(48),
+    SMARTAI_PROGRAM_RUNNER_MODE="oci",
+    SMARTAI_PROGRAM_RUNNER_RUNTIME="podman",
+    SMARTAI_PROGRAM_RUNNER_IMAGE=sys.argv[1],
+)
+
+from backend.tools.oci_grading_runner import run_python_oci
+
+
+async def smoke():
+    function = await run_python_oci(
+        "def plus_one(value):\n    return value + 1\n",
+        function_call={"name": "plus_one", "args": [2], "kwargs": {}},
+    )
+    stdin = await run_python_oci("print(int(input()) + 1)", "2\n")
+    if not (
+        function.passed
+        and function.return_value == "3"
+        and function.request_digest
+        and function.isolation_mode == "oci_container"
+        and stdin.passed
+        and stdin.stdout.strip() == "3"
+        and stdin.request_digest
+        and stdin.isolation_mode == "oci_container"
+    ):
+        raise SystemExit("Application runner smoke test failed")
+
+
+async def main():
+    await asyncio.wait_for(smoke(), timeout=30)
+
+
+asyncio.run(main())
+print("Application runner smoke test: OK")
+PY
+
+    printf '%s\n' "$image"
+)
+
+
+running_service_pid() {
+    local pid
+    pid="$(systemctl show "$SERVICE" -p MainPID --value)" || return 1
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$pid"
+}
+
+
+live_runner_image() {
+    local pid
+    pid="$(running_service_pid)" || return 1
+    grep -zFxq "SMARTAI_PROGRAM_RUNNER_MODE=oci" "/proc/$pid/environ" &&
+        grep -zFxq "SMARTAI_PROGRAM_RUNNER_RUNTIME=podman" "/proc/$pid/environ" &&
+        grep -zFxq "SMARTAI_PROGRAM_RUNNER_IMAGE=$1" "/proc/$pid/environ"
+}
+
+
+wait_for_release() {
+    local image="$1" attempt
+    for ((attempt=0; attempt<60; attempt++)); do
+        if curl -fsS --max-time 5 http://127.0.0.1:8000/ready >/dev/null 2>&1 &&
+           curl -fsS --max-time 5 http://127.0.0.1:8001/ready >/dev/null 2>&1 &&
+           live_runner_image "$image"
+        then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+
+point_current_at() {
+    local target="$1" link="$BASE/.current-swap-$$"
+    ln -s -- "$target" "$link" || return 1
+    if ! mv -Tf -- "$link" "$CURRENT"; then
+        rm -f -- "$link"
+        return 1
+    fi
+}
+
+
+activate_release() {
+    local action
+    if [[ "$MIGRATION_NEEDED" == "1" ]]; then
+        action=start
+    else
+        action=restart
+    fi
+
+    log "Switching current release and runner to $SHA ($RUNNER_IMAGE)"
+    point_current_at "$RELEASE" || return 1
+
+    systemctl "$action" "$SERVICE" "$ADMIN_SERVICE" &&
+        wait_for_release "$RUNNER_IMAGE"
+}
+
+
+recover_release() {
+    if [[ "$MIGRATION_NEEDED" == "1" ]]; then
+        log "Migration was applied; database and paired release recovery require manual review"
+        log "Pre-deploy backup: $BACKUP_FILE"
+        return 1
+    fi
+
+    log "Restoring previous release and image from $OLD_RELEASE"
+    point_current_at "$OLD_RELEASE" &&
+        systemctl restart "$SERVICE" "$ADMIN_SERVICE" &&
+        wait_for_release "$OLD_RUNNER_IMAGE"
+}
+
+
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return
+fi
+
+
+if [[ "${1:-}" == "--self-check" ]]; then
+    self_check
+    exit 0
+fi
+
+
+if [[ $# -ne 1 || ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Usage: smartai-deploy <40-character-git-sha>" >&2
+    exit 64
+fi
+
+SHA="$1"
+
+exec 9>"$LOCK_FILE"
+flock -n 9 || die "Another deployment is already running"
+
+self_check >/dev/null
+
+REMOTE_MAIN="$(
+    git ls-remote "$REPO_URL" refs/heads/main |
+    awk 'NR == 1 {print $1}'
+)"
+
+[[ -n "$REMOTE_MAIN" ]] || die "Could not resolve GitHub main"
+[[ "$REMOTE_MAIN" == "$SHA" ]] \
+    || die "Refusing SHA $SHA; current GitHub main is $REMOTE_MAIN"
+
+OLD_RELEASE="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+RELEASE="$RELEASES/$SHA"
+OLD_PID="$(running_service_pid)" || die "Cannot identify the running public backend"
+OLD_RUNNER_SETTING="$(
+    grep -zaE '^SMARTAI_PROGRAM_RUNNER_IMAGE=sha256:[0-9a-f]{64}$' "/proc/$OLD_PID/environ" |
+        tr -d '\000'
+)" || die "The current service has no pinned runner image"
+OLD_RUNNER_IMAGE="${OLD_RUNNER_SETTING#*=}"
+[[ "$OLD_RUNNER_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Cannot determine the current runner image"
+live_runner_image "$OLD_RUNNER_IMAGE" || die "Current process is not using the expected OCI runtime"
+if [[ -f "$OLD_RELEASE/$RUNNER_ENV" ]]; then
+    grep -Fxq -- "$OLD_RUNNER_SETTING" "$OLD_RELEASE/$RUNNER_ENV" \
+        || die "Current process is not using its release runner"
+fi
+
+if [[ "$OLD_RELEASE" == "$RELEASE" ]] &&
+   systemctl is-active --quiet "$SERVICE" &&
+   systemctl is-active --quiet "$ADMIN_SERVICE" &&
+   [[ -f "$RELEASE/frontend/app/dist-admin/admin.html" ]] &&
+   curl -fsS --max-time 5 \
+       http://127.0.0.1:8000/ready >/dev/null 2>&1 &&
+   curl -fsS --max-time 5 \
+       http://127.0.0.1:8001/ready >/dev/null 2>&1
+then
+    log "SHA $SHA is already deployed and ready"
+    exit 0
+fi
+
+TARBALL=""
+TARGET_RELEASE_CREATED=0
+TARGET_ENV_CREATED=0
+DEPLOY_OK=0
+MIGRATION_NEEDED=0
+BACKUP_FILE=""
+ADMIN_BUILD_DIR=""
+ACTIVATION_STARTED=0
+
+
+cleanup_on_exit() {
+    rm -f -- "${TARBALL:-}" 2>/dev/null || true
+    rm -rf -- "${ADMIN_BUILD_DIR:-}" 2>/dev/null || true
+
+    if [[ "$DEPLOY_OK" -eq 0 ]]; then
+        if [[ "$ACTIVATION_STARTED" -eq 1 ]]; then
+            recover_release || log "ERROR: Automatic release recovery did not complete"
+        fi
+
+        if [[ "$TARGET_RELEASE_CREATED" -eq 1 ]]; then
+            local current_now
+            current_now="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+
+            if [[ "$current_now" != "$RELEASE" ]]; then
+                rm -rf -- "$RELEASE" 2>/dev/null || true
+            fi
+        fi
+
+        if [[ "$TARGET_ENV_CREATED" -eq 1 ]]; then
+            local referenced=0 release env
+
+            shopt -s nullglob
+            for release in "$RELEASES"/*; do
+                [[ -L "$release/.venv" ]] || continue
+                env="$(readlink -f "$release/.venv" 2>/dev/null || true)"
+                [[ "$env" == "$CACHE_ENV" ]] && referenced=1
+            done
+            shopt -u nullglob
+
+            [[ "$referenced" -eq 1 ]] \
+                || rm -rf -- "$CACHE_ENV" 2>/dev/null || true
+        fi
+    fi
+}
+
+trap cleanup_on_exit EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+
+if [[ -d "$RELEASE" && ! -f "$RELEASE/.deploy-success" ]]; then
+    [[ "$OLD_RELEASE" != "$RELEASE" ]] \
+        || die "Current release is incomplete; refusing automatic replacement"
+
+    rm -rf -- "$RELEASE"
+fi
+
+
+if [[ ! -d "$RELEASE" ]]; then
+    log "Downloading release $SHA"
+
+    TARBALL="$(mktemp /tmp/smartai-release.XXXXXX.tar.gz)"
+
+    curl -fL \
+        --retry 3 \
+        --retry-delay 2 \
+        "$TARBALL_BASE/$SHA" \
+        -o "$TARBALL"
+
+    install -d \
+        -o root \
+        -g smartai \
+        -m 0750 \
+        "$RELEASE"
+
+    TARGET_RELEASE_CREATED=1
+
+    tar -xzf "$TARBALL" \
+        --strip-components=1 \
+        -C "$RELEASE"
+
+    chown -R root:smartai "$RELEASE"
+    chmod -R g+rX,g-w,o-rwx "$RELEASE"
+else
+    log "Reusing existing successful release $SHA"
+fi
+
+
+PYVER="$(tr -d '[:space:]' < "$RELEASE/.python-version")"
+[[ "$PYVER" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || die "Invalid .python-version: $PYVER"
+
+LOCK_HASH="$(
+    sha256sum "$RELEASE/render-requirements.txt" |
+    awk '{print $1}'
+)"
+
+ENV_ID="py-${PYVER}-${LOCK_HASH}"
+CACHE_ENV="$VENVS/$ENV_ID"
+
+CURRENT_ENV=""
+if [[ -n "$OLD_RELEASE" && -L "$OLD_RELEASE/.venv" ]]; then
+    CURRENT_ENV="$(readlink -f "$OLD_RELEASE/.venv" 2>/dev/null || true)"
+fi
+
+
+if cache_valid "$CACHE_ENV" "$PYVER" "$LOCK_HASH"; then
+    log "Environment cache HIT: $ENV_ID"
+else
+    if [[ -e "$CACHE_ENV" ]]; then
+        [[ "$CURRENT_ENV" != "$CACHE_ENV" ]] \
+            || die "Active cached environment failed validation; refusing removal"
+
+        rm -rf -- "$CACHE_ENV"
+    fi
+
+    log "Environment cache MISS: $ENV_ID"
+    log "Creating Python $PYVER environment"
+
+    TARGET_ENV_CREATED=1
+
+    "$CONDA" create \
+        --prefix "$CACHE_ENV" \
+        --override-channels \
+        -c conda-forge \
+        --no-default-packages \
+        "python=$PYVER" \
+        pip \
+        -y
+
+    log "Installing locked runtime dependencies"
+
+    "$CACHE_ENV/bin/python" -m pip install \
+        --require-hashes \
+        --only-binary=:all: \
+        -r "$RELEASE/render-requirements.txt"
+
+    "$CACHE_ENV/bin/python" -m pip check
+
+    "$CACHE_ENV/bin/python" - <<'PY'
+import fastapi
+import sqlalchemy
+import boto3
+import psycopg
+import uvicorn
+import pymupdf
+print("runtime imports: OK")
+PY
+
+    cat > "$CACHE_ENV/.smartai-env-ready" <<MARKER
+python=$PYVER
+lock_sha256=$LOCK_HASH
+MARKER
+
+    chown -R root:smartai "$CACHE_ENV"
+    chmod -R g+rX,g-w,o-rwx "$CACHE_ENV"
+
+    cache_valid "$CACHE_ENV" "$PYVER" "$LOCK_HASH" \
+        || die "New cached environment failed validation"
+fi
+
+
+rm -rf -- "$RELEASE/.venv"
+
+ln -s \
+    "../../venvs/$ENV_ID" \
+    "$RELEASE/.venv"
+
+chown -h root:smartai "$RELEASE/.venv"
+
+
+NODE_REQUIRED="$(tr -d '[:space:]' < "$RELEASE/frontend/app/.node-version")"
+NODE_ACTUAL="$("$NODE_BIN/node" -v | sed 's/^v//')"
+
+[[ "$NODE_REQUIRED" == "$NODE_ACTUAL" ]] \
+    || die "Frontend requires Node $NODE_REQUIRED but server has $NODE_ACTUAL"
+
+log "Building administrator frontend"
+
+ADMIN_BUILD_DIR="$(mktemp -d /tmp/smartai-admin-build.XXXXXX)"
+
+cp -a "$RELEASE/frontend/app/." "$ADMIN_BUILD_DIR/"
+chown -R smartai:smartai "$ADMIN_BUILD_DIR"
+
+runuser -u smartai -- env \
+    PATH="$NODE_BIN:/usr/bin:/bin" \
+    bash -c '
+set -Eeuo pipefail
+cd "$1"
+npm ci --no-audit --no-fund
+VITE_SMARTAI_BACKEND_URL=/api npm run build:admin
+test -f dist-admin/admin.html
+' _ "$ADMIN_BUILD_DIR"
+
+rm -rf -- "$RELEASE/frontend/app/dist-admin"
+cp -a "$ADMIN_BUILD_DIR/dist-admin" "$RELEASE/frontend/app/dist-admin"
+
+chown -R root:smartai "$RELEASE/frontend/app/dist-admin"
+chmod -R g+rX,g-w,o-rwx "$RELEASE/frontend/app/dist-admin"
+
+rm -rf -- "$ADMIN_BUILD_DIR"
+ADMIN_BUILD_DIR=""
+
+
+log "Running production preflight"
+
+runuser -u smartai -- bash -c '
+set -a
+source /etc/smartai/smartai.env
+set +a
+cd "$1"
+
+.venv/bin/python - <<"PY"
+from backend.config import settings
+from backend.db.session import database_ready
+from backend.storage import get_storage
+
+assert settings.runtime_environment == "production"
+assert settings.grading_engine == "v2"
+assert database_ready()
+assert get_storage().ready()
+
+import backend.main
+
+print("production preflight: OK")
+PY
+' _ "$RELEASE"
+
+
+log "Verifying the candidate runner against the new backend"
+RUNNER_IMAGE="$(prepare_runner "$RELEASE")" || die "Candidate runner preflight failed"
+[[ "$RUNNER_IMAGE" =~ ^sha256:[0-9a-f]{64}$ ]] || die "Invalid candidate runner image"
+RUNNER_ENV_TEMP="$(mktemp "$RELEASE/.runner-env.XXXXXX")"
+printf 'SMARTAI_PROGRAM_RUNNER_IMAGE=%s\n' "$RUNNER_IMAGE" > "$RUNNER_ENV_TEMP"
+mv -Tf -- "$RUNNER_ENV_TEMP" "$RELEASE/$RUNNER_ENV"
+
+
+MIGRATION_NEEDED="$(
+    runuser -u smartai -- bash -c '
+set -a
+source /etc/smartai/smartai.env
+set +a
+cd "$1"
+
+.venv/bin/python - <<"PY"
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from alembic.migration import MigrationContext
+from backend.db.session import get_engine
+
+config = Config("alembic.ini")
+script = ScriptDirectory.from_config(config)
+target = set(script.get_heads())
+
+with get_engine().connect() as connection:
+    current = set(MigrationContext.configure(connection).get_current_heads())
+
+print("1" if current != target else "0")
+PY
+' _ "$RELEASE"
+)"
+
+[[ "$MIGRATION_NEEDED" == "0" || "$MIGRATION_NEEDED" == "1" ]] \
+    || die "Could not determine migration state"
+
+
+if [[ "$MIGRATION_NEEDED" == "1" ]]; then
+    log "Database migration required"
+    log "Stopping application services before backup/migration"
+
+    systemctl stop "$SERVICE" "$ADMIN_SERVICE"
+
+    BACKUP_FILE="$BACKUPS/predeploy-${SHA}-$(date -u '+%Y%m%dT%H%M%SZ').dump"
+
+    log "Creating PostgreSQL backup: $BACKUP_FILE"
+
+    if ! runuser -u postgres -- \
+        pg_dump \
+        -Fc \
+        -d smartai \
+        -f "$BACKUP_FILE"
+    then
+        rm -f -- "$BACKUP_FILE" 2>/dev/null || true
+        systemctl start "$SERVICE" || true
+        systemctl start "$ADMIN_SERVICE" || true
+        die "PostgreSQL backup failed"
+    fi
+
+    log "Applying Alembic migrations"
+
+    if ! runuser -u smartai -- bash -c '
+set -a
+source /etc/smartai/smartai.env
+set +a
+cd "$1"
+exec .venv/bin/python -m alembic upgrade head
+' _ "$RELEASE"
+    then
+        systemctl start "$SERVICE" || true
+        systemctl start "$ADMIN_SERVICE" || true
+        die "Alembic migration failed"
+    fi
+else
+    log "Database already at target Alembic head; backup not required"
+fi
+
+
+ACTIVATION_STARTED=1
+activate_release || die "New release or runner failed readiness check"
+
+
+cat > "$RELEASE/.deploy-success" <<MARKER
+sha=$SHA
+env_id=$ENV_ID
+marked_at=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+MARKER
+
+chown root:smartai "$RELEASE/.deploy-success"
+chmod 640 "$RELEASE/.deploy-success"
+
+DEPLOY_OK=1
+
+cleanup_releases
+cleanup_venvs
+cleanup_backups
+
+log "Deployment successful: $SHA"
