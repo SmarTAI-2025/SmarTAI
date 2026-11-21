@@ -391,3 +391,30 @@ it.each(["zh-CN", "en-US"] as const)("explains retained archives on infrastructu
   expect(copy.description).toContain(locale === "zh-CN" ? "原文件已保留" : "original is preserved");
   expect(copy.nextStep).toContain(locale === "zh-CN" ? "稍后重试" : "Retry later");
 });
+
+
+it("uses the saved question diagnostics for incomplete content without reclassifying unrelated files", () => {
+  const item = source({ job_id: "current", reason_code: "submission_parse_invalid",
+    answer_diagnostics: [{ q_id: "q3", number: "1.1.20", has_content: true,
+      flag: ["recognition_incomplete", "recognition_invalid_fields:content"] }] });
+  const copy = getSubmissionSourceReasonCopy(item, "zh-CN");
+  expect(copy.title).toBe("部分题目的作答内容未完整识别");
+  expect(copy.description).toContain("1.1.20");
+  for (const locale of ["zh-CN", "en-US"] as const) {
+    expect(classifyRecoverableError("submission_parse_invalid", { locale, jobId: "current", submissionSources: [item] }))
+      .toMatchObject({ title: getSubmissionSourceReasonCopy(item, locale).title, actionKind: "retry" });
+  }
+  expect(classifyRecoverableError("submission_parse_invalid", { jobId: "other", submissionSources: [item] }).description)
+    .not.toContain("1.1.20");
+});
+
+
+it("asks the teacher to verify a doubtful blank against the original", () => {
+  const record = source({ reason_code: "submission_parse_invalid", answer_diagnostics: [{
+    q_id: "q1", number: "1.1.5", has_content: false, recognition_confidence: .98,
+    flag: ["recognition_incomplete", "recognition_manual_pending", "recognition_invalid_fields:content"],
+  }] });
+  const copy = getSubmissionSourceReasonCopy(record, "zh-CN");
+  expect(copy.title).toContain("暂未确认是否空白");
+  expect(copy.description).toContain("1.1.5");
+});

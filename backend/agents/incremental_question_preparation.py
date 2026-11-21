@@ -1216,6 +1216,15 @@ class IncrementalQuestionPreparation:
                             break
                     if pending:
                         from backend.services.question_preparation_diagnostics import required_programming_tests_missing
+                        # A mathematically rejected rubric needs the same targeted retry
+                        # as other failed generation units. Its review draft is still saved below.
+                        rubric_review = review_feedback.get("q1:criterion")
+                        if not rubric_review and {"reference_answer", "criterion"} <= {t["target"] for t in pending}:
+                            raise ValidationError("Neither a reference answer nor a usable rubric was generated.",
+                                                  code="question_materials_not_generated")
+                        if rubric_review and rubric_review.get("findings"):
+                            raise ValidationError("The scoring criteria did not pass review.",
+                                                  code="question_rubric_review_failed")
                         raise ValidationError("Some materials could not be completed.", code="provider_response_invalid",
                             details={"unfinished_targets": [target["target"] for target in pending],
                                      "required_tests_missing": required_programming_tests_missing(data["q1"])})

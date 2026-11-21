@@ -480,6 +480,8 @@ function questionGenerationErrorLabel(code: string, locale: string) {
     provider_unreachable: ["暂时无法连接模型服务", "Model service is unreachable"],
     provider_unavailable: ["模型服务暂不可用", "Model service is unavailable"],
     provider_response_invalid: ["模型返回内容不完整", "Model response was incomplete"],
+    question_materials_not_generated: ["标答和评分标准未生成", "Reference answer and rubric were not generated"],
+    question_rubric_review_failed: ["评分标准未通过复核", "Scoring criteria did not pass review"],
     ai_completion_failed: ["答案与评分标准生成未完成", "Answer and rubric generation did not complete"],
   };
   const label = labels[code] ?? ["生成未完成", "Generation did not complete"];

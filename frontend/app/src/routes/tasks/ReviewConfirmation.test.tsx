@@ -688,18 +688,18 @@ describe("one-click grading review", () => {
     const unload = new Event("beforeunload", { cancelable: true });
     window.dispatchEvent(unload);
     expect(unload.defaultPrevented).toBe(true);
-    // Cancel the blocked route intent explicitly. Otherwise DraftLeaveProvider
-    // resumes it after the save becomes clean, racing this stay-on-S1 assertion.
-    await userEvent.click(screen.getByRole("button", { name: "继续编辑" }));
+    // The requested navigation resumes once the current student's save finishes.
+    expect(screen.getByRole("button", { name: "继续编辑" })).toBeDisabled();
 
     await act(async () => {
       completeFirst({ workflow_revision: 6, correction: correction("Q1", { teacher_score: 7 }) });
     });
     await waitFor(() => expect(state.update).toHaveBeenCalledTimes(mode === "single" ? 1 : 2));
     expect(state.update.mock.calls.every(([input]) => input.studentId === "S1")).toBe(true);
-    expect(router.state.location.pathname).toBe("/tasks/T1/review/S1/Q1");
-    await waitFor(() => expect(screen.queryByText(/Saving review results\. Please wait before switching students/)).not.toBeInTheDocument());
-    await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("7"));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/tasks/T1/review/S2/Q1"));
+    await waitFor(() => expect(screen.getByRole("textbox", { name: "Q1 final score" })).toHaveValue("2"));
+    expect(screen.getByDisplayValue("Other student's note")).toBeInTheDocument();
+    expect(screen.queryByText(/Saving review results\. Please wait before switching students/)).not.toBeInTheDocument();
   });
   it("stashes without confirming and continues the original destination only once", async () => {
     const router = show(true);

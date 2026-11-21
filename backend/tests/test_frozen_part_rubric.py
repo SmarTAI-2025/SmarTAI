@@ -1281,6 +1281,38 @@ async def test_multiline_missed_step_supplies_one_earlier_origin_at_the_grading_
             settle(support, origin)
 
 
+def test_repair_can_separate_the_origin_and_work_on_one_line_or_cite_both_across_lines():
+    from backend.skills.math_grading import AddressedPartAssessment, StepsOnlyRepair
+
+    rules = PartRubric.model_validate(dict(id="q", label="1", stem="Add then double.", total_pts=4, parts=[
+        dict(id="p", total_pts=4, steps=[
+            dict(id="sum", criterion="Add.", total_pts=2),
+            dict(id="twice", criterion="Double.", total_pts=2, follow_through_pts=1)])]))
+
+    def score(answer, missed, origin, later):
+        raw = dict(comment="Check", confidence=.8, part_decisions=[dict(
+            part_id="p", target_quote="part:p", student_quote=[1], relevance="partial", method="reference",
+            progress="Wrong sum, followed by consistent doubling.", steps=[
+                dict(id="sum", outcome="missed", evidence=missed, reason="Sum was wrong."),
+                dict(id="twice", outcome="follow_through", error_source=origin, evidence=later, reason="Consistent doubling.")])])
+        result = StepsOnlyRepair.model_validate(raw)
+        return settle_parts(rules, result.part_decisions, answer, rules.stem)[0]
+
+    for model in (AddressedPartAssessment, StepsOnlyRepair):
+        evidence = model.model_json_schema()["$defs"]["StepDecision"]["properties"]["evidence"]
+        assert {v["type"] for v in evidence["anyOf"]} == {"array", "string"}
+    assert score("Sum=5. Double=10.", "Sum=5", "Sum=5", "Double=10") == 1
+    assert score("Sum=5.\nDouble=10.", [1], "student:1", [1, 2]) == 1
+    for answer, missed, origin, later in [
+        ("Sum=5. Double=10.", [1], "student:1", [1]),
+        ("Sum=5. Double=10.", "Sum=5", "Sum=5", "Sum=5"),
+        ("Double=10. Sum=5.", "Sum=5", "Sum=5", "Double=10"),
+        ("Sum=5. Double=10.", [1], "Sum=5", "Double=10"),
+    ]:
+        with pytest.raises(ValueError, match="distinct earlier error"):
+            score(answer, missed, origin, later)
+
+
 def _method_rule(words="", maximum=10, *, part_id="p1"):
     stem = "必须用配方法解方程 x²−3x+2=0。"
     row = _rows(

@@ -745,6 +745,13 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             "trace_id": f"{operation.id}:{operation.attempt}:{result.source.id}",
             "created_at": outcome.created_at if outcome else result.source.created_at,
         })
+    if operation.operation_type == "submission_recognition" and operation.status == "running":
+        # Archive expansion knows the batch size before individual workers register every member.
+        total = ((operation.progress or {}).get("stage_metrics") or {}).get("files_total")
+        if type(total) is int and total > len(results):
+            waiting = total - len(results)
+            summary["uploaded"] += waiting
+            summary["pending"] += waiting
     return summary, rows
 
 
@@ -3292,18 +3299,29 @@ def _reusable_submission_results(*, owner_id, task_id, payload, questions, inclu
     return normalized
 
 
+def _submission_answer_retry_failures(answer, review_ids):
+    flags = answer.get("flag") or []
+    failures = _answer_recognition_failures(flags)
+    if (QUESTION_IDENTIFIER_CONFLICT_FLAGS.intersection(flags)
+            and answer.get("q_id") in (review_ids or ())
+            and _answer_matching_review_is_advisory(flags, answer.get("content"), answer_type=answer.get("type"))):
+        failures.discard("recognition_manual_pending")
+    return failures
+
+
 def _submission_result_incomplete(result):
     student = result.student or {}
     recognition = student.get("recognition") or {}
     coverage = recognition.get("coverage") or {}
-    # A native file can be fully read while its question association still
-    # awaits the teacher. Replaying the file cannot resolve that review.
+    # Fully read native sources can still await the teacher's question association.
     native = recognition.get("native_source_mapping_version") in (1, 2, NATIVE_SOURCE_MAPPING_VERSION)
-    mapped = {"recognition_manual_pending"} if native else set()
+    ignored = {"recognition_manual_pending"} if native else set()
+    review_ids = recognition.get("model_review_question_ids")
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
                 or recognition.get("missing_question_ids")
-                or any(_answer_recognition_failures(answer.get("flag")) - mapped for answer in student.get("stu_ans", [])))
+                or any(_submission_answer_retry_failures(answer, review_ids) - ignored
+                       for answer in student.get("stu_ans", [])))
 
 
 def _merge_submission_retry_answers(result, saved, target_ids, questions):
@@ -3312,6 +3330,8 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
         return result
     previous = saved.student
     current = result.student or {}
+    old_recognition = previous.get("recognition") or {}
+    new_recognition = current.get("recognition") or {}
     old_answers = {answer["q_id"]: answer for answer in previous.get("stu_ans", [])}
     incoming = {answer["q_id"]: answer for answer in current.get("stu_ans", []) if answer["q_id"] in target_ids}
     answers = []
@@ -3321,7 +3341,7 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             answer = old_answers[q_id]
         elif q_id in incoming:
             answer = incoming[q_id]
-            if _answer_recognition_failures(answer.get("flag")):
+            if _submission_answer_retry_failures(answer, new_recognition.get("model_review_question_ids")):
                 old_text = str(old_answers.get(q_id, {}).get("content") or "")
                 new_text = str(answer.get("content") or "")
                 # Failed attempts are evidence for manual review, not replacements.
@@ -3338,6 +3358,11 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             answer = dict(old_answers.get(q_id) or {"q_id": q_id, "content": ""})
             answer["flag"] = list(dict.fromkeys([*answer.get("flag", []), "recognition_manual_pending"]))
         answers.append(answer)
+    # Only the answer version retained here supplies its model review marker.
+    # A missing result gets a server-created pending flag without that provenance.
+    reviews = (set(old_recognition.get("model_review_question_ids") or ()) - set(target_ids)
+               | (set(new_recognition.get("model_review_question_ids") or ()) & set(incoming)))
+    matched_count = sum(not _submission_answer_retry_failures(answer, reviews) for answer in answers)
     student = {**previous, **current, "source_id": result.source_id, "stored_file_id": result.stored_file_id,
                "source_filename": result.filename, "stu_ans": answers}
     # A successful retry supersedes old document errors; individual saved
@@ -3351,8 +3376,8 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             if field in previous:
                 student[field] = previous[field]
     changes = dict(student=student, student_candidate=student["stu_id"],
-                   matched_answer_count=sum(not _answer_recognition_failures(answer.get("flag")) for answer in answers))
-    if result.status in {"parsed", "identity_conflict"} and any(_answer_recognition_failures(answer.get("flag")) for answer in answers):
+                   matched_answer_count=matched_count)
+    if result.status in {"parsed", "identity_conflict"} and matched_count < len(answers):
         changes.update(status="parse_failed", stable_error_code="submission_parse_failed", failure_phase="recognition", retryable=True)
     elif result.status in {"parsed", "identity_conflict"}:
         matched = student.get("identity_status") == "matched"
@@ -3360,6 +3385,9 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
                        stable_error_code=None if matched else (result.stable_error_code if result.failure_phase == "identity"
                            else saved.stable_error_code if saved.failure_phase == "identity" else "identity_needs_review"),
                        failure_phase=None if matched else "identity")
+    recognition = student.get("recognition") or {}
+    if reviews or "model_review_question_ids" in recognition:
+        student["recognition"] = {**recognition, "model_review_question_ids": sorted(reviews)}
     return replace(result, **changes)
 
 
@@ -3568,7 +3596,8 @@ async def run_task_submission_parsing(
                     saved = retry_results.get((raw.filename, hashlib.sha256(raw.content).hexdigest()))
                     if saved is not None and saved.student is not None:
                         good_ids = {answer["q_id"] for answer in saved.student.get("stu_ans", [])
-                                    if "content" in answer and not _answer_recognition_failures(answer.get("flag"))
+                                    if "content" in answer and not _submission_answer_retry_failures(
+                                        answer, (saved.student.get("recognition") or {}).get("model_review_question_ids"))
                                     and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}
                         targets = [q.q_id for q in questions if q.q_id not in good_ids]
                         # Global missing-page evidence cannot prove which answer
@@ -3874,7 +3903,8 @@ async def run_task_submission_parsing(
                 previous = partials.get(source.source_id)
                 verified = (set(dispatched) | {answer["q_id"] for answer in
                     (previous.student.get("stu_ans", []) if previous else [])
-                    if not _answer_recognition_failures(answer.get("flag"))
+                    if not _submission_answer_retry_failures(
+                        answer, (previous.student.get("recognition") or {}).get("model_review_question_ids"))
                     and BOUNDARY_REVIEW_FLAG not in (answer.get("flag") or [])}) - invalid
                 result = attach_submission_recognition([result], [source], verified_question_ids=verified)[0]
                 # Count a source once after all of its units and repairs finish,
@@ -3996,7 +4026,7 @@ async def run_task_submission_parsing(
                 (
                     result.stable_error_code
                     for result in results
-                    if result.stable_error_code
+                    if result.status in {"parse_failed", "no_matching_answer"} and result.stable_error_code
                 ),
                 "submission_parse_failed",
             )

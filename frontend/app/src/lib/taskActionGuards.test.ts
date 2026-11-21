@@ -9,6 +9,13 @@ import {
 } from "./taskActionGuards";
 
 describe("task contract compatibility", () => {
+  it.each([
+    ["question_rubric_review_failed", "评分标准未通过复核", "Scoring criteria did not pass review"],
+    ["question_materials_not_generated", "标答和评分标准未生成", "Reference answer and rubric were not generated"],
+  ])("distinguishes missing and rejected rubric recovery for %s", (code, zh, en) => {
+    expect(classifyRecoverableError(code)).toMatchObject({ title: zh, actionKind: "retry", tone: "danger" });
+    expect(classifyRecoverableError(code, { locale: "en-US" }).title).toBe(en);
+  });
   it.each(["zh-CN", "en-US"] as const)("keeps shared provider quota and permission failures provider-neutral (%s)", locale => {
     for (const code of ["provider_quota_exceeded", "provider_permission_denied"]) {
       for (const error of [code, new APIError(422, "private diagnostic", { detail: { code } })]) {

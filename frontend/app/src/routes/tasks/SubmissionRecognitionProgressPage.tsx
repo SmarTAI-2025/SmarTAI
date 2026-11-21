@@ -154,6 +154,7 @@ export function SubmissionRecognitionProgressPage() {
     const paused = status === "submissions_paused";
     const info = classifyRecoverableError(progressFailure, {
       locale,
+      submissionSources: progressQuery.data?.submission_sources ?? taskQuery.data?.submission_sources,
       providerFailures: progressQuery.progress?.provider_failures,
       phase: progressQuery.progress?.current_step ?? progressQuery.progress?.phase ?? "submission_recognition",
       jobId: failedJobId,

@@ -308,11 +308,18 @@ class RecognitionRunService:
             assignment_id=assignment_id, owner_id=authorized_owner_id, operation_type=OPERATION_TYPE,
             input_hashes=hashes + list(retries.values()))
         counts = {"patch": 0, "empty_recovery": 0}
-        for key in hashes:
+        for request, key in zip(requests, hashes):
             row = rows.get(key)
             if row is not None and retry_key is not None and row.status not in {"pending", "running", "completed"}:
                 row = rows.get(retries[key])
-            if row is None or not row.checkpoint:
+            if row is None:
+                continue
+            if request.purpose == "submissions" and request.policy.version == "submission-truncated-page-v1":
+                # Preserve a pending or completed reread's place in the same window after restart.
+                counts.setdefault("truncated_pages", []).extend(request.pages)
+                counts["empty_recovery"] += 1
+                continue
+            if not row.checkpoint:
                 continue
             checkpoint = RecognitionRunCheckpointV1.model_validate(row.checkpoint)
             for call in checkpoint.calls:

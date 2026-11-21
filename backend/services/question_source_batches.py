@@ -18,6 +18,26 @@ def _usage(runs, attribute):
     return RecognitionUsageV1(**result).model_dump(mode="json")
 
 
+def _truncated_submission_page(run, request):
+    """Only a confirmed, complete provider response can authorize a second paid read."""
+    if request.purpose != "submissions" or len(request.pages) != 1 or run.safe_error_code or not run.assembly:
+        return False
+    document = run.assembly.document
+    batch = getattr(getattr(run.assembly, "raw", None), "read_batch", None)
+    units = getattr(batch, "units", ())
+    if not document or document.coverage.failed_pages != request.pages or len(units) != 1:
+        return False
+    unit = units[0]
+    return (unit.page_numbers == request.pages and not unit.submission_may_exist
+            and unit.candidate.status in {"ok", "empty"} and not unit.candidate.safe_error_code
+            and unit.candidate.finish_reason == "length")
+
+
+def _longer_submission_read(request):
+    return request.model_copy(update={"policy": request.policy.model_copy(update={
+        "version": "submission-truncated-page-v1", "enable_repair": False})})
+
+
 async def read_question_pdf_batches(*, service, request, content, engine, total_pages, reporter, binding=None,
                                     allow_native_partial=False, retry_key=None, acknowledge_pending_retry=False,
                                     timeout_profile=None, allow_partial=False, on_pages=None):
@@ -35,18 +55,28 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         return apply_source_timeout_profile(scoped, engine=engine, timeout_profile=timeout_profile,
                                              total_pages=total_pages)
 
-    async def process(batch, repair_admission=None):
+    async def process(batch, repair_admission=None, saved_rereads=()):
         scoped = scoped_request(batch)
         progress = reporter
         if scoped.policy.timeout_mode == "response_only":
             progress = bounded_recognition_progress(reporter)
         await progress.set_current_step("recognition_document_batch", message=(
             f"Reading PDF pages {batch[0]}–{batch[-1]}; {len(pages)}/{len(requested)} pages completed"))
+        async def read(page_request):
+            return await service.run(page_request, content, engine=engine, prompt_version=PROMPT_VERSION,
+                                     authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key,
+                                     acknowledge_pending_retry=acknowledge_pending_retry,
+                                     **({"repair_admission": repair_admission} if repair_admission is not None else {}))
         try:
-            run = await service.run(scoped, content, engine=engine, prompt_version=PROMPT_VERSION,
-                                    authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key,
-                                    acknowledge_pending_retry=acknowledge_pending_retry,
-                                    **({"repair_admission": repair_admission} if repair_admission is not None else {}))
+            run = await read(scoped)
+            if (_truncated_submission_page(run, scoped) and repair_admission is not None
+                    and (batch[0] in saved_rereads or await repair_admission("empty_recovery"))):
+                # Count the initial billable read and retain its evidence. The second
+                # policy has a separate durable/cache identity and cannot recurse.
+                runs.append(run)
+                await progress.set_current_step("recognition_recheck", message=f"Retrying truncated submission page {batch[0]}")
+                run = await read(_longer_submission_read(scoped))
+
         except RecognitionError as exc:
             # A failed independent batch must not suppress later pages. These
             # pages are recorded as failed, never automatically resubmitted.
@@ -82,6 +112,8 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             await on_pages(ready)
         failed_pages.update(document.coverage.failed_pages)
         code = image_quality_failure(run.safe_error_code or "question_source_incomplete", document)
+        if _truncated_submission_page(run, scoped):
+            code = "submission_page_output_truncated"
         if run.safe_error_code or document.coverage.failed_pages:
             failure_codes.append(code)
         read_batch = getattr(getattr(run.assembly, "raw", None), "read_batch", None)
@@ -90,7 +122,10 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             candidate = unit.candidate
             refused = (getattr(candidate, "finish_reason", None) == "refused"
                        or "provider_refused" in getattr(candidate, "warning_codes", ()))
-            if candidate.status == "error" or refused:
+            if code == "submission_page_output_truncated":
+                page_errors.extend(dict(page=number, error_code=code, status_code=None) for number in unit.page_numbers)
+                unassigned_failures.difference_update(unit.page_numbers)
+            elif candidate.status == "error" or refused:
                 cause = candidate.safe_error_code or ("provider_content_blocked" if refused else "recognition_response_invalid")
                 page_errors.extend(dict(page=number, error_code=cause, status_code=candidate.upstream_status_code)
                                    for number in unit.page_numbers if number in document.coverage.failed_pages)
@@ -131,7 +166,8 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
             await process(window)
             continue
         scoped = [scoped_request([page]) for page in window]
-        used = (await service.saved_page_extras(scoped, engine=engine, prompt_version=PROMPT_VERSION,
+        ledger_requests = scoped + [_longer_submission_read(page) for page in scoped] if request.purpose == "submissions" else scoped
+        used = (await service.saved_page_extras(ledger_requests, engine=engine, prompt_version=PROMPT_VERSION,
             authorized_owner_id=request.source.owner_id, binding=binding, retry_key=retry_key)
             if hasattr(service, "saved_page_extras") else {"patch": 0, "empty_recovery": 0})
         limits = {"patch": request.policy.max_patches, "empty_recovery": request.policy.max_empty_recoveries}
@@ -148,7 +184,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
 
         # Bound prepared page work by the existing window. Actual model starts
         # share grading's credential/model RPM and adaptive resource scheduler.
-        tasks = [asyncio.create_task(process([page], admit)) for page in window]
+        tasks = [asyncio.create_task(process([page], admit, used.get("truncated_pages", ()))) for page in window]
         try:
             await asyncio.gather(*tasks)
         finally:

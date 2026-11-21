@@ -172,7 +172,9 @@ A fixed alternative score needs no invented errors. Never charge an alternative 
 step unique to the reference method. Distinguish a genuinely different strategy from a change
 in notation or order; grade a minor_variant using the main rubric.
 Use step IDs with earned/missed/follow_through for points; do not report numeric awards.
-Follow-through needs the same source as a diagnosed missed step or independent error, and correct downstream work.
+For follow-through, cite the diagnosed missed step's origin in error_source and the later dependent work in evidence.
+If both are on one line, use the same unique verbatim excerpt for the missed evidence and error_source,
+then cite a separate, later verbatim excerpt for the dependent step.
 For a target_item deduction, use target_id from part.answer_refs to identify the affected target.
 For funded steps with required_conditions, supply condition_results keyed by step ID: one boolean per
 condition in its frozen order. True means credit is allowed by that clause (e.g. the required unit
@@ -195,7 +197,8 @@ use rule_id='alternative'. Do not mix the normal and alternative deductions.
 For an attempted but incorrect single judgment, use incorrect; for an omitted part use unanswered.
 For complete work on a single-step part the part's located evidence is sufficient; leave steps empty
 or supply the one named earned step. For unrelated, unanswered or uncertain parts omit steps and errors.
-For incorrect work on a points route omit steps or list missed steps. For partial or incorrect work on
+On a points route, use partial if any step earns credit even when the final conclusion is wrong.
+For incorrect work on that route omit steps or list missed steps. For partial or incorrect work on
 a deduction route (including an applicable alternative deduction), supply the located independent errors.
 Use each frozen follow_through_pts exactly; no run-level preference overrides it. Independently earned steps still count. An unresolved judgment
 needs teacher review. For complete work return no errors and satisfy all applicable steps.
@@ -439,14 +442,15 @@ def settle_parts(rules, decisions, answer, question, *, require_specific_reasons
                 credit = _amount(step.total_pts)
                 if awarded.outcome == "follow_through":
                     origin = _student_span(answer, awarded.error_source)
-                    downstream = support(awarded.evidence)
-                    if (
-                        not origin
-                        or _span_identity(origin) not in verified_errors
-                        or origin.end > min(span.start for span in downstream)
-                    ):
+                    origin_id = _span_identity(origin) if origin else None
+                    # A citation can repeat its premise alongside the later work.
+                    downstream = [span for span in support(awarded.evidence) if _span_identity(span) != origin_id]
+                    if (not origin or origin_id not in verified_errors or not downstream
+                            or origin.end > min(span.start for span in downstream)):
                         raise ValueError(
-                            f"{step.id}: cite a distinct earlier error and the sound dependent work."
+                            f"{step.id}: cite a distinct earlier error and the sound dependent work. "
+                            "On one line, quote the same erroneous excerpt in the missed step and error_source, "
+                            "then quote only the later dependent work in this step's evidence."
                         )
                     credit = step.follow_through_award(ai_default=rules.rubric_origin == "ai")
                 elif awarded.outcome == "missed":

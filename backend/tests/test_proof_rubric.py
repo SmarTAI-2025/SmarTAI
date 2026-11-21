@@ -188,6 +188,22 @@ async def test_retry_requests_only_failed_rubric_with_existing_reference_and_rea
 
 
 @pytest.mark.asyncio
+async def test_result_only_audit_receives_part_label_and_adopted_answer_references():
+    raw = rubric().model_dump(mode="json")
+    raw["answer_segments"] = [{"id": "result", "text": "n - 1", "origin": "ai"}]
+    raw["parts"][0].update(label="(a)", answer_refs=["result"], steps=[
+        {"id": "s1", "criterion": "Give the equivalent result for this part.", "total_pts": 10}])
+    provider = Provider([audit()])
+    result = await proof.prepare_proof_steps(provider, "Calculate (a).", PartRubric.model_validate(raw),
+                                             reference_answer="(a) n - 1", language="en")
+    request = json.loads(provider.calls[0][-1].content)
+    assert request["source"]["parts"][0]["label"] == "(a)"
+    assert request["proposal"][0]["answer_refs"] == ["result"]
+    assert request["source"]["answer_segments"] == raw["answer_segments"]
+    assert result.parts[0].steps[0].total_pts == 10
+
+
+@pytest.mark.asyncio
 async def test_audit_cannot_change_the_ledger_or_approve_a_foreign_part():
     rules = rubric()
     before = rules.model_dump_json()

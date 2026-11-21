@@ -247,6 +247,45 @@ async def test_non_question_pdf_sources_enumerate_every_page_and_emit_saved_page
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovery", ["success", "still_truncated", "uncertain", "exhausted", "resume"])
+async def test_submission_truncation_rereads_only_the_confirmed_failed_page(recovery):
+    calls = []
+    async def run(scoped, *args, **kwargs):
+        page = scoped.pages[0]
+        longer = scoped.policy.version == "submission-truncated-page-v1"
+        calls.append((page, longer))
+        row = fake_result([page])
+        if page == 2 and (not longer or recovery == "still_truncated"):
+            row.assembly.document.pages = []
+            row.assembly.document.coverage.processed_pages = []
+            row.assembly.document.coverage.failed_pages = [2]
+            row.assembly.raw.read_batch.units = [SimpleNamespace(page_numbers=[2],
+                candidate=SimpleNamespace(status="ok", safe_error_code=None, finish_reason="length"),
+                submission_may_exist=recovery == "uncertain")]
+            if recovery == "uncertain":
+                row.safe_error_code = "provider_submit_uncertain"
+        return row
+    saved = {"patch": 0, "empty_recovery": 2 if recovery in {"exhausted", "resume"} else 0}
+    if recovery == "resume":
+        saved["truncated_pages"] = [2]
+    service = SimpleNamespace(run=run, saved_page_extras=AsyncMock(return_value=saved))
+    _, summary = await read_question_pdf_batches(service=service, request=request(b"pdf").model_copy(
+        update={"purpose": "submissions"}), content=b"pdf", engine=SimpleNamespace(), total_pages=2,
+        reporter=ProgressReporter("truncated-page"), allow_partial=True, on_pages=AsyncMock())
+    assert calls.count((1, False)) == calls.count((2, False)) == 1
+    assert (1, True) not in calls
+    assert calls.count((2, True)) == int(recovery in {"success", "still_truncated", "resume"})
+    if recovery in {"success", "resume"}:
+        assert summary["coverage"]["processed_pages"] == [1, 2]
+        assert not summary["error_code"]
+    else:
+        code = "provider_submit_uncertain" if recovery == "uncertain" else "submission_page_output_truncated"
+        assert summary["error_code"] == code
+        if recovery != "uncertain":
+            assert summary["page_diagnostics"]["page_errors"] == [{"page": 2, "error_code": code, "status_code": None}]
+
+
+@pytest.mark.asyncio
 async def test_deferred_pages_get_smaller_batches_without_repeating_processed_pages():
     calls = []
     async def run(scoped, *_args, **_kwargs):

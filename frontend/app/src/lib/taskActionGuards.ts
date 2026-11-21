@@ -1,4 +1,4 @@
-import { programmingArchiveGuidance, truncatedLocatorCopy } from "@/lib/submissionSourceOutcomes";
+import { invalidSubmissionCopy, programmingArchiveGuidance, truncatedLocatorCopy, truncatedSubmissionPageCopy } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
@@ -224,6 +224,7 @@ export interface RecoverableErrorContext {
   returnTo?: string;
   providerFailures?: ProviderFailure[];
   savedStems?: number;
+  submissionSources?: Task["submission_sources"];
 }
 
 const BYOK_CODES = new Set([
@@ -349,6 +350,19 @@ export function classifyRecoverableError(
       actionLabel: tx(locale, "修改资料范围", "Edit source scope"),
       actionKind: "reselect", actionHref: taskHref("/upload/problems"),
       tone: "warning", technicalDetails,
+    };
+  }
+
+  if (code === "question_rubric_review_failed" || code === "question_materials_not_generated") {
+    const rejected = code === "question_rubric_review_failed";
+    return {
+      title: rejected ? tx(locale, "评分标准未通过复核", "Scoring criteria did not pass review")
+        : tx(locale, "标答和评分标准未生成", "Reference answer and rubric were not generated"),
+      description: rejected
+        ? tx(locale, "部分评分项经自动修复后仍有问题。可重试未完成项，或打开已保存的草稿查看具体原因。", "Some scoring items still need correction after automatic repair. Retry incomplete items or open the saved draft to see the findings.")
+        : tx(locale, "自动重试后仍缺少可用的标答和评分标准。可重试未完成项，或人工补齐。", "Automatic retries did not produce a usable reference answer or rubric. Retry incomplete items or complete the missing materials manually."),
+      actionLabel: tx(locale, "重试未完成项", "Retry incomplete items"),
+      actionKind: "retry", tone: "danger", technicalDetails,
     };
   }
 
@@ -910,6 +924,12 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "submission_page_output_truncated") {
+    const copy = truncatedSubmissionPageCopy(locale);
+    return { title: copy.title, description: [copy.description, copy.nextStep].join(locale === "zh-CN" ? "" : " "),
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"), actionKind: "retry", tone: "warning", technicalDetails };
+  }
+
   if (code === "scan_response_truncated") {
     const { title, description, nextStep } = truncatedLocatorCopy(locale);
     const count = context.savedStems;
@@ -1113,13 +1133,12 @@ export function classifyRecoverableError(
   }
 
   if (code === "submission_parse_invalid") {
+    const failed = context.submissionSources?.filter(source => source.status === "failed"
+      && (!context.jobId || source.job_id === context.jobId));
+    const source = failed?.length === 1 && failed[0].reason_code === code ? failed[0] : undefined;
+    const { title, description } = invalidSubmissionCopy(locale, source);
     return {
-      title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
-      description: tx(
-        locale,
-        "未能完整识别学生信息与作答，请重试或更换模型。",
-        "Could not recognize all student details and answers. Retry or choose another model.",
-      ),
+      title, description,
       actionLabel: tx(locale, "重新尝试", "Try again"),
       actionKind: "retry",
       tone: "danger",
