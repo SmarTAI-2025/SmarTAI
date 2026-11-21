@@ -151,6 +151,53 @@ def test_page_gap_excludes_only_a_matching_standalone_page_number_from_the_tail(
         assert page_gap_review_flags({1: start + tail}, [2], {}, [answer]) == {}
 
 
+def test_page_gap_excludes_only_a_matching_standalone_page_number_from_the_start():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    answer = {"q_id": "q2", "content": "The proof resumes here."}
+    aliases = {"q2": ["2"]}
+    body = "2. The proof resumes here."
+    expected = {"q2": ["recognition_boundary_previous_page_failed"]}
+    for header in ("Page 2", "- 2 -", "第 2 页"):
+        page = f"\n {header}\r\n{body}"
+        assert page_gap_review_flags({2: page}, [1], {}, [answer], aliases) == expected
+        with_header = {**answer, "content": header + "\n" + body}
+        assert page_gap_review_flags({2: page}, [1], {}, [with_header], aliases) == expected
+        assert page_gap_review_flags({2: page}, [1], {}, [{**answer, "content": header}], aliases) == {}
+    for prefix in ("Page 1\n", "Page 2 ", "Page 2\nUnmatched earlier work.\n"):
+        assert page_gap_review_flags({2: prefix + body}, [1], {}, [answer], aliases) == {}
+    assert page_gap_review_flags({2: "Page 2", 3: body}, [1], {}, [
+        {**answer, "content": "Page 2\n" + body},
+    ], aliases) == {}
+
+
+def test_short_answer_can_equal_a_verified_page_number():
+    from backend.services.submission_incremental import NEXT_PAGE_FAILED, PREVIOUS_PAGE_FAILED, page_gap_review_flags
+
+    def flags(text, failed_pages):
+        return page_gap_review_flags({2: text}, failed_pages, {}, [{"q_id": "q1", "content": "2"}])
+
+    assert flags("Page 2\n2", [1]) == {"q1": [PREVIOUS_PAGE_FAILED]}
+    assert flags("2\n第 2 页", [3]) == {"q1": [NEXT_PAGE_FAILED]}
+    assert flags("Page 2\n2\n第 2 页", [1, 3]) == {"q1": [NEXT_PAGE_FAILED, PREVIOUS_PAGE_FAILED]}
+    assert flags("Page 2\n2\n2", [1]) == {}
+    assert flags("2\n2\n第 2 页", [3]) == {}
+    assert flags("Page 2", [1, 3]) == {}
+    assert flags("Page 3\n2", [1]) == {}
+
+
+def test_page_number_header_preserves_explicit_first_heading_evidence():
+    from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
+
+    pages = {2: "Page 2\nQuestion 2: The original proof.\nQuestion 3: A separate answer."}
+    problems = {"q2": {"number": "2"}, "q3": {"number": "3"}}
+    _, _, headings = answer_boundaries_on_read_pages(pages, problems, {"failed_pages": [1], "total_pages": 2})
+    answers = [{"q_id": "q2", "content": "Reformatted proof text."}]
+    assert page_gap_review_flags(pages, [1], headings, answers) == {
+        "q2": ["recognition_boundary_previous_page_failed"],
+    }
+
+
 def test_matched_fragments_can_bound_the_same_answer_on_both_sides_of_a_failed_page():
     from backend.services.submission_incremental import page_gap_review_flags
 
