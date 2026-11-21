@@ -100,6 +100,53 @@ async def test_generated_partial_values_survive_exhausted_retry_and_publish_for_
     assert saved["reference_answer"] == "A correct answer."
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("switch_model", [False, True])
+async def test_retry_of_teacher_rubric_recompiles_and_clears_old_review_issue(monkeypatch, switch_model):
+    from backend.agents import incremental_question_preparation as inc
+    from backend.api import task_preparation as api
+    from backend.db import workflow_repository
+    from backend.services import rubric_drafts, task_facade
+    from backend.tests.test_incremental_question_preparation import setup, persisted, mock_supplied_rule_interpretation
+    from backend.tests.test_question_preparation_recovery import _claim, _RecoveryRegistry
+
+    owner, task, first, _ = await setup(monkeypatch)
+    teacher = make_row("A correct explanation earns full credit.")
+    extract = AsyncMock(return_value=inc._rows([teacher]))
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    raw = proposed()
+    raw["parts"][0]["steps"][1].pop("total_pts")
+    async def invalid(problem, *_args, **_kwargs):
+        raise ValidationError("Incomplete rules.", code="invalid_structured_rubric",
+            details={"rubric_review_draft": review_extraction({"part_rubric": raw}, problem)})
+    monkeypatch.setattr(rubric_drafts, "compile_parts_draft", invalid)
+    await api.run_durable_question_preparation(first)
+    failed, partial = persisted(owner, first)
+    assert failed.status == "error"
+    assert any(i.get("details", {}).get("rubric_review_draft") for i in partial["q1"]["preparation_issues"])
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    registry = _RecoveryRegistry("new-model" if switch_model else "test-model")
+    monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+    retry = await api.retry_question_preparation(task_id=task, job_id=first.operation_id,
+        request=api.RetryQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision,
+            use_current_configuration=switch_model), background_tasks=None, current=SimpleNamespace(id=owner), registry=registry)
+    mock_supplied_rule_interpretation(monkeypatch)
+    compile_rule = AsyncMock(wraps=rubric_drafts.compile_parts_draft)
+    monkeypatch.setattr(rubric_drafts, "compile_parts_draft", compile_rule)
+    retried = _claim(owner, retry["job_id"], "rubric-retry")
+    await api.run_durable_question_preparation(retried)
+    done, rows = persisted(owner, retried)
+    assert done.status == "done", done.error_code
+    assert not done.checkpoint["incremental_incomplete_units"]
+    extract.assert_awaited_once()
+    compile_rule.assert_awaited_once()
+    assert saved_draft(rows["q1"]) and rows["q1"]["criterion"] == teacher["criterion"]
+    assert not any(i.get("details", {}).get("rubric_review_draft") for i in rows["q1"]["preparation_issues"])
+    view = task_facade.get_task(task_id=task, owner_id=owner)["problem_data"]["q1"]
+    assert view["rubric_confirmation_required"] is False
+    assert not any(i["severity"] == "blocking" and i["status"] == "open" for i in view["preparation_issues"])
+
+
 def test_first_manual_rubric_must_compile_before_confirmation_and_next_stage(monkeypatch):
     from backend.tests.test_frozen_part_rubric import _persist_method_question
     from backend.db import assignment_repository
@@ -122,6 +169,8 @@ def test_first_manual_rubric_must_compile_before_confirmation_and_next_stage(mon
     task_facade.update_problem(**args, patch={"criterion": before.criterion})
     draft = record()
     assert draft.criterion == before.criterion
+    view = task_facade.get_task(task_id=args["task_id"], owner_id=args["owner_id"])
+    assert view["problem_data"]["q1"]["rubric_confirmation_required"] is True
     assert task_facade._question_review_blockers([draft]) == ["question_review_blocked"]
     with pytest.raises(ValidationError) as failure:
         task_facade.update_problem(**args, patch={"review_status": "confirmed"})
@@ -136,6 +185,7 @@ def test_first_manual_rubric_must_compile_before_confirmation_and_next_stage(mon
     monkeypatch.setattr(task_facade, "_compile_review_edit", compile_current)
     result = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
     assert result["problem"]["review_status"] == "confirmed" and len(calls) == 1
+    assert result["problem"]["rubric_confirmation_required"] is False
     assert saved_draft(problem_from_question(record())) is not None
     assert task_facade._question_review_blockers([record()]) == []
     task_facade.update_problem(**args, patch={"review_status": "confirmed"})

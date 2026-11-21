@@ -31,7 +31,9 @@ from backend.agents.question_preparation_agent import (
 from backend.config import settings
 from backend.domain.errors import ValidationError, LeaseLost, RecognitionError
 from backend.models import TestCase, is_programming_question_type
-from backend.services.programming_test_contract import literal_programming_case_groups
+from backend.services.programming_test_contract import (
+    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups,
+)
 from backend.services.background_errors import classify_background_error
 from backend.services.question_preparation_artifacts import (
     QUESTIONS_EXTRACTED_STAGE, read_base_preparation_artifact, save_base_preparation_artifact,
@@ -127,6 +129,101 @@ def _missing_targets(row):
             if not row.get(target["target"])]
 
 
+def _incomplete_stem(row):
+    return not str(row.get("stem") or "").strip() or any(
+        issue.get("field") == "stem" and issue.get("code") == "recognition_partial"
+        and issue.get("status") != "resolved" and (issue.get("severity") == "blocking" or
+                                                   (issue.get("details") or {}).get("incomplete") is True)
+        for issue in map(normalize_formula_issue, row.get("preparation_issues", [])))
+
+
+_INCOMPLETE_STEM_FEEDBACK = "The previous extraction left a question incomplete. Check its opening, conditions and ending."
+
+
+def _merge_extraction_retry(previous, fresh, *, full_response, source_text):
+    """Replace repaired fragments, keeping verified siblings and omitted evidence."""
+    if not previous:
+        return fresh
+
+    def number(row):
+        return normalize_question_number(row.get("number"))
+
+    def repaired(old, new):
+        row = {**new, **{field: old[field] for field in ("criterion", "reference_answer")
+                         if old.get(field) and not new.get(field)}}
+        if not (is_programming_question_type(old.get("type")) and is_programming_question_type(row.get("type"))):
+            return row
+        code = old.get("solution_code")
+        if not row.get("solution_code") and code and code in source_text:
+            row["solution_code"] = code
+        if not row.get("test_cases") and old.get("test_cases"):
+            cases = [case for case in old["test_cases"] if case.get("source") == "teacher"
+                     and _saved_test_case_supported(case, "", source_text, question_number=row.get("number"))]
+            if cases:
+                try:
+                    verified = adapt_programming_cases(row["stem"], cases)
+                except ProgrammingCaseError:
+                    return row  # The recovered stem can specify a different execution interface.
+                row["test_cases"] = [case.model_dump(exclude_unset=True) for case in verified]
+        return row
+
+    result = list(previous.values())
+    incoming = list(fresh.values())
+    old_counts = Counter(map(number, result))
+    new_counts = Counter(map(number, incoming))
+
+    def compatible(old_label, new_label):
+        if old_label == new_label:
+            return True
+        if not old_label:
+            return new_label not in old_counts
+        return not new_label and old_label not in new_counts
+
+    unmatched = []
+    # Account for verified questions first. A fragment like "x" can also
+    # occur verbatim inside a sibling that the model repeats on the reread.
+    for index in sorted(range(len(result)), key=lambda i: _incomplete_stem(result[i])):
+        old = result[index]
+        label = number(old)
+        matches = [item for item in incoming if item.get("stem") == old.get("stem")
+                   and compatible(label, number(item))]
+        old_stem = str(old.get("stem") or "").strip()
+        if not matches and old_stem and _incomplete_stem(old):
+            matches = [item for item in incoming if old_stem in str(item.get("stem") or "")
+                       and compatible(label, number(item))]
+        if len(matches) != 1 and label and old_counts[label] == new_counts[label] == 1:
+            matches = [item for item in incoming if number(item) == label and
+                       (_incomplete_stem(old) or old_stem in str(item.get("stem") or ""))]
+        if len(matches) != 1:
+            unmatched.append(index)
+            continue
+        replacement = matches[0]
+        incoming.remove(replacement)
+        fresh_stem = str(replacement.get("stem") or "").strip()
+        if fresh_stem and (_incomplete_stem(old) or (
+                not _incomplete_stem(replacement) and old_stem != fresh_stem and old_stem in fresh_stem)):
+            result[index] = repaired(old, replacement)
+    if len(unmatched) == len(incoming) == 1:
+        # Other questions are accounted for. A reread can correct both the
+        # wording and the absent number of the remaining single fragment.
+        index, replacement = unmatched[0], incoming[0]
+        old = result[index]
+        if (_incomplete_stem(old) and replacement.get("stem") and not (number(old) and number(replacement))
+                and compatible(number(old), number(replacement))):
+            result[index] = repaired(old, incoming.pop())
+    elif (full_response and len(unmatched) > 1 and len(unmatched) == len(incoming)
+          and all(not _incomplete_stem(item) for item in incoming)):
+        # A full reread can replace an entire set of anonymous fragments. Do
+        # not attach any old teacher material to an unverified identity.
+        if all(_incomplete_stem(result[i]) and not number(result[i]) and not any(
+                result[i].get(field) for field in ("criterion", "reference_answer", "test_cases", "solution_code"))
+                for i in unmatched):
+            for index, replacement in zip(unmatched, incoming):
+                result[index] = replacement
+            incoming.clear()
+    return _rows([*result, *incoming])
+
+
 def _material_identity(row):
     return _digest({name: row.get(name) for name in (
         "number", "criterion", "reference_answer", "test_cases", "material_provenance",
@@ -158,6 +255,7 @@ class IncrementalQuestionPreparation:
         self.concurrency = _major_question_generation_concurrency(provider) if provider else 4
         self.gate = asyncio.Semaphore(self.concurrency)
         self.units = {}
+        self.reusable_empty_chunks = set()
         self.refs = dict(operation.checkpoint_data.get("incremental_unit_artifacts") or {})
         self.incomplete_units = set(operation.checkpoint_data.get("incremental_incomplete_units") or [])
         self.repair_feedback = deepcopy(operation.checkpoint_data.get("material_repair_feedback") or {})
@@ -199,11 +297,17 @@ class IncrementalQuestionPreparation:
                 source_content_hashes=payload["source_content_hashes"], source_text_hashes=payload["source_text_hashes"])
             if self.operation.checkpoint_data.get("retry_frozen_contract") != expected:
                 raise ValidationError("Invalid preparation retry lineage.", code="question_preparation_contract_invalid")
-        self.units, self.refs, attempts = await run_in_threadpool(
+        restored = await run_in_threadpool(
             read_incremental_preparation_units, checkpoint=self.operation.checkpoint_data,
             artifact_refs=self.operation.artifact_refs, **self.context)
-        active = set(self.operation.checkpoint_data.get("incremental_inflight_units") or [])
-        active.difference_update(set(self.units) - self.incomplete_units)
+        self.units, self.refs = restored.units, restored.refs
+        self.incomplete_units, active = restored.incomplete, restored.inflight
+        # A page of exposition may legitimately yield no questions. Keep that
+        # result when the same source partition yielded usable material elsewhere.
+        for plan in (self.operation.checkpoint_data.get("incremental_source_plans") or {}).values():
+            keys = plan.get("keys") or []
+            if any(self.units.get(key) for key in keys):
+                self.reusable_empty_chunks.update(key for key in keys if self.units.get(key) == {})
         # If every requested field was safely written, a crash before the final
         # bookkeeping acknowledgement does not make another provider call necessary.
         for row in self.project(generated=False).values():
@@ -212,8 +316,9 @@ class IncrementalQuestionPreparation:
             if all(f"generated:{identity}:{target['target']}" in self.units for target in targets):
                 active.discard("generation:" + identity)
         self.latest = self.project()
-        await self._checkpoint(incremental_unit_artifacts=dict(self.refs), artifact_attempts=attempts,
-            incremental_inflight_units=sorted(active), incremental_saving_units={})
+        await self._checkpoint(incremental_unit_artifacts=dict(self.refs), artifact_attempts=restored.attempts,
+            incremental_inflight_units=sorted(active), incremental_saving_units={},
+            incremental_incomplete_units=sorted(self.incomplete_units))
         if active:
             raise RuntimeError("provider_submit_uncertain")
 
@@ -244,7 +349,7 @@ class IncrementalQuestionPreparation:
             if not old.get("retry_origin_id") or checkpoint.get("retry_origin_copied"):
                 break
             origin_id = old["retry_origin_id"]
-        inherited, inherited_refs, _ = await run_in_threadpool(read_incremental_preparation_units,
+        inherited = await run_in_threadpool(read_incremental_preparation_units,
             checkpoint=checkpoint, artifact_refs=origin.artifact_refs, owner_id=origin.owner_id,
             task_id=origin.assignment_id, operation_id=origin.id, attempt=origin.attempt,
             input_hash=origin.input_hash, provider_record_id=old["recognition_provider_id"])
@@ -255,20 +360,16 @@ class IncrementalQuestionPreparation:
         # Source boundaries are evidence too. Publish them before copying any
         # rows so a stop during the copy cannot turn partial content into a
         # complete question or combine obsolete source partitions.
-        incomplete = set(checkpoint.get("incremental_incomplete_units") or [])
-        self.incomplete_units.update(incomplete)
+        self.incomplete_units.update(inherited.incomplete)
         self.repair_feedback.update(deepcopy(checkpoint.get("material_repair_feedback") or {}))
         await self._checkpoint(material_repair_feedback=deepcopy(self.repair_feedback),
             incremental_source_invalidations=deepcopy(checkpoint.get("incremental_source_invalidations") or {}),
             incremental_source_plans=deepcopy(checkpoint.get("incremental_source_plans") or {}),
             incremental_incomplete_units=sorted(self.incomplete_units))
-        for key, file_id in inherited_refs.items():
-            await self.finish(key, inherited[key], error=ValidationError(
-                "The saved unit still requires repair.", code="recognition_response_invalid")
-                if key in incomplete else None)
+        for key in inherited.refs:
+            await self.finish(key, inherited.units[key], needs_retry=key in inherited.incomplete)
         for key in checkpoint.get("incremental_empty_units") or []:
             self.units.setdefault(key, {})
-        self.incomplete_units.update(checkpoint.get("incremental_incomplete_units") or [])
         await self._checkpoint(retry_origin_copied=origin.id,
             incremental_incomplete_units=sorted(self.incomplete_units),
             incremental_empty_units=[key for key, value in self.units.items() if not value])
@@ -357,8 +458,9 @@ class IncrementalQuestionPreparation:
             for issue in row["preparation_issues"]:
                 issue["q_id"] = q_id
             row["preparation_issues"] = [normalize_formula_issue(issue) for issue in row["preparation_issues"]]
+            source_partial = any(issue["code"] == "recognition_partial" for issue in row["preparation_issues"])
             for field in ("stem", "criterion", "reference_answer"):
-                if field == "reference_answer" and row.get("code_output"):
+                if source_partial or (field == "reference_answer" and row.get("code_output")):
                     continue
                 if not str(row.get(field) or "").strip() and not any(
                     issue.get("field") == _issue_field(field) and issue.get("code") == "generation_failed"
@@ -376,7 +478,7 @@ class IncrementalQuestionPreparation:
                 row["preparation_issues"] = [issue for issue in row["preparation_issues"]
                     if not (issue.get("field") == "programming_tests" and issue.get("code") == "generation_failed")]
                 row["preparation_issues"].append(required_programming_tests_issue(q_id))
-            elif (is_programming_question_type(row.get("type")) and not row.get("test_cases")
+            elif (not source_partial and is_programming_question_type(row.get("type")) and not row.get("test_cases")
                     and not any(issue.get("field") == "programming_tests" for issue in row["preparation_issues"])):
                 row["preparation_issues"].append(_issue(q_id, "programming_tests", "generation_failed", "warning", []))
             if generation_failure:
@@ -547,10 +649,7 @@ class IncrementalQuestionPreparation:
         return {token: plan for token, plan in self._ready_source_plans()
                 if self.roles[token] == "problem" and token in self.completed_sources
                 and not invalid.get(token) and any(self.units[key] for key in plan["keys"])
-                and all(str(row.get("stem") or "").strip()
-                        and not any(issue.get("code") == "recognition_partial"
-                                    for issue in row.get("preparation_issues", []))
-                        for key in plan["keys"] for row in self.units[key].values())}
+                and not any(_incomplete_stem(row) for key in plan["keys"] for row in self.units[key].values())}
 
     def _current_source_units(self):
         """Select a verified partition, never combine completed source versions.
@@ -559,7 +658,7 @@ class IncrementalQuestionPreparation:
         current partition is durable, its keys replace the former partition
         atomically, regardless of shifted chunk positions or repeated numbers.
         """
-        current = {key for key in self.units if key.startswith(("extract:", "material:"))}
+        current = {key for key in self.units.keys() | self.incomplete_units if key.startswith(("extract:", "material:"))}
         for token, plan in self._ready_source_plans():
             current.difference_update(key for key in tuple(current) if key.split(":")[1] == token)
             current.update(plan["keys"])
@@ -598,15 +697,22 @@ class IncrementalQuestionPreparation:
         await self.operation.heartbeat()
         async with self.lock:
             active = list(self.operation.checkpoint_data.get("incremental_inflight_units") or [])
-            await self._checkpoint(incremental_inflight_units=[*active, key])
+            if key in self.units:
+                # The old artifact predates this call and cannot acknowledge it on restart.
+                self.incomplete_units.add(key)
+            await self._checkpoint(incremental_inflight_units=[*active, key],
+                                   incremental_incomplete_units=sorted(self.incomplete_units))
 
-    async def finish(self, key, rows=None, error=None):
+    async def finish(self, key, rows=None, error=None, *, needs_retry=False):
         async with self.lock:
             await self.operation.heartbeat()
             attempts = dict(self.operation.checkpoint_data.get("artifact_attempts") or {})
             if rows:
                 saving = dict(self.operation.checkpoint_data.get("incremental_saving_units") or {})
-                saving[key] = dict(attempt=self.operation.attempt, digest=preparation_snapshot_digest(rows))
+                outcome = "retry" if error is not None or needs_retry else "complete"
+                if error is not None and provider_submission_is_uncertain(error):
+                    outcome = "uncertain"
+                saving[key] = dict(attempt=self.operation.attempt, digest=preparation_snapshot_digest(rows), outcome=outcome)
                 await self._checkpoint(incremental_saving_units=saving)
                 stored = await run_in_threadpool(save_base_preparation_artifact, **self.context,
                     stage=QUESTIONS_EXTRACTED_STAGE, problem_data=rows, snapshot=True,
@@ -619,19 +725,22 @@ class IncrementalQuestionPreparation:
                 attempts[stored.id] = self.operation.attempt
             elif error is None:
                 self.units[key] = {}
+                self.refs.pop(key, None)
             active = list(self.operation.checkpoint_data.get("incremental_inflight_units") or [])
             if error is None or not provider_submission_is_uncertain(error):
                 active = [item for item in active if item != key]
             if error is not None:
                 self.failures[key] = error
-                self.incomplete_units.add(key)
             else:
                 self.failures.pop(key, None)
+            if error is not None or needs_retry:
+                self.incomplete_units.add(key)
+            else:
                 self.incomplete_units.discard(key)
             current = self._current_source_units()
-            for obsolete in list(self.units):
+            for obsolete in self.units.keys() | self.incomplete_units:
                 if obsolete.startswith(("extract:", "material:")) and obsolete not in current:
-                    self.units.pop(obsolete)
+                    self.units.pop(obsolete, None)
                     self.refs.pop(obsolete, None)
                     self.incomplete_units.discard(obsolete)
                     self.failures.pop(obsolete, None)
@@ -866,11 +975,15 @@ class IncrementalQuestionPreparation:
                     # Preserve its rows but keep extraction repairable rather
                     # than caching incomplete coverage as permanent success.
                     for key in planned:
-                        await self.finish(key, error=error)
+                        if key not in self.failures:
+                            await self.finish(key, error=error)
                     raise error
             if draft.role != "problem" and pages and not any(self.units.get(key) for key in planned):
                 raise ValidationError("No teacher material was found in the supplied source.",
                                       code="recognition_response_invalid")
+            source_key = "source:" + draft.source_token
+            if draft.source_token not in self.source_failures and source_key in self.incomplete_units:
+                await self.finish(source_key)
             await self.finish("partition:" + draft.source_token)
         except (asyncio.CancelledError, LeaseLost):
             raise
@@ -901,72 +1014,31 @@ class IncrementalQuestionPreparation:
             wanted = {normalize_question_number(number) for number in self.wanted}
             expected_numbers = [number for number in expected_numbers if normalize_question_number(number) in wanted]
         key = self._chunk_key(draft, text, index, source_context, complete)
-        if key in self.units and key not in self.incomplete_units:
-            await self.schedule_ready()
-            return
+        cached = self.units.get(key)
+        # Older checkpoints recorded semantically incomplete rows as successful.
+        # A known page gap has its own partition key and is repaired by the reader.
+        if cached is not None and key not in self.incomplete_units:
+            partial = kind == "extract" and complete is not False and any(_incomplete_stem(row) for row in cached.values())
+            if not partial and (cached or key in self.reusable_empty_chunks):
+                await self.schedule_ready()
+                return
         try:
             async with self.gate:
                 await self.begin(key)
                 await self.reporter.set_current_step("extracting_questions" if kind == "extract" else "aligning_uploaded_materials",
                     message=f"{draft.filename}: {index + 1}" + (f"/{count}" if count else ""))
                 if kind == "extract":
-                    data = {}
                     if self.ocr_only:
+                        data = {}
                         await extract_problems_from_ocr_markdown(text, data, reporter=self.reporter)
+                        if complete is False:
+                            for row in data.values():
+                                row.setdefault("preparation_issues", []).append(
+                                    _issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token]))
+                        data = _rows(data.values())
                     else:
-                        retained = list(self.units.get(key, {}).values())
-                        with llm_attempt_budget():
-                            for attempt in range(3):
-                                try:
-                                    data = await _extract_problems_call(text, self.provider, reporter=self.reporter,
-                                        structure_mode=draft.structure_mode, extraction_hint=draft.extraction_hint,
-                                        manage_progress_lifecycle=False, allow_empty=True, partial_source=True,
-                                        source_context=source_context)
-                                    for extracted in data.values():
-                                        if any(normalize_question_number(extracted.get(field)) in formula_conflicts
-                                               for field in ("number", "source_display_number") if extracted.get(field)):
-                                            issue = _issue("q1", "stem", "recognition_needs_review", "warning", [draft.source_token])
-                                            issue["details"] = {"reason": "conflicting_printed_formula", "confidence_scope": "question"}
-                                            extracted.setdefault("preparation_issues", []).append(issue)
-                                    if retained:
-                                        data = dedupe_extracted_problems(_rows([*retained, *data.values()]))
-                                    actual = {normalize_question_number(row.get(field))
-                                        for row in data.values() if str(row.get("stem") or "").strip()
-                                        for field in ("number", "source_display_number")}
-                                    if not self.wanted:
-                                        # Optional section display labels must not
-                                        # invalidate the original local headings.
-                                        actual.update(normalize_question_number(match.group(1))
-                                            for row in data.values() if str(row.get("stem") or "").strip()
-                                            if (match := re.fullmatch(r".+?\s+/\s+(\d+(?:\.\d+)*[.、:：]?)", str(row.get("number") or ""))))
-                                    if any(normalize_question_number(number) not in actual for number in expected_numbers):
-                                        error = PartialQuestionExtractionError(data)
-                                        error.code = "question_targets_incomplete"
-                                        raise error
-                                    break
-                                except PartialQuestionExtractionError as exc:
-                                    retained.extend(exc.problems.values())
-                                    saved = []
-                                    for item in retained:
-                                        item = deepcopy(item)
-                                        if item.pop("source_incomplete", False) or complete is False:
-                                            item.setdefault("preparation_issues", []).append(_issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token]))
-                                        saved.append(item)
-                                    data = dedupe_extracted_problems(_rows(saved)) if saved else {}
-                                    await self.finish(key, data, error=exc)
-                                    await self.schedule_ready()
-                                    if attempt == 2:
-                                        if exc.code == "question_targets_incomplete":
-                                            raise ValidationError("Some requested questions were not extracted.",
-                                                code="question_targets_incomplete") from exc
-                                        raise
-                                    await self.begin(key)
-                    items = list(data.values())
-                    for row in items:
-                        incomplete = row.pop("source_incomplete", False) or complete is False
-                        if incomplete:
-                            row.setdefault("preparation_issues", []).append(_issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token]))
-                    data = _rows(items) if items else {}
+                        data = await self._extract_chunk(key, draft, text, complete, source_context,
+                                                         expected_numbers, formula_conflicts)
                 else:
                     accepted = {_material_identity(row): row
                                 for row in self.units.get(key, {}).values()}
@@ -999,8 +1071,64 @@ class IncrementalQuestionPreparation:
         except Exception as exc:
             if kind == "material":
                 self.source_failures.add(draft.source_token)
-            await self.finish(key, error=exc)
+            if self.failures.get(key) is not exc:
+                await self.finish(key, error=exc)
         await self.schedule_ready()
+
+    async def _extract_chunk(self, key, draft, text, complete, source_context, expected_numbers, formula_conflicts):
+        saved = self.units.get(key, {})
+        repair_reason = "Check the questions and required response fields again." if key in self.incomplete_units else ""
+        if any(_incomplete_stem(row) for row in saved.values()):
+            repair_reason = _INCOMPLETE_STEM_FEEDBACK
+        with llm_attempt_budget():
+            for attempt in range(3):
+                error = None
+                try:
+                    fresh = await _extract_problems_call(text, self.provider, reporter=self.reporter,
+                        structure_mode=draft.structure_mode, extraction_hint=draft.extraction_hint,
+                        manage_progress_lifecycle=False, allow_empty=True, partial_source=True,
+                        source_context=source_context, repair_reason=repair_reason)
+                except PartialQuestionExtractionError as exc:
+                    fresh, error = exc.problems, exc
+                items = []
+                for item in fresh.values():
+                    row = deepcopy(item)
+                    if row.pop("source_incomplete", False) or complete is False or not str(row.get("stem") or "").strip():
+                        issue = _issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token])
+                        if complete is not False:
+                            issue["details"]["reason"] = "incomplete_question_text"
+                        row.setdefault("preparation_issues", []).append(issue)
+                    if any(normalize_question_number(row.get(field)) in formula_conflicts
+                           for field in ("number", "source_display_number") if row.get(field)):
+                        issue = _issue("q1", "stem", "recognition_needs_review", "warning", [draft.source_token])
+                        issue["details"] = {"reason": "conflicting_printed_formula", "confidence_scope": "question"}
+                        row.setdefault("preparation_issues", []).append(issue)
+                    items.append(row)
+                saved = _merge_extraction_retry(saved, _rows(items), full_response=error is None, source_text=text)
+                actual = {normalize_question_number(row.get(field))
+                          for row in saved.values() if str(row.get("stem") or "").strip()
+                          for field in ("number", "source_display_number")}
+                if not self.wanted:
+                    # Section-qualified numbers also satisfy their local printed headings.
+                    actual.update(normalize_question_number(match.group(1))
+                                  for row in saved.values() if str(row.get("stem") or "").strip()
+                                  if (match := re.fullmatch(r".+?\s+/\s+(\d+(?:\.\d+)*[.、:：]?)", str(row.get("number") or ""))))
+                missing = [n for n in expected_numbers if normalize_question_number(n) not in actual]
+                if missing:
+                    error = ValidationError("Some requested questions were not extracted.", code="question_targets_incomplete")
+                    repair_reason = "Check the source for these missing printed question labels: " + ", ".join(missing)
+                elif complete is not False and any(_incomplete_stem(row) for row in saved.values()):
+                    error = ValidationError("Some question text is incomplete.", code="question_source_incomplete")
+                    repair_reason = _INCOMPLETE_STEM_FEEDBACK
+                elif error:
+                    repair_reason = "The previous response contained invalid question items. Return each source question in the required format."
+                else:
+                    return saved
+                await self.finish(key, saved, error=error)
+                if attempt == 2:
+                    raise error
+                await self.schedule_ready()
+                await self.begin(key)
 
     async def _material(self, draft, text, *, allow_empty=False):
         target = {"reference_answer": "reference_answer", "rubric": "criterion", "programming_tests": "test_cases"}[draft.role]
@@ -1100,25 +1228,23 @@ class IncrementalQuestionPreparation:
         # their provenance. A new retry worker has no previous call's locals.
         accepted = self.project()
         for q_id, row in self.project(generated=False).items():
+            if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
+                continue
             progress_id = self._generation_progress_id(row)
             await self.reporter.register_question_generation(progress_id, str(row.get("number") or ""))
-            if not str(row.get("stem") or "").strip() or any(issue.get("code") == "recognition_partial" for issue in row.get("preparation_issues", [])):
-                await self.reporter.mark_question_generation_finished(progress_id, succeeded=False,
-                    error_code="question_source_incomplete")
-                continue
             if self.policy.mode == "per_question" and not row.get("max_score_source"):
                 score_rows.append(row)
                 continue
             identity = _base_identity(row)
-            targets = _missing_targets(row)
+            pending = [target for target in _missing_targets(row)
+                       if f"generated:{identity}:{target['target']}" not in self.units]
             failed_roles = {self.roles[token] for token in self.source_failures}
             role_for = {"reference_answer": "reference_answer", "criterion": "rubric", "test_cases": "programming_tests"}
-            targets = [target for target in targets if role_for.get(target["target"]) not in failed_roles
-                       and f"generated:{identity}:{target['target']}" not in self.units]
+            targets = [target for target in pending if role_for.get(target["target"]) not in failed_roles]
             key = "generation:" + identity
             if targets and key not in self.jobs:
                 self.jobs[key] = asyncio.create_task(self._generate(key, identity, accepted[q_id], targets, progress_id=progress_id))
-            elif not targets and key not in self.jobs:
+            elif not pending and key not in self.jobs:
                 await self.reporter.mark_question_generation_finished(progress_id, succeeded=True)
 
         # A natural-language allocation can refer to "the last two questions".
@@ -1302,7 +1428,10 @@ class IncrementalQuestionPreparation:
                 try:
                     draft = await compile_parts_draft(row, self.provider, grading_setup={"feedback_language": self.language, "follow_through_strictness": self.policy.follow_through_strictness})
                     self.repair_feedback.pop(key, None)
-                    await self.finish(key, _rows([{**row, "rubric_draft": draft.model_dump(mode="json")}]))
+                    # The source and field units own their independent issues.
+                    # The successful interpretation supersedes its former review draft.
+                    await self.finish(key, _rows([{**row, "rubric_draft": draft.model_dump(mode="json"),
+                                                   "preparation_issues": []}]))
                 except (asyncio.CancelledError, LeaseLost):
                     raise
                 except Exception as exc:

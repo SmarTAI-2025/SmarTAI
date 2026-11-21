@@ -21,6 +21,7 @@ import { TaskPausedState } from "@/components/tasks/TaskPausedState";
 import { RecognitionActivity, RecognitionRequestStatus } from "@/components/tasks/RecognitionActivity";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { useJobRecoveryError } from "@/hooks/useJobRecoveryError";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { MessageKey } from "@/i18n/messages";
@@ -47,7 +48,6 @@ export function SubmissionRecognitionProgressPage() {
   const retryRecognition = useRetrySubmissionRecognition();
   const manualRecognition = useManuallyCompleteSubmissionRecognition();
   const expertsQuery = useStageProviders();
-  const [retryError, setRetryError] = useState<unknown>(null);
   const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -58,6 +58,7 @@ export function SubmissionRecognitionProgressPage() {
   // can still contain processing/failed files after the polled job has finished.
   const incomplete = submissionRecognitionIncomplete(taskState);
   const failedJobId = taskState?.last_failed_job_id ?? (incomplete ? taskState?.parse_job_id : null);
+  const [retryError, setRetryError] = useJobRecoveryError(taskId, failedJobId);
   const providerId = providerChoice && providerChoice.taskId === taskId ? providerChoice.id : taskState?.submission_recognition_provider_id ?? "";
   const uncertain = taskState?.error === "provider_submit_uncertain" || getAPIErrorCode(retryError) === "provider_submit_uncertain";
   // Use the retry endpoint's classification of errors that need another upload;

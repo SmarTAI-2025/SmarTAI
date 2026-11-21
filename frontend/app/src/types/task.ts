@@ -86,6 +86,7 @@ export interface ProblemInfo {
     code_criterion: string;
   };
   rubric_version?: number;
+  rubric_confirmation_required?: boolean;
   recognition_confidence?: number | null;
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
