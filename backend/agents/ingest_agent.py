@@ -42,9 +42,10 @@ from backend.services.programming_test_contract import (
     ProgrammingCaseError, adapt_programming_cases, has_function_only_contract,
     literal_programming_case_groups, literal_programming_case_pair, required_function_name,
 )
+from backend.services.question_sources import recognition_has_failure
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
-from backend.services.submission_incremental import SOURCE_OPENING_QUOTE_LIMIT, matches_source_opening
+from backend.services.submission_incremental import SOURCE_OPENING_QUOTE_LIMIT, content_failure_flags, matches_source_opening
 from backend.services.submission_source_pipeline import has_partial_page_failure
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
@@ -192,7 +193,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 HW_SYSTEM_PROMPT = """You are a professional AI teaching assistant. Analyze a single student's submission file and complete:
 
-1. **Identity Recognition**: Look for `stu_id` (student ID) and `stu_name` (name) in the **[Student Submission Content]** first. If not found in the content, try to extract them from the **[Filename]**. If you cannot find them in either place, set `stu_name` to "[Unknown Student]" and `stu_id` to the filename.
+1. **Identity Recognition**: For `stu_id` (student ID) and `stu_name` (name), look for each field independently in the **[Filename]** first. Use the **[Student Submission Content]** only if the corresponding field cannot be identified in the filename. Copy each identified value verbatim from its source, preserving characters, spelling, capitalization, internal spaces, punctuation, and leading zeros. Do not translate, transliterate, normalize, correct, infer, or invent either value. If neither source contains the name, set `stu_name` to "[Unknown Student]". If neither source contains the student ID, set `stu_id` to the original filename as a fallback.
 
 2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Preserve the OCR Markdown structure instead of flattening it: keep superscripts, subscripts, fractions, radicals, integral bounds, transposes, and norms as valid LaTeX. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks. Do not introduce hard line breaks inside one equation or sentence. Preserve fenced code and its indentation, using real decoded newlines rather than visible `\\n` text.
 
@@ -350,6 +351,7 @@ async def _extract_problems_call(
     allow_empty: bool = False,
     partial_source: bool = False,
     source_context: str = "",
+    repair_reason: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Run one bounded LLM extraction call on a single chunk of source text.
 
@@ -421,6 +423,8 @@ async def _extract_problems_call(
     recovery_guidance = ("\nThis is incremental extraction from supplied source text. Do not reconstruct missing pages. "
         "Retain every available question fragment, even when incomplete. Add boolean source_incomplete=true "
         "only for a question whose opening, continuation, condition or subpart is missing. "
+        "A self-contained subquestion can be complete without a major question number. Preserve its printed "
+        "label and do not invent missing instructions or infer completeness from numbering alone. "
         "A missing page does not make unrelated complete questions incomplete. "
         "Combine distinct saved fragments only when their question identity is supported; retain alternatives. "
         "Extract questions only from saved problem sources. Supporting material must never fill a missing stem. "
@@ -431,6 +435,8 @@ async def _extract_problems_call(
         "and source=teacher. Never combine values from different examples. "
         "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
+    if repair_reason:
+        user_content += "\n[Extraction retry]\nRe-extract this chunk from the supplied text. " + repair_reason
     if dotted_headers:
         user_content += ("\n[Source heading typography] These spaced headings are ambiguous, not confirmed numbers. "
                      "Use the surrounding source and requested question numbers to distinguish a hierarchical "
@@ -844,12 +850,14 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
         if len(answer["flag"]) > 97:
             answer["flag"] = answer["flag"][:97]
             invalid_fields.append("flag")
-        if "recognition_incomplete" in answer["flag"] and not (
+        if content_failure_flags(answer["flag"]) and not recognition_has_failure(getattr(source, "recognition", None)):
+            invalid_fields.append("content")
+        elif "recognition_incomplete" in answer["flag"] and not (
                 answer["content"].strip() and has_partial_page_failure(getattr(source, "recognition", None))):
             invalid_fields.append("content")
         if invalid_fields:
             answer["flag"] = list(dict.fromkeys([*answer["flag"], "recognition_manual_pending",
-                "recognition_invalid_fields:" + ",".join(invalid_fields)]))
+                "recognition_invalid_fields:" + ",".join(dict.fromkeys(invalid_fields))]))
             invalid_ids.add(q_id)
         if q_id in answers:
             # A duplicate mapping is ambiguous even if both strings are valid.
@@ -943,8 +951,8 @@ async def parse_student_answer_sources(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then the submission content "
-            "only when the filename has no usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)
@@ -1633,8 +1641,8 @@ async def parse_student_answers(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then use submission content "
-            "only when the filename does not contain a usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)

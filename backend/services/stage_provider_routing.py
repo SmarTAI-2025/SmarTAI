@@ -112,6 +112,8 @@ def stage_provider_configuration_fingerprint(
                 ).hexdigest(),
                 "scope": "llm",
             }
+            if config.byok_connection_id is not None:
+                row.update(connection_id=config.byok_connection_id, reasoning_effort=config.reasoning_effort)
         else:
             # Deterministic injected providers used by tests and local E2E do
             # not carry a ProviderConfig. Their redacted registry row remains

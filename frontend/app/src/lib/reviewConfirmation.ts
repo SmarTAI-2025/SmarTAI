@@ -73,6 +73,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string, v
   if (issue.field === "rubric" && (issue.details?.rubric_review_draft || issue.details?.invalid_fields
     || issue.details?.reason === "invalid_structured_rubric")) return view === "detail"
     ? rubricReviewDetail(issue, locale) : locale === "zh-CN" ? "评分标准待补全。" : "Complete the rubric.";
+  if (issue.details?.review_display_reason === "confirm_rubric") return locale === "zh-CN"
+    ? "评分标准文字已保存，请确认本题以生成评分规则。"
+    : "The rubric text is saved. Confirm this question to prepare its grading rules.";
   if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
     ? "请选择题型。" : "Select the question type.";
   if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
@@ -142,6 +145,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string, v
     return zh ? "来源读取失败，请重试或修正原件后继续。"
       : "Source reading failed. Retry or correct the source before continuing.";
   }
+  if (issue.code === "recognition_partial" && issue.details?.reason === "incomplete_question_text") return zh
+    ? "题干可能缺少条件。请补传完整题图，或在人工处理中补齐题干。若是独立小问，请写明作答要求并保存。"
+    : "The question may be missing a condition. Upload the full question or complete its text during manual review. For a standalone subquestion, state what to do and save.";
   if (issue.code === "recognition_partial" && (issue.details?.incomplete === true || issue.severity === "blocking")) return zh
     ? "来源内容不完整，请对照原件补齐。"
     : "Source content is incomplete. Complete it against the original.";
@@ -159,7 +165,7 @@ export function submissionRecognitionIncomplete(task?: Pick<Task, "submission_so
     || task?.submission_sources?.some(source => source.status === "failed" || source.status === "processing"));
 }
 export function questionReviewConfirmed(problem: ProblemInfo): boolean {
-  return problem.review_status === "confirmed" && !questionReviewBlocked(problem) &&
+  return problem.review_status === "confirmed" && !problem.rubric_confirmation_required && !questionReviewBlocked(problem) &&
     problem.max_score_review_status === "confirmed" &&
     !(problem.preparation_issues ?? []).some(issue => issue.status === "open" && issue.code !== "math_rubric_advisory");
 }
@@ -183,8 +189,9 @@ function manualQuestionFieldsMissing(issue: PreparationIssue, problem: ProblemIn
     : (field === "number" || field === "stem" || field === "criterion") && !problem[field]?.trim());
 }
 
-export function questionReviewNextBlocked(problem: ProblemInfo): boolean {
-  return questionReviewIssues(problem).some(issue => issue.severity === "blocking");
+export function questionReviewNextBlocked(problem: ProblemInfo, { confirming = false } = {}): boolean {
+  return questionReviewIssues(problem).some(issue => issue.severity === "blocking"
+    && !(confirming && issue.details?.review_display_reason === "confirm_rubric"));
 }
 
 export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
@@ -209,6 +216,8 @@ export function questionReviewIssues(problem: ProblemInfo): PreparationIssue[] {
   if (!problem.stem?.trim()) add("stem", "parse_anomaly", "empty_stem");
   if (!problem.criterion?.trim()) add("rubric", "manual_completion_required", "missing_rubric");
   if (problem.rubric_point_summary?.is_valid === false) add("rubric", "rubric_step_reference_conflict", "rubric_conflict");
+  if (problem.rubric_confirmation_required && problem.criterion?.trim())
+    add("rubric", "manual_completion_required", "confirm_rubric");
   if (!confirmed && !problem.reference_answer?.trim()) add("answer", "generation_failed", "missing_answer", "warning");
   if (!confirmed && isProgrammingProblem(problem) && !problem.test_cases?.length) {
     if (!issues.some(issue => issue.field === "programming_tests")) {
@@ -236,7 +245,7 @@ export function questionReviewNotes(problem: ProblemInfo, locale: string, fallba
     && !issue.details?.rubric_review_draft && !issue.details?.invalid_fields
     && ((issue.field === "rubric" && !problem.criterion?.trim()) || (issue.field === "stem" && !problem.stem?.trim())
       || (issue.field === "answer" && answerMissing))))
-    .filter(issue => !((names.length || answerMissing) && (issue.code === "manual_completion_required"
+    .filter(issue => !((names.length || answerMissing) && ((issue.code === "manual_completion_required" && issue.details?.review_display_reason !== "confirm_rubric")
     || ["missing_number", "missing_type", "empty_stem", "missing_rubric", "missing_answer"].includes(String(issue.details?.review_display_reason)))))
     .map(issue => {
       const rubricMessage = view === "detail" && issue.code === "math_rubric_advisory" && issue.details?.reason === "teacher_rule_interpretation"

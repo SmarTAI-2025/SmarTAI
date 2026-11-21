@@ -17,6 +17,19 @@ describe("review hard failures", () => {
       provider_http_status: 503 } }, "zh-CN", "detail")).toContain("模型服务暂时不可用（HTTP 503）。");
   });
 
+  it.each(["edited", "confirmed"] as const)("requires a grading-ready rubric for upload and still allows confirmation (%s)", review_status => {
+    const row = question({ review_status, criterion: "Saved teacher text.", reference_answer: "", rubric_confirmation_required: true });
+    expect(questionReviewBlockers([row], "task", "zh-CN")).toContainEqual({
+      label: expect.stringContaining("评分标准文字已保存，请确认本题以生成评分规则。"),
+      href: "/tasks/task/questions/q1/content#question-q1",
+    });
+    expect(questionReviewConfirmed(row)).toBe(false);
+    expect(questionReviewNextBlocked(row)).toBe(true);
+    expect(questionReviewNextBlocked(row, { confirming: true })).toBe(false);
+    expect(questionReviewBlocked(row)).toBe(false);
+    expect(questionReviewBlockers([{ ...row, rubric_confirmation_required: false }], "task", "en-US")).toEqual([]);
+  });
+
   it("keeps missing funded tests blocking and visible even on a previously confirmed question", () => {
     const required = issue({ field: "programming_tests", code: "generation_failed", severity: "blocking",
       details: { reason: "required_programming_tests_missing" } });

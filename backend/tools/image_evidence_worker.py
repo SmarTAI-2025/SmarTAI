@@ -9,7 +9,7 @@ import math
 import warnings
 
 MAX_INPUT_BYTES = 10 * 1024 * 1024
-MAX_PIXELS = 16_000_000
+MAX_PIXELS = 30_000_000
 MAX_SIDE = 8192
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 FORMATS = {"image/jpeg": "JPEG", "image/png": "PNG", "image/webp": "WEBP", "image/bmp": "BMP", "image/tiff": "TIFF"}

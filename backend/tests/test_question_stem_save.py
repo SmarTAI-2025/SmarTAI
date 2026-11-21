@@ -153,6 +153,41 @@ async def test_failure_leaves_all_fields_and_explicit_retry_is_idempotent(edit, 
 
 
 @pytest.mark.asyncio
+async def test_linked_save_clears_preparation_failure_only_after_valid_rules(edit, monkeypatch):
+    owner, task, _, client = edit
+    question = current(edit)
+    source = question.source
+    source["presentation"]["preparation_issues"] = [{
+        "issue_id": "failed-rubric", "q_id": "q1", "field": "rubric", "code": "generation_failed",
+        "status": "open", "severity": "blocking", "source_tokens": [],
+        "details": {"target": "criterion", "reason": "invalid_structured_rubric"},
+    }, {
+        "issue_id": "failed-answer", "q_id": "q1", "field": "answer", "code": "generation_failed",
+        "status": "open", "severity": "warning", "source_tokens": [], "details": {"target": "reference_answer"},
+    }, {
+        "issue_id": "review-source", "q_id": "q1", "field": "source", "code": "low_confidence",
+        "status": "open", "severity": "warning", "source_tokens": [], "details": {"confidence": 0.4},
+    }]
+    assignment_repository.update_question(task, teacher_id=owner, q_id="q1",
+        expected_version=question.version, reference_answer=ANSWER, source=source)
+    assert "question_review_blocked" in task_facade._question_review_blockers([current(edit)])
+    receipt = submit(edit)
+    await run_once(worker(monkeypatch, None))
+    assert status(edit)["status"] == "error"
+    assert "question_review_blocked" in task_facade._question_review_blockers([current(edit)])
+    submit(edit, retry_of=receipt["id"])
+    await run_once(worker(monkeypatch, Provider([response()])))
+    assert status(edit)["status"] == "done"
+    assert saved_draft(problem_from_question(current(edit))) is not None
+    visible = client.get(f"/tasks/{task}").json()["problem_data"]["q1"]
+    assert visible["rubric_confirmation_required"] is False
+    assert any(i["issue_id"] == "review-source" and i["status"] == "open" for i in visible["preparation_issues"])
+    assert not any(i["issue_id"] in {"failed-rubric", "failed-answer"} and i["status"] == "open"
+                   for i in visible["preparation_issues"])
+    assert task_facade._question_review_blockers([current(edit)]) == []
+
+
+@pytest.mark.asyncio
 async def test_concurrent_teacher_edit_prevents_late_model_overwrite(edit, monkeypatch):
     owner, task, revision, _ = edit
     original = current(edit)

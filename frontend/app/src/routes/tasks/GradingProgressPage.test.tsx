@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { APIError } from "@/api/client";
@@ -267,6 +267,28 @@ describe("GradingProgressPage completion routing", () => {
     renderProgress();
     expect(screen.getByRole("combobox", { name: "Grading retry model" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Retry failed items" })).toBeEnabled();
+  });
+
+  it("starts a new retry intent when polling finds a different failed grading run", async () => {
+    let runId = "first-failure";
+    const submit = vi.fn().mockRejectedValue(new Error("Connection lost"));
+    vi.mocked(useStartGrading).mockReturnValue({ mutateAsync: submit } as unknown as ReturnType<typeof useStartGrading>);
+    vi.mocked(useTaskProgress).mockImplementation(() => ({
+      data: { task_id: "task-1", status: "error", error: "grading_failed", workflow_revision: 8,
+        last_failed_job_id: runId, grading_job_id: runId }, progress: null, percent: 0,
+    } as unknown as ReturnType<typeof useTaskProgress>));
+    const view = renderProgress();
+    const retry = () => act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry failed items" })); });
+    await retry();
+    await retry();
+    expect(submit.mock.calls[1][0].requestId).toBe(submit.mock.calls[0][0].requestId);
+    runId = "second-failure";
+    view.rerender(<MemoryRouter initialEntries={["/tasks/task-1/grading/progress"]}>
+      <Routes><Route path="/tasks/:taskId/grading/progress" element={<GradingProgressPage />} /></Routes>
+    </MemoryRouter>);
+    await retry();
+    expect(submit.mock.calls[2][0].requestId).not.toBe(submit.mock.calls[0][0].requestId);
+    expect(useStartGrading).toHaveBeenLastCalledWith(["task-1", runId]);
   });
 
   it("renders the classified provider cause from the grading run", () => {

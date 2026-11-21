@@ -78,7 +78,9 @@ def target_concurrency(rpm: int, seconds: float) -> int:
 def quota_key(config: Any, endpoint: str) -> str:
     # This digest stays in memory and is never logged or returned to clients.
     # The same credential/model used by different task registries shares RPM.
-    value = "\0".join((endpoint, str(config.provider_type), str(config.model), str(config.api_key)))
+    connection = getattr(config, "byok_connection_id", None)
+    route = f"connection:{connection}" if connection else str(config.model)
+    value = "\0".join((endpoint, str(config.provider_type), route, str(config.api_key)))
     return hashlib.sha256(value.encode()).hexdigest()
 
 

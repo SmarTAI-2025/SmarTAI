@@ -35,6 +35,52 @@ def _setup():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["auto", "same", "switch"])
+@pytest.mark.parametrize("unchanged_text", [False, True])
+async def test_repair_replaces_failed_content_and_invalid_identity(monkeypatch, mode, unchanged_text):
+    owner, task = _setup()
+    calls = []
+    failures = 1 if mode == "auto" else 3
+    def reply(model, messages):
+        ids = [q["q_id"] for q in _questions(messages)]
+        calls.append((model, ids))
+        failed = len(calls) <= failures
+        answers = [_answer(qid, "Verified first answer" if qid == "q1" else "Second answer") for qid in ids]
+        if failed:
+            answers[-1]["flag"] = ["recognition_failed", "recognition_manual_pending"]
+            if not unchanged_text:
+                answers[-1]["content"] = {"malformed": True}
+        return _response(answers, stu_id={"invalid": True} if failed else "S1",
+                         stu_name="Verified name" if failed else "Unrequested rewrite")
+
+    registry = _registry(monkeypatch, lambda messages: reply("test-provider", messages))
+    from unittest.mock import AsyncMock
+    models = {"test-provider": registry.provider, "other-model": SimpleNamespace(provider_id="other-model",
+        supports_vision=False, ainvoke=AsyncMock(side_effect=lambda messages: reply("other-model", messages)))}
+    registry.get = models.get
+    registry.list_configs = lambda: [{"provider_id": key, "enabled": True} for key in models]
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="work.txt",
+        content=b"Work without separate numbered headings.", content_type="text/plain", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    if mode != "auto":
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+        assert before["status"] == "error"
+        queued = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=queued["job_id"],
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"],
+                recognition_provider_id="other-model" if mode == "switch" else "test-provider"),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    assert calls == [("test-provider", ["q1", "q2"])] + [("test-provider", ["q2"])] * (failures - 1) + [
+        ("other-model" if mode == "switch" else "test-provider", ["q2"])]
+    after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    assert after["status"] == "submissions_ready"
+    student = after["student_data"]["S1"]
+    assert student["stu_name"] == "Verified name" and student["identity_status"] == "matched"
+    assert {a["q_id"]: (a["content"], a["flag"]) for a in student["stu_ans"]} == {
+        "q1": ("Verified first answer", []), "q2": ("Second answer", [])}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stop", [False, True])
 @pytest.mark.parametrize("bad_field", ["content", "type"])
 async def test_unlabelled_response_persists_valid_siblings_before_repair_or_manual(monkeypatch, stop, bad_field):

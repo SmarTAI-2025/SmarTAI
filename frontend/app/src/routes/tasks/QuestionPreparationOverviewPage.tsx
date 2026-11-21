@@ -2,7 +2,7 @@ import { questionSaveError } from "@/lib/questionSaveError";
 import { questionIssueCodeLabel as issueCodeLabel } from "@/lib/reviewLabels";
 import { getTaskDestination } from "@/lib/taskFlow";
 import { ReviewQueue as ReviewQueuePanel } from "@/components/tasks/ReviewQueue";
-import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
+import { questionIssueNeedsReview, questionReviewConfirmed, questionReviewIssues, questionReviewNextBlocked, questionReviewNotes, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { MatrixViewLink } from "@/components/tasks/MatrixViewLink";
 import { MatrixQueueWorkspace } from "@/components/tasks/MatrixQueueWorkspace";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
@@ -155,7 +155,7 @@ export function QuestionPreparationOverviewPage() {
         </div> : null}
 
         <MatrixQueueWorkspace className="mt-4" queue={<QuestionReviewQueue confirmation={<ReviewConfirmButton locale={locale} all confirmed={problems.every(questionReviewConfirmed)} busy={confirming || updateProblem.isPending} onClick={async () => {
-              if (await confirm(problems.filter(problem => questionReviewIssues(problem).length > 0 && !questionReviewIssues(problem).some(issue => issue.severity === "blocking") && rows.some(row => row.problem.q_id === problem.q_id)))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
+              if (await confirm(problems.filter(problem => questionReviewIssues(problem).length > 0 && !questionReviewNextBlocked(problem, { confirming: true }) && rows.some(row => row.problem.q_id === problem.q_id)))) toast.success(tx(locale, "题目资料已确认。", "Question materials confirmed."));
             }} />} risks={allRisks.filter(row => rows.some(item => item.problem.q_id === row.problem.q_id))} taskId={taskId ?? ""} locale={locale} />} matrix={<div className="overflow-hidden rounded-[10px] border bg-card">
           {taskQuery.isLoading || readingCompletion ? (
             <div className="min-h-[300px] animate-pulse bg-muted/20" aria-busy="true" />

@@ -1001,7 +1001,7 @@ def _grading_setup_payload(task_id: str, owner_id: str, registry: ExpertRegistry
                 "provider_id", "provider_type", "model", "display_name", "enabled",
                 "scope", "is_shared", "editable", "max_concurrent", "rpm",
                 "verification_status", "base_url", "provider_kind",
-                "credential_id", "supports_vision",
+                "credential_id", "supports_vision", "byok_connection_id", "reasoning_effort",
                 "image_capability_status", "image_checked_at", "image_reason",
             )
         })

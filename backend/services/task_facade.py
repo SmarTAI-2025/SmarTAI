@@ -1077,12 +1077,15 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ).model_dump()
     from backend.services.part_rubric import alternative_text
     from backend.services.rubric_display import rubric_display, alternative_display, show_alternative, alternative_cap_issue
-    from backend.services.math_grading_context import problem_from_question
+    from backend.services.math_grading_context import problem_from_question, uses_math_grading
     from backend.services.rubric_drafts import saved_draft
     programming = is_programming_question_type(question.type)
-    verified = None
-    if (programming or math_plan is None) and presentation.get("rubric_draft"):
-        verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
+    math_question = uses_math_grading(question.type)
+    verified = grading_draft = None
+    if presentation.get("rubric_draft") and (math_question or programming or math_plan is None):
+        problem = problem_from_question(question)
+        grading_draft = saved_draft(problem) if math_question else None
+        verified = grading_draft or saved_draft(problem, allow_incomplete_alternative=True)
         if math_plan is None and verified:
             math_plan = verified.plan
     rubric_draft = presentation.get("rubric_draft")
@@ -1163,6 +1166,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             "rubric_version": math_plan.part_rubric.rubric_version}
            if math_plan and math_plan.part_rubric else {}),
         "rubric_point_summary": rubric_summary,
+        "rubric_confirmation_required": math_question and grading_draft is None,
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
@@ -3349,10 +3353,12 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
         student.pop("recognition", None)
         if current.get("recognition") is not None:
             student["recognition"] = current["recognition"]
-    if result.stable_error_code != "duplicate_student_identity":
-        for field in ("stu_id", "stu_name", "identity_status", "identity_match_method"):
-            if field in previous:
-                student[field] = previous[field]
+    if current and result.stable_error_code != "duplicate_student_identity":
+        from backend.services.submission_incremental import repair_submission_identity
+        identity, remaining = repair_submission_identity(previous, current)
+        student.update(identity)
+        if "recognition" in student or remaining:
+            student["recognition"] = {**student.get("recognition", {}), "identity_invalid_fields": remaining}
     changes = dict(student=student, student_candidate=student["stu_id"],
                    matched_answer_count=sum(not _answer_recognition_failures(answer.get("flag")) for answer in answers))
     if result.status in {"parsed", "identity_conflict"} and any(_answer_recognition_failures(answer.get("flag")) for answer in answers):
@@ -5025,13 +5031,10 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     saved_pairs = set()
     saved_slots = {}
     from backend.services.grading_checkpoints import saved_experts
-    from backend.models import ExpertResult
-    from backend.agents.multi_expert import _is_successful_expert
     for item in saved_experts(run_id, events=events):
-        if _is_successful_expert(ExpertResult.model_validate(item["result"])):
-            pair = (item["student_id"], item["q_id"])
-            saved_pairs.add(pair)
-            saved_slots.setdefault(pair, set()).add((item["provider_id"], item["sample_index"]))
+        pair = (item["student_id"], item["q_id"])
+        saved_pairs.add(pair)
+        saved_slots.setdefault(pair, set()).add((item["provider_id"], item["sample_index"]))
     setup = workflow_repository.get_run_setup(run_id)
     config = TaskGradingSetup.model_validate(setup.setup) if setup else None
     expected_slots = {
@@ -5313,8 +5316,6 @@ def _public_answer_flags(flags, *, content=None, answer_type=None, review_status
 
 
 def _question_review_blockers(questions) -> list[str]:
-    from backend.services.math_grading_context import problem_from_question, uses_math_grading
-    from backend.services.rubric_drafts import saved_draft
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
@@ -5331,7 +5332,7 @@ def _question_review_blockers(questions) -> list[str]:
                     and (issue.get("details") or {}).get("reason") in {
                         "programming_test_award_unset", "required_programming_tests_missing",
                     } for issue in problem["preparation_issues"]))
-                or (uses_math_grading(question.type) and saved_draft(problem_from_question(question)) is None)
+                or problem["rubric_confirmation_required"]
                 or any(question_issue_blocks_progress(issue, presentation)
                        for issue in review_issues if issue.get("code") != "manual_completion_required")):
             issues.append("question_review_blocked")
@@ -5618,7 +5619,7 @@ def start_task_grading(
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
                     and (result.q_id not in sandbox_qids or compatible_programming or result.teacher_review)
-                    and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
+                    and (result.teacher_review or not {"grading_paused", "grading_incomplete"}.intersection(result.initial_review_reasons))]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         # An inherited result keeps the source run's primary expert in review.
