@@ -2263,8 +2263,10 @@ _GENERATED_MATERIAL_GUIDANCE = r"""- reference_answer: a correct model answer or
   that are not needed for the proof and have not been established.
 - Source definitions and displayed relations take precedence over familiar notation. Group,
   matrix, and other symbol conventions vary between textbooks: derive properties from the
-  stated definition rather than importing a convention from memory. If a referenced definition
-  is absent and necessary, omit the affected candidates rather than inventing it. Never make a
+  stated definition rather than importing a convention from memory. A citation to an example
+  does not by itself make the question incomplete. If the stem names a standard construction
+  and its defining properties suffice, use those properties. If the result depends on an
+  unavailable local definition or convention, omit the affected candidates rather than inventing it. Never make a
   scoring criterion demand an unsupported conclusion or one particular valid proof method.
 - For a proof, first derive the minimal argument under exactly the stated hypotheses. Independently
   substitute the proposed witnesses into the ORIGINAL target and simplify both sides in their written

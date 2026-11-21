@@ -745,6 +745,13 @@ def _submission_source_projection(workflow, owner_id: str, *, current_students=N
             "trace_id": f"{operation.id}:{operation.attempt}:{result.source.id}",
             "created_at": outcome.created_at if outcome else result.source.created_at,
         })
+    if operation.operation_type == "submission_recognition" and operation.status == "running":
+        # Archive expansion knows the batch size before individual workers register every member.
+        total = ((operation.progress or {}).get("stage_metrics") or {}).get("files_total")
+        if type(total) is int and total > len(results):
+            waiting = total - len(results)
+            summary["uploaded"] += waiting
+            summary["pending"] += waiting
     return summary, rows
 
 

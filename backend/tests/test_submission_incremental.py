@@ -42,6 +42,27 @@ def _claim(owner, job):
     return LeasedOperation(row, worker_id="test", lease_seconds=60)
 
 
+def test_running_archive_counts_discovered_members_before_registration(monkeypatch):
+    owner, task = _seed_task(with_question=True)
+    registry = _registry(monkeypatch, lambda _: None)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as files:
+        for i in range(12):
+            files.writestr(f"s{i}.txt", "Q1: answer")
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="answers.zip",
+        content=archive.getvalue(), content_type="application/zip", registry=registry)
+    operation = _claim(owner, queued["job_id"])
+    record = workflow_repository.get_operation(operation.operation_id, owner_id=owner)
+    record.progress = {"stage_metrics": {"files_total": 12}}
+    monkeypatch.setattr(workflow_repository, "get_operation", lambda *args, **kwargs: record)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    summary, sources = task_facade._submission_source_projection(workflow, owner)
+    assert len(sources) < 12
+    assert summary == {"uploaded": 12, "pending": 12, "parsed": 0, "failed": 0, "identity_needs_review": 0}
+    record.status = "done"
+    assert task_facade._submission_source_projection(workflow, owner)[0]["pending"] == 0
+
+
 def _saved_signal(monkeypatch):
     saved, loop = asyncio.Event(), asyncio.get_running_loop()
     original = workflow_repository.save_operation_checkpoint

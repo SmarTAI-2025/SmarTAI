@@ -352,6 +352,19 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "question_rubric_review_failed" || code === "question_materials_not_generated") {
+    const rejected = code === "question_rubric_review_failed";
+    return {
+      title: rejected ? tx(locale, "评分标准未通过复核", "Scoring criteria did not pass review")
+        : tx(locale, "标答和评分标准未生成", "Reference answer and rubric were not generated"),
+      description: rejected
+        ? tx(locale, "部分评分项经自动修复后仍有问题。可重试未完成项，或打开已保存的草稿查看具体原因。", "Some scoring items still need correction after automatic repair. Retry incomplete items or open the saved draft to see the findings.")
+        : tx(locale, "自动重试后仍缺少可用的标答和评分标准。可重试未完成项，或人工补齐。", "Automatic retries did not produce a usable reference answer or rubric. Retry incomplete items or complete the rubric manually."),
+      actionLabel: tx(locale, "重试未完成项", "Retry incomplete items"),
+      actionKind: "retry", tone: "danger", technicalDetails,
+    };
+  }
+
   if (code === "question_source_incomplete") {
     return {
       title: tx(locale, "资料尚未完整读取", "Source reading is incomplete"),
