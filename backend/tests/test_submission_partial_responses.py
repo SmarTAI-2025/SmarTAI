@@ -550,7 +550,7 @@ async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatc
     (None, "[Unknown Student]", "001-A", "Li Si", "001-A", "Li Si", True),
     ("work.txt", None, "001-A", "Li Si", "001-A", "Li Si", True),
     ("001-A", None, "work.txt", "Li Si", "001-A", "Li Si", True),
-    ("001-A", "[Unknown Student]", "009-B", "Li Si", "001-A", "[Unknown Student]", False),
+    ("001-A", "[Unknown Student]", "009-B", "Li Si", "001-A", "work.txt", False),
     ("work.txt", "[Unknown Student]", "work.txt", "Li Si", "work.txt", "Li Si", False),
 ])
 async def test_retry_checks_the_identity_actually_saved(

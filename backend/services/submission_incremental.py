@@ -8,20 +8,11 @@ from bisect import bisect_right
 from collections import Counter
 from dataclasses import replace
 
+from backend.services import submission_identity
 from backend.services.programming_submission_mapping import native_source
 from backend.services.question_sources import recognition_has_failure
 from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
 from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
-
-
-def filename_identity_fallbacks(student, filename):
-    """Fields for which the filename-mode parser returned its missing-value sentinel."""
-    missing = set()
-    if str(student.get("stu_id") or "").strip() in {"", filename}:
-        missing.add("stu_id")
-    if str(student.get("stu_name") or "").strip() in {"", "[Unknown Student]"}:
-        missing.add("stu_name")
-    return missing
 
 
 def repair_submission_identity(previous, current):
@@ -36,8 +27,8 @@ def repair_submission_identity(previous, current):
     repaired_fields = invalid - remaining
     if method == "filename":
         filename = previous.get("source_filename") or current.get("source_filename")
-        placeholders = filename_identity_fallbacks(previous, filename)
-        incoming_placeholders = filename_identity_fallbacks(current, filename)
+        placeholders = submission_identity.filename_identity_fallbacks(previous, filename)
+        incoming_placeholders = submission_identity.filename_identity_fallbacks(current, filename)
         repaired_fields |= placeholders - incoming_invalid - incoming_placeholders
         # A name returned for a different identified student cannot fill this record.
         if ("stu_name" in repaired_fields and "stu_id" not in (invalid | placeholders | incoming_invalid | incoming_placeholders)
@@ -49,9 +40,10 @@ def repair_submission_identity(previous, current):
             # A retry may return a fallback for an already verified sibling.
             # An unexplained source-level conflict must still go to the teacher.
             fields_explain_review = bool(incoming_placeholders or incoming_invalid)
-            matched = (not remaining and not filename_identity_fallbacks(identity, filename)
+            matched = (not remaining and not submission_identity.filename_identity_fallbacks(identity, filename)
                        and (current.get("identity_status") == "matched" or fields_explain_review))
             identity["identity_status"] = "matched" if matched else "needs_review"
+            submission_identity.apply_filename_fallbacks(identity, filename)
     elif invalid:
         identity.update({field: current[field] for field in repaired_fields})
         matched = not remaining and current.get("identity_status") == "matched" and method != "manual_review"
