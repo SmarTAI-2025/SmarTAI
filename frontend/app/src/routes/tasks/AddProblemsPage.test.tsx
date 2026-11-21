@@ -188,6 +188,7 @@ describe("AddProblemsPage source limits", () => {
     })) };
     const user = userEvent.setup();
     renderPage();
+    await waitFor(() => expect(screen.getAllByLabelText("题目来源文件上传")).toHaveLength(2));
     await user.click(screen.getByRole("button", { name: /^(直接)?开始准备题目$/ }));
     expect(screen.getByRole("alert")).toHaveTextContent("题目最多保留一份来源");
     expect(screen.getAllByLabelText("题目来源文件上传")).toHaveLength(2);
