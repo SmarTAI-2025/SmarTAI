@@ -488,7 +488,7 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2 max-sm:[&_button]:px-2 max-sm:[&_button]:text-xs! sm:shrink-0">
-          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || "—"} 题`, `Question ${problem.number || "—"}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem)} busy={saving} onClick={() => onConfirm(problem)} />
+          <ReviewConfirmButton title={tx(locale, `第 ${problem.number || "—"} 题`, `Question ${problem.number || "—"}`)} locale={locale} confirmed={questionReviewConfirmed(problem)} blocked={questionReviewNextBlocked(problem, { confirming: true })} busy={saving} onClick={() => onConfirm(problem)} />
           <QuestionNavigator previous={previous} next={next} locale={locale} onNavigate={onNavigate} />
         </div>
       </header>

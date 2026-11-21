@@ -617,6 +617,10 @@ function localizeSubmissionError(
     return localText(locale, "原文件已不可用于直接重试，请重新选择文件。", "The original file is no longer available for direct retry. Select the file again.");
   }
   if (["workflow_busy", "different_submission_running"].includes(code)) return t("submissionUploadBusy");
+  if (["question_review_blocked", "question_manual_completion_required"].includes(code)) {
+    return localText(locale, "请返回「审核题目资料」，补齐并确认题目和评分标准后再上传作答。",
+      "Return to Review Question Materials. Complete and confirm the questions and rubrics before uploading submissions.");
+  }
   if (["invalid_state", "stale_revision", "replacement_confirmation_required"].includes(code)) {
     return t("submissionUploadErrorConflict");
   }

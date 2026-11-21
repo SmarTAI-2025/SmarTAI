@@ -178,6 +178,16 @@ describe("AddSubmissionsPage OCR uploads", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 
+  it("directs a teacher back to question review when the upload is blocked by question materials", async () => {
+    const { container } = renderPage();
+    fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["answer"], "answer.txt")] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValueOnce(new APIError(409, "question_review_blocked", { error: { code: "question_review_blocked" } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    expect(await screen.findByText(/请返回「审核题目资料」/, { selector: "p[role='alert']" })).toBeInTheDocument();
+    expect(screen.getByText("answer.txt")).toBeInTheDocument();
+  });
+
   it("shows the same supported-format guidance when the server rejects a submission", async () => {
     const { container } = renderPage();
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(["synthetic archive"], "answers.zip")] } });
