@@ -40,6 +40,27 @@ def test_an_empty_answer_requires_confirmation_only_when_the_source_contradicts_
     assert result["stu_ans"][1]["content"] == "student work" and not result["stu_ans"][1]["flag"]
 
 
+def test_repair_of_a_doubtful_blank_uses_the_recovered_answers_confidence_and_flags():
+    from backend.agents.ingest_agent import _IndependentStudentSubmission, _independent_submission_payload, SubmissionSourceParseResult
+    from backend.services.submission_incremental import merge_parse_repair
+
+    problems = {"q1": {"number": "1.1.5", "stem": "Does zero have an inverse?"}}
+    source = SimpleNamespace(text="1.1.6. Proof: zero has no inverse.", filename="s.pdf", recognition={"confidence": "medium"})
+
+    def parsed(content, confidence, flags):
+        answer = dict(q_id="q1", number="1.1.5", type="推理题", content=content, recognition_confidence=confidence, flag=flags)
+        raw = _IndependentStudentSubmission(stu_id="s", stu_name="Sample", stu_ans=[answer])
+        student, _ = _independent_submission_payload(raw, source, problems, set(problems))
+        student.update(identity_status="matched", identity_match_method="filename")
+        return SubmissionSourceParseResult("src", "file", "s.pdf", "parsed", student, "s", 1, (), None, None, False)
+
+    old = parsed("", .98, [])
+    recovered = parsed(source.text, .62, ["question_identifier_conflict"])
+    answer = merge_parse_repair(old, recovered, set(problems), problems=problems).student["stu_ans"][0]
+    assert answer["content"] == source.text and answer["recognition_confidence"] == .62
+    assert "question_identifier_conflict" in answer["flag"] and "recognition_incomplete" not in answer["flag"]
+
+
 def _registry(monkeypatch, invoke):
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False,

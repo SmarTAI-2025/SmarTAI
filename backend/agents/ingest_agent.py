@@ -860,6 +860,9 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
         if not answer["content"].strip() and (q_id in doubtful_labels or (
                 unreadable_ocr and answer.get("recognition_confidence") is None)):
             answer["flag"] = ["recognition_incomplete", *answer["flag"]]
+            # Confidence and review flags describe this rejected blank. A
+            # recovered transcription must retain its own confidence and flags.
+            invalid_fields.extend(("flag", "recognition_confidence"))
         if len(answer["flag"]) > 97:
             answer["flag"] = answer["flag"][:97]
             invalid_fields.append("flag")
