@@ -11,7 +11,8 @@ from backend.db.models import ByokConnectionRecord, ProviderConfigRecord
 from backend.db.provider_repository import _prepare_default_for_removal
 from backend.db.session import session_scope
 from backend.llm.concurrency import initial_concurrency
-from backend.llm.model_discovery import ModelCatalog, official_efforts
+from backend.llm.model_discovery import ModelCatalog
+from backend.llm.official_reasoning import manual_model_efforts
 from backend.security.secrets import EncryptedSecret, decrypt_secret, encrypt_secret
 
 
@@ -137,9 +138,9 @@ def bind_model(owner_id: str, connection_id: str, model: str, effort: str | None
         match = next((entry for entry in record.models if entry["id"] == model), None)
         if match is None and record.catalog_status == "ready":
             raise ValueError("byok_model_not_listed")
-        levels = match["reasoning_efforts"] if match else official_efforts(
-            record.provider_type, record.base_url, record.wire_protocol, model,
-        )
+        levels = match["reasoning_efforts"] if match else manual_model_efforts(
+            record.provider_type, record.base_url, record.wire_protocol,
+        ).get(model, ())
         if effort is not None and effort not in levels:
             raise ValueError("byok_effort_unsupported")
         existing = session.get(ProviderConfigRecord, provider_id)

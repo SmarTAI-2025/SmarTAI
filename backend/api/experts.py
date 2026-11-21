@@ -61,6 +61,7 @@ from backend.llm.providers import ProviderRequestError, VisionImage, validate_pr
 from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
 from backend.models import ProviderConfig, ProviderType, ReasoningEffort, User, WireProtocol
 from backend.llm.model_discovery import ModelCatalog, discover_models, valid_model_id
+from backend.llm.official_reasoning import manual_model_efforts
 from backend.services.stage_provider_routing import list_stage_provider_options
 
 logger = logging.getLogger(__name__)
@@ -231,6 +232,8 @@ def _connection_view(record):
         "base_url": record.base_url, "endpoint_identity": record.endpoint_identity,
         "wire_protocol": record.wire_protocol, "display_name": record.display_name,
         "rpm": record.rpm, "models": record.models, "catalog_status": record.catalog_status,
+        "manual_model_efforts": manual_model_efforts(record.provider_type, record.base_url, record.wire_protocol)
+        if record.catalog_status != "ready" else {},
         "enabled": settings.custom_provider_endpoints_available or not is_user_defined_provider_endpoint(
             record.provider_type, record.base_url, record.wire_protocol,
         ),

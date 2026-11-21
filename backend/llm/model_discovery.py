@@ -14,33 +14,13 @@ from backend.llm.endpoint_policy import (
     effective_provider_base_url,
     is_user_defined_provider_endpoint,
 )
+from backend.llm.official_reasoning import OFFICIAL_MODEL_EFFORTS
 from backend.models import ProviderConfig
 
 EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _MAX_MODELS = 1000
 _MAX_BYTES = 2 * 1024 * 1024
 _TIMEOUT = 8.0
-
-_OPENAI_54 = ("none", "low", "medium", "high", "xhigh")
-_OPENAI_6 = ("low", "medium", "high", "xhigh", "max")
-_GEMINI_FLASH = ("minimal", "low", "medium", "high")
-_OFFICIAL_EFFORTS = {
-    "openai": {
-        "gpt-5.4": _OPENAI_54, "gpt-5.4-mini": _OPENAI_54,
-        "gpt-6-astra": _OPENAI_6, "gpt-6-sol": ("none", *_OPENAI_6),
-        "gpt-6-luna": ("none", *_OPENAI_6), "gpt-6.1-sol": _OPENAI_6,
-        "gpt-6.1-terra": ("none", *_OPENAI_6), "gpt-6.2-astra": _OPENAI_6, "gpt-6.2-sol": _OPENAI_6,
-    },
-    "gemini": {
-        "gemini-3-pro-preview": ("low", "high"),
-        "gemini-3.1-pro-preview": ("low", "medium", "high"),
-        "gemini-3-flash-preview": _GEMINI_FLASH,
-        "gemini-3.1-flash-lite": _GEMINI_FLASH,
-        "gemini-3.5-flash-lite": _GEMINI_FLASH,
-        "gemini-3.6-flash": _GEMINI_FLASH,
-        "gemini-3.8-flash": ("low", "medium", "high"),
-    },
-}
 
 
 @dataclass(frozen=True)
@@ -97,8 +77,13 @@ def _entries(payload: dict, provider_type: str, protocol: str, *, official: bool
             "text-embedding-", "whisper-", "tts-", "dall-e-", "gpt-image-", "omni-moderation-",
         )):
             continue
-        efforts = _OFFICIAL_EFFORTS.get(provider_type, {}).get(model, ()) if official else ()
-        if protocol == "anthropic_messages":
+        efforts = OFFICIAL_MODEL_EFFORTS.get(provider_type, {}).get(model, ()) if official else ()
+        if official and provider_type == "deepseek" and "effort" in item:
+            # DeepSeek reports thinking-on efforts for this particular model.
+            metadata = item["effort"]
+            supported = metadata.get("supported_levels") if isinstance(metadata, dict) else None
+            efforts = [level for level in EFFORT_LEVELS if level in supported] if isinstance(supported, list) else []
+        elif protocol == "anthropic_messages":
             capabilities = item.get("capabilities")
             capability = capabilities.get("effort") if isinstance(capabilities, dict) else None
             if isinstance(capability, dict) and capability.get("supported") is not False:
@@ -182,9 +167,3 @@ def discover_models(provider_type: str, base_url: str | None, protocol: str, api
         return ModelCatalog([], "timeout")
     except (httpx.HTTPError, ProviderEndpointError, ValueError):
         return ModelCatalog([], "unavailable")
-
-
-def official_efforts(provider_type: str, base_url: str | None, protocol: str, model: str) -> list:
-    if not is_user_defined_provider_endpoint(provider_type, base_url, protocol):
-        return list(_OFFICIAL_EFFORTS.get(provider_type, {}).get(model, ()))
-    return []

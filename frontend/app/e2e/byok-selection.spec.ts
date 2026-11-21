@@ -21,7 +21,13 @@ for (const width of [1280, 390]) {
 
     const pageErrors: string[] = [];
     page.on("pageerror", error => pageErrors.push(error.message));
-    const connections: ByokConnection[] = [manual];
+    const official: ByokConnection = {
+      ...manual, id: "official", provider_type: "minimax", display_name: "MiniMax",
+      base_url: null, endpoint_identity: "https://api.minimax.cn/v1", catalog_status: "partial",
+      models: [{ id: "MiniMax-M3", reasoning_efforts: [] }],
+      manual_model_efforts: { "MiniMax-M3.1-Flash": ["low", "medium", "high", "xhigh", "max"] },
+    };
+    const connections: ByokConnection[] = [manual, official];
     const choices: unknown[] = [];
     const saved: unknown[] = [];
     let defaultModel = "";
@@ -68,7 +74,7 @@ for (const width of [1280, 390]) {
         choices.push(choice);
         const connection = connections.find(row => path.includes(`/${row.id}/`))!;
         experts.push({
-          provider_id: id, provider_type: "openai", model: choice.model, byok_connection_id: connection.id,
+          provider_id: id, provider_type: connection.provider_type, model: choice.model, byok_connection_id: connection.id,
           reasoning_effort: choice.reasoning_effort, max_concurrent: 1, rpm: 12, enabled: true, scope: "owner",
         });
         return json({ provider_id: id });
@@ -150,6 +156,31 @@ for (const width of [1280, 390]) {
     await expect.poll(() => gradingSelection).toMatchObject({
       selected_provider_ids: ["bound-2", "bound-3"], primary_provider_id: "bound-2",
     });
+    expect(pageErrors).toEqual([]);
+
+    await page.goto("/settings/byok");
+    await page.getByRole("combobox", { name: "BYOK connection" }).selectOption("connection:official");
+    await model.selectOption("MiniMax-M3");
+    await expect(effort).toBeDisabled();
+    await page.getByRole("button", { name: "Enter ID" }).click();
+    const input = page.getByRole("textbox", { name: "Model ID" });
+    await input.fill("MiniMax-M3.1-Flash");
+    await expect(effort.locator("option")).toHaveText(["Provider default", "Low", "Medium", "High", "Extra high", "Maximum"]);
+    await effort.selectOption("max");
+    await page.getByRole("button", { name: "Set as default model" }).click();
+    await expect.poll(() => defaultModel).toBe("bound-4");
+    await page.reload();
+    await expect(input).toHaveValue("MiniMax-M3.1-Flash");
+    await expect(effort).toHaveValue("max");
+    await effort.selectOption("");
+    await page.getByRole("button", { name: "Set as default model" }).click();
+    await expect.poll(() => defaultModel).toBe("bound-5");
+    expect(choices[5]).toEqual({ model: "MiniMax-M3.1-Flash", reasoning_effort: null });
+    await input.fill("MiniMax-M3.1-Future");
+    await expect(effort).toHaveValue("");
+    await expect(effort).toBeDisabled();
+    await page.getByRole("button", { name: "Choose from catalog" }).click();
+    await expect(model).toBeVisible();
     expect(pageErrors).toEqual([]);
   });
 }

@@ -34,6 +34,7 @@ from backend.llm.concurrency import (
     HARD_LIMIT, get_scheduler, initial_concurrency, quota_key, request_memory,
 )
 from backend.llm.model_discovery import relay_reasoning_fields
+from backend.llm.official_reasoning import compatible_reasoning_effort, gemini_thinking_config
 from backend.llm.endpoint_policy import (
     build_safe_provider_clients,
     effective_provider_base_url,
@@ -802,7 +803,7 @@ class GeminiProvider(BaseProvider):
         if max_output_tokens is not None:
             config["max_output_tokens"] = max_output_tokens
         if self.config.reasoning_effort is not None:
-            config["thinking_config"] = {"thinking_level": self.config.reasoning_effort.upper()}
+            config["thinking_config"] = gemini_thinking_config(self.model, self.config.reasoning_effort)
         return {"generation_config": config} if config else {}
 
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
@@ -944,6 +945,7 @@ class ZhipuProvider(BaseProvider):
             max_retries=0,
             api_key=self.config.api_key,
             base_url=self.config.base_url or settings.zhipu_api_base,
+            reasoning_effort=self.config.reasoning_effort,
             http_client=http_client,
             http_async_client=http_async_client,
         )
@@ -1020,6 +1022,7 @@ class _DomesticOpenAICompatibleProvider(BaseProvider):
             max_retries=0,
             api_key=self.config.api_key,
             base_url=self.config.base_url or self._default_base_url,
+            reasoning_effort=compatible_reasoning_effort(self.provider_type, self.model, self.config.reasoning_effort),
             http_client=http_client,
             http_async_client=http_async_client,
         )
