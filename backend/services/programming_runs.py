@@ -402,9 +402,10 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
                for c in cases]
     presentation = (problem._math_rubric_source or {}).get("presentation") or {}
     generated = (presentation.get("ai_completion_provenance") or {}).get("test_cases") or {}
-    # Preparation can also add tests to an existing teacher rubric that has no
-    # funded suite item. Apply the same review there; legacy grading-time test
-    # proposals retain their separate admission path.
+    # An edited question may legitimately have no saved suite. Its current
+    # reference supplies outputs, but proposed inputs still need domain review.
+    current_reference_inputs = (not problem.test_cases and presentation.get("programming_reference_binding")
+                                and all(isinstance(row, ReferenceInputCase) for row in originals))
     approved = generated.get("input_review_fingerprint")
     if ("unknown" in domains and generated.get("source_kind") == "ai_generated"
             and approved and approved == input_review_fingerprint(problem, cases)):
@@ -412,7 +413,8 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
         # rejection still takes precedence over a stored semantic decision.
         domains = ["allowed" if domain == "unknown" else domain for domain in domains]
     elif ("unknown" in domains and provider is not None
-          and (frozen_programming_steps(problem) or generated.get("source_kind") == "ai_generated")):
+          and (current_reference_inputs or frozen_programming_steps(problem)
+               or generated.get("source_kind") == "ai_generated")):
         from backend.services.programming_input_review import review_input_domains
         from backend.progress.grading_activity import observe_auxiliary_request
         state.store(STARTED, plan_key, {"q_id": problem.q_id})
