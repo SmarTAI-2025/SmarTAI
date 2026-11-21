@@ -2418,6 +2418,9 @@ async def generate_missing_question_materials(
     problem_context: List[Dict[str, Any]] = []
     for q_id in unique_q_ids:
         problem = problems_data[q_id]
+        if "programming_reference_binding" in problem:
+            from backend.services.programming_runs import current_reference_texts
+            problem = {**problem, **current_reference_texts(problem)}
         problem_context.append({
             "q_id": q_id,
             "number": str(problem.get("number") or "")[:120],

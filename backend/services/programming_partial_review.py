@@ -143,7 +143,7 @@ def record_deduction_basis(vote, awards, run, problem):
     if not any(i["kind"] in _DIRECT_PROOF for i in issues) and len(failed) == 1 and 2 <= len(unresolved) <= 6:
         n, = failed
         case = outcomes[n][0]
-        extra = uncited_deductions(unresolved, n, rule, run.code, _reference(problem),
+        extra = uncited_deductions(unresolved, n, rule, run.code, _reference(problem, teacher_only=True),
                                    case.function_name if run.source_language == "python" else "")
         if extra and (not issues or extra["kind"] == "capped_source_deduction_exceeded"):
             issues.append(extra)

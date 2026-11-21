@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 
 from backend.models import ProblemInfo
 from backend.services.programming_reference_inputs import ReferenceInputCase, expectations_from_reference
 from backend.services.programming_test_contract import (
-    adapt_programming_cases, bind_programming_cases, bind_stdin_cases, case_input_key, native_standard_supported,
+    _declared_modes, adapt_programming_cases, bind_programming_cases, bind_stdin_cases, case_input_key, has_function_only_contract,
+    native_standard_supported, required_function_name,
 )
 from backend.tools.structured_llm import llm_attempt_budget
 
@@ -20,11 +22,11 @@ class ReferenceExecutionError(ValueError):
 def has_teacher_reference_code(source):
     """Use the same supplied-code authority rules as execution, without an LLM."""
     from backend.services.programming_runs import _reference
-    problem = ProblemInfo(q_id="q1", number="", stem="", criterion="",
+    problem = ProblemInfo(q_id="q1", number="", stem=source.get("stem") or "", criterion="",
                           solution_code=source.get("solution_code"), reference_answer=source.get("reference_answer"))
     problem._math_rubric_source = {"presentation": source}
     try:
-        return bool(_reference(problem))
+        return bool(_reference(problem, teacher_only=True))
     except ValueError:
         return False
 
@@ -41,55 +43,98 @@ def input_probes(cases):
     return probes
 
 
-async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None,
-                                    review_evidence=None):
-    from backend.services.programming_runs import (
-        _reference, _reference_language, _source, _validate_report, input_review_fingerprint,
-    )
-    from backend.services.programming_input_domain import input_domain
-    from backend.services.python_source_encoding import python_execution_source
-    from backend.tools.code_interpreter import run_sandbox
-
+def material_problem(source):
     problem = ProblemInfo.model_validate({"number": "", "criterion": "", **source})
     problem._math_rubric_source = {"presentation": source}
-    reference = _reference(problem)
-    if not reference and problem.solution_code:
-        # A generated reference may derive NEW expectations, never replace a
-        # teacher's existing expectations or become independent evidence.
-        reference = _source(problem.solution_code)
-        language_problem = problem.model_copy()
-        language_problem._math_rubric_source = {}
-    else:
-        language_problem = problem
-    if not reference:
-        raise ValueError("Generate a runnable reference implementation before generating test outputs.")
-    language = _reference_language(language_problem, reference)
-    if language != "python" and not native_standard_supported(problem.stem + "\n" + problem.criterion, language, reference=True):
-        raise ValueError("The reference language or function interface is not supported by the runner.")
-    executable = python_execution_source(reference) if language == "python" else reference
-    body = []
-    if language == "python":
+    return problem
+
+
+@dataclass
+class ReferenceRunner:
+    problem: ProblemInfo
+    executable: str
+    language: str
+    body: list
+
+    @classmethod
+    def from_problem(cls, problem):
+        from backend.services.programming_runs import _reference, _reference_language, has_native_main
+        from backend.services.python_source_encoding import python_execution_source
+
+        code = _reference(problem, include_generated=True)
+        if not code:
+            raise ReferenceExecutionError("Generate a runnable reference implementation before generating test outputs.")
+        language = _reference_language(problem, code)
+        if language != "python":
+            if not native_standard_supported(problem.stem + "\n" + problem.criterion, language, reference=True):
+                raise ReferenceExecutionError("The reference language or function interface is not supported by the runner.")
+            if not has_native_main(code):
+                raise ReferenceExecutionError("C/C++ reference execution requires a complete program with main.")
+            return cls(problem, code, language, [])
+        code = python_execution_source(code)
         try:
-            body = ast.parse(executable).body
-        except SyntaxError as exc:
+            tree = ast.parse(code)
+            compile(tree, "<reference>", "exec")
+            body = tree.body
+        except (ValueError, SyntaxError) as exc:
             raise ReferenceExecutionError("The reference has invalid Python syntax; repair the generated implementation.") from exc
+        return cls(problem, code, language, body)
 
-    def bind(rows):
-        return (bind_programming_cases(problem.stem, rows, executable) if language == "python"
-                else bind_stdin_cases(problem.stem, rows))
+    def check_declared_entry(self):
+        if not has_function_only_contract(self.problem.stem, self.problem.test_cases):
+            _, stdin_mode = _declared_modes(self.problem.stem, required_function_name(self.problem.stem))
+            if stdin_mode:
+                self.check_stdin_entry()
+            return
+        if self.language != "python":
+            raise ReferenceExecutionError("C/C++ function execution requires a supported harness.")
+        name = required_function_name(self.problem.stem)
+        # A module may legally export an alias or a callable constructed by
+        # top-level code. Reject only a demonstrably absent declared entry.
+        if (all(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Pass)) for node in self.body)
+                and not any(isinstance(node, ast.FunctionDef) and (not name or node.name == name) for node in self.body)):
+            raise ReferenceExecutionError("The reference must implement the question's declared function.")
 
-    execute = execute or run_sandbox
+    def check_stdin_entry(self):
+        definitions = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        if (any(isinstance(node, definitions) for node in self.body)
+                and not any(isinstance(call, ast.Call) for node in self.body if not isinstance(node, definitions)
+                            for call in ast.walk(node))):
+            raise ReferenceExecutionError("The reference only defines functions but the question requires stdin/stdout.")
+
+    async def run(self, cases, *, execute=None):
+        from backend.services.programming_runs import _validate_report
+        from backend.tools.code_interpreter import run_sandbox
+
+        if self.language == "python":
+            bound = bind_programming_cases(self.problem.stem, cases, self.executable)
+            if all(c.io_mode == "stdin" for c in bound):
+                self.check_stdin_entry()
+        else:
+            if any(c.io_mode == "function" for c in cases):
+                raise ReferenceExecutionError("C/C++ function execution requires a supported harness.")
+            bound = bind_stdin_cases(self.problem.stem, cases)
+        report = await (execute or run_sandbox)(self.executable, bound, language=self.language, per_case_timeout=5.0)
+        _validate_report(report, bound)
+        return bound, report
+
+
+async def resolve_generated_outputs(source, cases, *, execute=None, provider=None, reporter=None,
+                                    review_evidence=None):
+    from backend.services.programming_input_domain import input_domain
+    from backend.services.programming_runs import input_review_fingerprint
+
+    problem = material_problem(source)
+    runner = ReferenceRunner.from_problem(problem)
     teacher_cases = [case for case in problem.test_cases or [] if case.source == "teacher"]
     if teacher_cases:
-        checks = bind(teacher_cases)
-        report = await execute(executable, checks, language=language, per_case_timeout=5.0)
-        _validate_report(report, checks)
+        checks, report = await runner.run(teacher_cases, execute=execute)
         if report.passed_count != len(checks):
             raise ReferenceExecutionError("The reference implementation contradicts supplied teacher tests; preserve their outputs and repair the generated reference.")
     probes = adapt_programming_cases(problem.stem, input_probes(cases))
     if len(probes) < GENERATED_TEST_COUNT:
         raise ValueError("Supply at least ten distinct legal test inputs.")
-    identities = {case_input_key(problem.stem, c, reference=executable) for c in probes}
+    identities = {case_input_key(problem.stem, c, reference=runner.executable) for c in probes}
     if len(identities) != len(probes):
         raise ValueError("Supply distinct test inputs; repeated inputs must not change their scoring weight.")
     if any(not c.sandbox_feasible for c in probes):
@@ -106,20 +151,7 @@ async def resolve_generated_outputs(source, cases, *, execute=None, provider=Non
         rejected = "; ".join(f"{i}: {domain}" + (f" — {feedback[i]}" if i in feedback else "")
                              for i, domain in enumerate(domains, 1) if domain != "allowed")
         raise ValueError("Test inputs outside or not supported by the question's domain (" + rejected + "). Repair only these inputs; preserve the question's constraints.")
-    reference_cases = bind(probes)
-    if all(case.io_mode == "stdin" for case in reference_cases):
-        if language == "python":
-            definitions = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-            if (any(isinstance(node, definitions) for node in body)
-                    and not any(isinstance(call, ast.Call) for node in body if not isinstance(node, definitions)
-                                for call in ast.walk(node))):
-                raise ReferenceExecutionError("The reference only defines functions but the question requires stdin/stdout. Supply an explicit function contract or a complete input/output wrapper.")
-        else:
-            from backend.services.programming_runs import has_native_main
-            if not has_native_main(executable):
-                raise ReferenceExecutionError("C/C++ reference execution requires a complete program with main.")
-    report = await execute(executable, reference_cases, language=language, per_case_timeout=5.0)
-    _validate_report(report, reference_cases)
+    reference_cases, report = await runner.run(probes, execute=execute)
     try:
         resolved = expectations_from_reference(probes, reference_cases, report)
     except ValueError as exc:
