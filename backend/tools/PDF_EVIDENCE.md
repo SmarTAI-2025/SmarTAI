@@ -68,7 +68,7 @@ Pillow is imported lazily: existing PDF-only worker operations do not require a
 Pillow import. Neither API resolves files, selects providers, performs OCR,
 uploads data, or grants access to source bytes.
 
-The source limit is 10 MiB, 16,000,000 pixels and 8192 pixels per side, checked
+The source limit is 10 MiB, 30,000,000 pixels and 8192 pixels per side, checked
 before full decoding. Pillow decompression-bomb warnings become failures. Full
 decoding is still required even for a small requested crop. Supported source
 modes are `1`, `L`, `LA`, `P`, `RGB`, `RGBA` and `CMYK`; unsupported bit depth / mode
