@@ -98,7 +98,9 @@ def test_missing_catalog_preserves_manual_model_ids_without_synthetic_efforts(mo
     saved = client.post("/experts/connections", headers=headers,
                         json={"provider_type": "openai", "api_key": "synthetic-fallback-key"})
     assert saved.json()["catalog_status"] == "unavailable"
+    assert saved.json()["manual_model_efforts"]["gpt-5.5"] == ["none", "low", "medium", "high", "xhigh"]
     path = f"/experts/connections/{saved.json()['id']}/model"
+    assert client.post(path, headers=headers, json={"model": "gpt-5.5", "reasoning_effort": "xhigh"}).status_code == 200
     assert client.post(path, headers=headers, json={
         "model": "org/provider-alias-high", "reasoning_effort": "high",
     }).json()["detail"]["code"] == "byok_effort_unsupported"
@@ -115,6 +117,16 @@ def test_missing_catalog_preserves_manual_model_ids_without_synthetic_efforts(mo
 @pytest.mark.parametrize(("provider_type", "base_url", "protocol", "payload", "path", "key_header", "expected"), [
     ("openai", None, "openai_chat_completions", {"data": [{"id": "gpt-5.4"}, {"id": "text-embedding-3-small"}]},
      "/v1/models", "authorization", {"gpt-5.4": ["none", "low", "medium", "high", "xhigh"]}),
+    ("deepseek", None, "openai_chat_completions", {"data": [
+        {"id": "deepseek-flash", "effort": {"supported_levels": ["high", "new", "high"]}},
+        {"id": "deepseek-v4-pro", "effort": {"supported_levels": []}},
+        {"id": "new-id", "effort": {"supported_levels": ["low", "max"]}},
+        {"id": "bad", "effort": {"supported_levels": "high"}},
+    ]}, "/v1/models", "authorization", {"deepseek-flash": ["high"], "deepseek-v4-pro": [],
+                                         "new-id": ["low", "max"], "bad": []}),
+    ("deepseek", "https://relay.example.com/v1", "openai_chat_completions", {"data": [
+        {"id": "deepseek-flash", "effort": {"supported_levels": ["low", "max"]}},
+    ]}, "/v1/models", "authorization", {"deepseek-flash": []}),
     ("anthropic", None, "anthropic_messages", {"data": [{"id": "claude-example",
        "capabilities": {"effort": {"high": {"supported": True}, "max": {"supported": False}}}}]},
      "/v1/models", "x-api-key", {"claude-example": ["high"]}),
@@ -182,3 +194,39 @@ def test_gemini_effort_is_serializable_with_max_output_tokens():
     request_config = provider._build_client_sync()._prepare_params(stop=None, **options)
     assert request_config.thinking_config.thinking_level == "HIGH"
     assert request_config.max_output_tokens == 512
+
+
+@pytest.mark.parametrize(("provider", "model", "choices"), [
+    ("openai", "gpt-5.2", "none low medium high xhigh"),
+    ("openai", "gpt-5.4-nano-2026-03-17", "none low medium high xhigh"),
+    ("openai", "gpt-5.6", "none low medium high xhigh max"),
+    ("openai", "gpt-5.6-sol-preview", ""),
+    ("gemini", "gemini-4-hydrogen", "low medium high xhigh"),
+    ("gemini", "gemini-4-argon", "low medium high"),
+    ("gemini", "gemini-2.5-pro", "low medium high"),
+    ("gemini", "gemini-2.5-flash-lite", "none low medium high"),
+    ("deepseek", "deepseek-flash", "low high max"),
+    ("zhipu", "glm-5.3-flash", "low high max"),
+    ("moonshot", "kimi-k3.1-pro", "low high max"),
+    ("moonshot", "kimi-k2.5", ""),
+    ("qwen", "qwen3.8-flash", "none low medium xhigh"),
+    ("qwen", "kimi-k3.1-pro", "low medium high max"),
+    ("tencent", "hy3", "none low high"),
+    ("doubao", "doubao-seed-2-1-lite-260915", "none low medium high"),
+    ("doubao", "ep-private-alias", ""),
+    ("minimax", "MiniMax-M3.1-Flash", "low medium high xhigh max"),
+    ("minimax", "MiniMax-M3", ""),
+    ("anthropic", "claude-arbitrary", ""),
+])
+def test_exact_documented_efforts_for_listed_and_manual_models(provider, model, choices):
+    from backend.llm.model_discovery import _entries
+    from backend.llm.official_reasoning import manual_model_efforts
+    from backend.llm.provider_catalog import PROVIDER_CATALOG_BY_TYPE
+    protocol = PROVIDER_CATALOG_BY_TYPE[provider].wire_protocol
+    catalog = {"models": [{"name": f"models/{model}"}]} if provider == "gemini" else {"data": [{"id": model}]}
+    expected = choices.split()
+    assert _entries(catalog, provider, protocol, official=True, openrouter=False) == [
+        {"id": model, "reasoning_efforts": expected},
+    ]
+    assert list(manual_model_efforts(provider, None, protocol).get(model, ())) == expected
+    assert manual_model_efforts(provider, "https://relay.example.com/v1", protocol) == {}

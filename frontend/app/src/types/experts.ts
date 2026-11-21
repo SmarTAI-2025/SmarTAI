@@ -122,6 +122,7 @@ export interface ByokConnection {
   wire_protocol: WireProtocol;
   display_name: string | null;
   rpm: number;
+  manual_model_efforts?: Record<string, ReasoningEffort[]>;
   models: { id: string; reasoning_efforts: ReasoningEffort[] }[];
   catalog_status: "ready" | "partial" | "unavailable" | "empty" | "timeout" | "rate_limited" | "denied";
 }

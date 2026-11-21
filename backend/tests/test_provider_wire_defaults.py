@@ -23,8 +23,7 @@ def chat_stream():
     return "".join("data: " + json.dumps(c) + "\n\n" for c in chunks) + "data: [DONE]\n\n"
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("provider_type,model", [
+_DEFAULT_MODELS = [
     ("openai", "gpt-6-luna"), ("openai", "gpt-6.1-sol"),
     ("openai", "gpt-6-astra"), ("openai", "gpt-5"),
     ("openai", "gpt-4o"), ("gemini", "gemini-3.5-flash-lite"),
@@ -45,9 +44,31 @@ def chat_stream():
     ("tencent", "hy3"), ("tencent", "hy-vision-2.0-instruct"),
     ("doubao", "doubao-seed-2-1-pro-260915"),
     ("doubao", "doubao-seed-2-1-lite-260915"), ("minimax", "MiniMax-M3"),
+    ("minimax", "MiniMax-M3.1-Flash"), ("gemini", "gemini-2.5-pro"), ("gemini", "gemini-4-neon"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_type,model,effort,expected", [
+    *((provider, model, None, {}) for provider, model in _DEFAULT_MODELS),
+    ("openai", "gpt-5.6", "max", {"reasoning_effort": "max"}),
+    ("anthropic", "claude-sonnet-5-5", "high", {"output_config": {"effort": "high"}}),
+    ("gemini", "gemini-4-neon", "xhigh", {"thinkingConfig": {"thinking_level": "XHIGH"}}),
+    ("gemini", "gemini-4-carbon", "medium", {"thinkingConfig": {"thinking_level": "MEDIUM"}}),
+    ("gemini", "gemini-2.5-pro", "low", {"thinkingConfig": {"thinking_budget": 1024}}),
+    ("gemini", "gemini-2.5-flash", "high", {"thinkingConfig": {"thinking_budget": 24576}}),
+    ("gemini", "gemini-2.5-flash-lite", "none", {"thinkingConfig": {"thinking_budget": 0}}),
+    ("deepseek", "deepseek-flash", "low", {"reasoning_effort": "low"}),
+    ("zhipu", "glm-5.3-flash", "max", {"reasoning_effort": "max"}),
+    ("moonshot", "kimi-k3.1-pro", "max", {"reasoning_effort": "max"}),
+    ("qwen", "qwen3.8-flash", "xhigh", {"reasoning_effort": "xhigh"}),
+    ("tencent", "hy3", "none", {"reasoning_effort": "no_think"}),
+    ("tencent", "deepseek-v4-pro", "none", {"reasoning_effort": "none"}),
+    ("doubao", "doubao-seed-2-1-lite-260915", "low", {"reasoning_effort": "low"}),
+    ("minimax", "MiniMax-M3.1-Flash", "xhigh", {"reasoning_effort": "xhigh"}),
 ])
 @pytest.mark.parametrize("vision", [False, True])
-async def test_actual_sdk_wire_defaults(monkeypatch, provider_type, model, vision):
+async def test_actual_sdk_wire_reasoning_and_defaults(monkeypatch, provider_type, model, effort, expected, vision):
     monkeypatch.setattr(settings, "http_proxy", "")
     monkeypatch.setattr(settings, "https_proxy", "")
     sent = []
@@ -68,7 +89,9 @@ async def test_actual_sdk_wire_defaults(monkeypatch, provider_type, model, visio
 
     monkeypatch.setattr(httpx.AsyncClient, "send", send)
     monkeypatch.setattr(httpx2.AsyncClient, "send", send)
-    provider = PROVIDER_CLASSES[provider_type](ProviderConfig(provider_type=provider_type, model=model, api_key="fixture-key"))
+    provider = PROVIDER_CLASSES[provider_type](ProviderConfig(
+        provider_type=provider_type, model=model, api_key="fixture-key", reasoning_effort=effort,
+    ))
     response = (await provider.ainvoke_vision("read", [VisionImage(b"fixture", "image/png")], max_output_tokens=512)
                 if vision else await provider.ainvoke([HumanMessage(content="Reply OK")], max_output_tokens=512))
     assert response.content == "OK"
@@ -80,7 +103,8 @@ async def test_actual_sdk_wire_defaults(monkeypatch, provider_type, model, visio
         assert body["reasoning_split"] is True
     params = body.get("generationConfig", body)
     assert params.get("temperature") is None
-    assert "reasoning_effort" not in body and "thinking" not in body
+    reasoning_fields = {"thinkingConfig", "thinking", "output_config", "reasoning_effort", "enable_thinking", "reasoning"}
+    assert {key: value for key, value in params.items() if key in reasoning_fields} == expected
     field = "maxOutputTokens" if provider_type == "gemini" else "max_completion_tokens" if provider_type == "openai" else "max_tokens"
     assert params[field] == 512
     if provider_type not in {"gemini", "anthropic"}:

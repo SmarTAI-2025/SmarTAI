@@ -90,16 +90,20 @@ function ByokModelSelectForm({
     : selected ? `model:${selected.provider_id}` : initialConnection ? `connection:${initialConnection}` : "");
   const [model, setModel] = useState(selected?.byok_connection_id ? selected.model : "");
   const [effort, setEffort] = useState<ReasoningEffort | "">(selected?.reasoning_effort ?? "");
-  const [manual, setManual] = useState(false);
+  const [manual, setManual] = useState<boolean | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fixedModels = experts.filter((expert) => !expert.byok_connection_id);
   const connection = connections.find((row) => `connection:${row.id}` === selection);
   const safeId = model.trim();
-  const options = connection?.models.find((entry) => entry.id === safeId)?.reasoning_efforts ?? [];
-  const useManualId = Boolean(connection && connection.catalog_status !== "ready" && (manual || !connection.models.length));
-  const canChoose = Boolean(connection && connection.enabled !== false && safeId && (useManualId || connection.models.some((entry) => entry.id === safeId)));
+  const listed = connection?.models.find((entry) => entry.id === safeId);
+  const savedManualId = selected && selected.byok_connection_id === connection?.id
+    && !connection?.models.some((entry) => entry.id === selected.model);
+  const useManualId = Boolean(connection && connection.catalog_status !== "ready" && (!connection.models.length || (manual ?? savedManualId)));
+  const fallback = useManualId ? connection?.manual_model_efforts?.[safeId] : undefined;
+  const options = listed?.reasoning_efforts ?? (Array.isArray(fallback) ? fallback : []);
+  const canChoose = Boolean(connection && connection.enabled !== false && safeId && (useManualId || listed));
   const chosenEffort = effort && options.includes(effort) ? effort : null;
   const alreadyChosen = selected?.byok_connection_id === connection?.id
     && selected?.model === safeId && (selected?.reasoning_effort ?? null) === chosenEffort;
@@ -157,14 +161,14 @@ function ByokModelSelectForm({
                 setEffort("");
               }}>
                 <option value="">{zh ? "选择模型" : "Choose a model"}</option>
-                {safeId && !connection.models.some((entry) => entry.id === safeId) ? <option value={safeId} disabled>{safeId}</option> : null}
+                {safeId && !listed ? <option value={safeId} disabled>{safeId}</option> : null}
                 {connection.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}
               </select>
             )}
           </label>
           {connection.catalog_status !== "ready" && connection.models.length > 0 ? (
             <button type="button" className="mt-1 text-xs text-primary underline" onClick={() => {
-              setManual(!manual);
+              setManual(!useManualId);
               setModel("");
               setEffort("");
             }}>{useManualId ? (zh ? "从目录选择" : "Choose from catalog") : (zh ? "手填 ID" : "Enter ID")}</button>
