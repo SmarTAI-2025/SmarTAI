@@ -3350,10 +3350,12 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
         student.pop("recognition", None)
         if current.get("recognition") is not None:
             student["recognition"] = current["recognition"]
-    if result.stable_error_code != "duplicate_student_identity":
-        for field in ("stu_id", "stu_name", "identity_status", "identity_match_method"):
-            if field in previous:
-                student[field] = previous[field]
+    if current and result.stable_error_code != "duplicate_student_identity":
+        from backend.services.submission_incremental import repair_submission_identity
+        identity, remaining = repair_submission_identity(previous, current)
+        student.update(identity)
+        if "recognition" in student or remaining:
+            student["recognition"] = {**student.get("recognition", {}), "identity_invalid_fields": remaining}
     changes = dict(student=student, student_candidate=student["stu_id"],
                    matched_answer_count=sum(not _answer_recognition_failures(answer.get("flag")) for answer in answers))
     if result.status in {"parsed", "identity_conflict"} and any(_answer_recognition_failures(answer.get("flag")) for answer in answers):
@@ -5026,13 +5028,10 @@ def _grading_progress(run_id: str, owner_id: str) -> dict:
     saved_pairs = set()
     saved_slots = {}
     from backend.services.grading_checkpoints import saved_experts
-    from backend.models import ExpertResult
-    from backend.agents.multi_expert import _is_successful_expert
     for item in saved_experts(run_id, events=events):
-        if _is_successful_expert(ExpertResult.model_validate(item["result"])):
-            pair = (item["student_id"], item["q_id"])
-            saved_pairs.add(pair)
-            saved_slots.setdefault(pair, set()).add((item["provider_id"], item["sample_index"]))
+        pair = (item["student_id"], item["q_id"])
+        saved_pairs.add(pair)
+        saved_slots.setdefault(pair, set()).add((item["provider_id"], item["sample_index"]))
     setup = workflow_repository.get_run_setup(run_id)
     config = TaskGradingSetup.model_validate(setup.setup) if setup else None
     expected_slots = {
@@ -5617,7 +5616,7 @@ def start_task_grading(
                     if result.effective_score is not None and math.isfinite(result.effective_score)
                     and (result.q_id not in math_qids or result.q_id in plans)
                     and (result.q_id not in sandbox_qids or compatible_programming or result.teacher_review)
-                    and ("grading_paused" not in result.initial_review_reasons or result.teacher_review)]
+                    and (result.teacher_review or not {"grading_paused", "grading_incomplete"}.intersection(result.initial_review_reasons))]
         if len(reusable) == len(questions) * len(frozen_revision_ids):
             return {"status": "already_done", "task_id": task_id, "job_id": latest.id}
         # An inherited result keeps the source run's primary expert in review.
