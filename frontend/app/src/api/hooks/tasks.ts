@@ -299,10 +299,11 @@ export function useUploadTestCases() {
   return useTaskUploadMutation((taskId, file, options) => tasksApi.uploadTestCases(taskId, file, options));
 }
 
-export function useStartGrading() {
+export function useStartGrading(jobScope?: readonly (string | null | undefined)[]) {
   const queryClient = useQueryClient();
 
   return useMutation({
+    mutationKey: ["startGrading", ...(jobScope ?? [])],
     mutationFn: ({ taskId, ...options }: { taskId: string } & Parameters<typeof tasksApi.startGrading>[1]) =>
       tasksApi.startGrading(taskId, options),
     onSuccess: (data, variables) => {

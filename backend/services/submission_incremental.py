@@ -9,8 +9,32 @@ from collections import Counter
 from dataclasses import replace
 
 from backend.services.programming_submission_mapping import native_source
+from backend.services.question_sources import recognition_has_failure
 from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
 from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
+
+
+def repair_submission_identity(previous, current):
+    """Keep verified identity fields and accept repairs only for invalid ones."""
+    invalid = set((previous.get("recognition") or {}).get("identity_invalid_fields", []))
+    invalid.intersection_update({"stu_id", "stu_name"})
+    incoming_invalid = (current.get("recognition") or {}).get("identity_invalid_fields", [])
+    remaining = {field for field in invalid if field in incoming_invalid or field not in current}
+    identity = {field: previous[field] for field in ("stu_id", "stu_name", "identity_status", "identity_match_method")
+                if field in previous}
+    for field in invalid - remaining:
+        identity[field] = current[field]
+    if invalid:
+        matched = not remaining and current.get("identity_status") == "matched"
+        if current.get("identity_match_method") == "roster":
+            matched = matched and all(identity.get(field) == current.get(field) for field in ("stu_id", "stu_name"))
+        identity["identity_status"] = "matched" if matched else "needs_review"
+    return identity, sorted(remaining)
+
+
+def content_failure_flags(flags):
+    return [flag for flag in flags if flag in {"recognition_incomplete", "recognition_failed", "parse_failed", "no_matching_answer"}
+            or flag.startswith(("recognition_failed_pages:", "recognition_unprocessed_pages:"))]
 
 
 def merge_parse_repair(previous, current, question_ids, *, problems):
@@ -21,34 +45,33 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
         return replace(current, student=previous.student, student_candidate=previous.student_candidate,
                        matched_answer_count=previous.matched_answer_count)
 
-    def invalid_fields(answer, repair_ids):
+    def invalid_fields(answer, repair_ids, recognition):
         flags = answer.get("flag", [])
         fields = {field for flag in flags if flag.startswith("recognition_invalid_fields:")
                   for field in flag.split(":", 1)[1].split(",")}
         if "recognition_manual_pending" in flags and not fields and answer["q_id"] in repair_ids:
             return {"number", "type", "content", "flag", "recognition_confidence"}
+        # Older saved responses can carry a content failure alongside a
+        # different malformed field without naming content in the field list.
+        if content_failure_flags(flags) and not recognition_has_failure(recognition):
+            fields.add("content")
         return fields
 
     def field_size(value):
         return len(value) if isinstance(value, str) else sum(map(len, value)) if isinstance(value, list) else 0
 
     student = dict(previous.student)
+    identity, identity_invalid = repair_submission_identity(student, current.student)
+    student.update(identity)
     remaining_budget = 1_000_000 - 1024 * len(question_ids) - len(student.get("stu_id", "")) - len(student.get("stu_name", ""))
     remaining_budget -= sum(field_size(answer.get(field)) for answer in student.get("stu_ans", [])
                             for field in ("q_id", "number", "type", "content", "flag"))
-    old_invalid = set((student.get("recognition") or {}).get("identity_invalid_fields", []))
-    new_invalid = set((current.student.get("recognition") or {}).get("identity_invalid_fields", []))
-    for field in old_invalid - new_invalid:
-        student[field] = current.student[field]
-    identity_invalid = old_invalid & new_invalid
-    if not identity_invalid and current.student.get("identity_status") == "matched":
-        student["identity_status"] = "matched"
     answers = {answer["q_id"]: dict(answer) for answer in student.get("stu_ans", [])}
     old_repairs = set((student.get("recognition") or {}).get("repair_question_ids", []))
     new_repairs = set((current.student.get("recognition") or {}).get("repair_question_ids", []))
     openings = (student.get("recognition") or {}).get("source_opening_hashes", {})
     incoming_openings = (current.student.get("recognition") or {}).get("source_opening_hashes", {})
-    repair_fields = {q_id: invalid_fields(answer, old_repairs) for q_id, answer in answers.items()}
+    repair_fields = {q_id: invalid_fields(answer, old_repairs, student.get("recognition")) for q_id, answer in answers.items()}
     model_reviews = set((student.get("recognition") or {}).get("model_review_question_ids", [])) & set(answers)
     incoming_reviews = set((current.student.get("recognition") or {}).get("model_review_question_ids", []))
 
@@ -60,12 +83,19 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
         previous_answer = answers.get(q_id)
         if previous_answer is None:
             answers[q_id] = dict(incoming)
-            repair_fields[q_id] = invalid_fields(incoming, new_repairs)
+            repair_fields[q_id] = invalid_fields(incoming, new_repairs, current.student.get("recognition"))
             if q_id in incoming_reviews:
                 model_reviews.add(q_id)
             continue
-        previous_matching = matching_fields(previous_answer)
-        bad_before, bad_after = repair_fields[q_id], invalid_fields(incoming, new_repairs)
+        bad_before, bad_after = repair_fields[q_id], invalid_fields(incoming, new_repairs, current.student.get("recognition"))
+        if "content" in bad_before & bad_after:
+            old_text, new_text = previous_answer.get("content", ""), incoming.get("content", "")
+            if new_text and new_text not in old_text:
+                fragment = new_text if old_text in new_text else old_text + "\n\n" + new_text
+                growth = len(fragment) - len(old_text)
+                if len(fragment) <= 500_000 and growth <= remaining_budget:
+                    previous_answer["content"] = fragment
+                    remaining_budget -= growth
         for field in bad_before - bad_after:
             value = incoming.get(field)
             delta = field_size(value) - field_size(previous_answer.get(field))
@@ -80,14 +110,19 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
         if matching_fields(previous_answer) == matching_fields(incoming):
             if q_id in incoming_reviews:
                 model_reviews.add(q_id)
-            elif matching_fields(previous_answer) != previous_matching:
+            elif (bad_before - bad_after) & {"number", "content"}:
                 model_reviews.discard(q_id)
         remaining = bad_before & bad_after
         repair_fields[q_id] = remaining
         flags = [flag for flag in previous_answer.get("flag", [])
                  if flag != "recognition_manual_pending" and not flag.startswith("recognition_invalid_fields:")]
         if "content" in bad_before and "content" not in remaining:
-            flags = [flag for flag in flags if flag != "recognition_incomplete"]
+            # The new content supersedes its old parse failure. Keep any
+            # failure the new response still reports; source-level page
+            # failures are attached separately from current OCR evidence.
+            obsolete = set(content_failure_flags(flags))
+            flags = [flag for flag in flags if flag not in obsolete]
+            flags.extend(content_failure_flags(incoming.get("flag", [])))
         if remaining:
             flags.extend(["recognition_manual_pending", "recognition_invalid_fields:" + ",".join(sorted(remaining))])
         elif q_id in model_reviews:
@@ -98,7 +133,7 @@ def merge_parse_repair(previous, current, question_ids, *, problems):
     student["recognition"] = {**student.get("recognition", {}),
         **current.student.get("recognition", {}), "repair_question_ids": pending,
         "missing_question_ids": [q_id for q_id in question_ids if q_id not in answers],
-        "identity_invalid_fields": sorted(identity_invalid),
+        "identity_invalid_fields": identity_invalid,
         "model_review_question_ids": sorted(model_reviews & set(question_ids))}
     if openings or incoming_openings:
         # Only carry evidence for the exact transcription retained by repair.
