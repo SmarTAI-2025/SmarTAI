@@ -143,7 +143,7 @@ async def test_stopped_or_failed_submissions_recover_completed_answers(
     pending = [student for student in students if "recognition_manual_pending" in student["stu_ans"][0]["flag"]]
     assert len(pending) == 2 - int(started)
     assert all(("recognition_paused" if paused_run else "recognition_incomplete") in student["stu_ans"][0]["flag"] for student in pending)
-    assert all(student["identity_status"] == "needs_review" and student["stu_name"] == "[Unknown Student]" for student in pending)
+    assert all(student["identity_status"] == "needs_review" and student["stu_name"] == student["source_filename"] for student in pending)
     assert all(source["recognition_reason_code"] == ("operation_cancelled" if paused_run else "submission_parse_failed") for source in after["submission_sources"] if source["status"] == "manual_review"), after["submission_sources"]
     assert "submission_recognition_blocked" in task_facade.grading_readiness(task_id=task, owner_id=owner)["blocking_issues"]
     target = pending[0]
@@ -472,13 +472,14 @@ async def test_partial_batch_stays_failed_and_explicit_retry_calls_only_failed_s
             routes.append((round_number, source.filename, provider.provider_id))
             failed = ((source.filename == "two.txt" and round_number == 0)
                       or (source.filename == "three.txt" and round_number < 2))
-            student = None if failed else {"stu_id": source.filename, "stu_name": source.filename,
+            candidate = source.filename.removesuffix(".txt")
+            student = None if failed else {"stu_id": candidate, "stu_name": f"Student {candidate}",
                 "stu_ans": [{"q_id": "q1", "content": source.text, "flag": []}],
                 "source_id": source.source_id, "stored_file_id": source.stored_file_id,
                 "source_filename": source.filename, "identity_status": "matched"}
             result.append(SubmissionSourceParseResult(source.source_id, source.stored_file_id,
                 source.filename, "parse_failed" if failed else "parsed", student,
-                None if failed else source.filename, 0 if failed else 1, (),
+                None if failed else candidate, 0 if failed else 1, (),
                 "provider_rate_limited" if failed else None, "recognition" if failed else None, failed))
         return result
 
@@ -1119,7 +1120,8 @@ async def test_manual_handoff_preserves_each_durable_answer_within_partial_sourc
     await continue_manually(task_id=task, owner_id=owner, job_id=operation.id, expected_revision=paused["workflow_revision"])
     after = task_facade.get_task(task_id=task, owner_id=owner)
     saved = after["student_data"]["S1"]
-    assert saved["stu_name"] == student["stu_name"] and saved["identity_status"] == student["identity_status"]
+    assert saved["stu_name"] == (student["stu_name"] if known_identity else "S1.txt")
+    assert saved["identity_status"] == student["identity_status"]
     by_id = {answer["q_id"]: answer for answer in saved["stu_ans"]}
     assert by_id["q1"]["content"] == "Durably recognized q1 answer" and "recognition_manual_pending" not in by_id["q1"]["flag"]
     assert by_id["q2"]["content"] == partial_text and "recognition_manual_pending" in by_id["q2"]["flag"]

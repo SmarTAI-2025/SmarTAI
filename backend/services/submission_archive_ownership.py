@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from starlette.concurrency import run_in_threadpool
 
 from backend.services.programming_submission_mapping import is_source_file, may_contain_source, native_source
+from backend.services.submission_identity import filename_identity_fallbacks, identity_filename
 from backend.tools.file_processing import decode_text_bytes
 
 MULTIPLE_SOURCE_FILES = "submission_programming_multiple_files"
@@ -133,12 +134,16 @@ def apply_member_identity(result, owner, uncertain, mode, *, native):
                      (owner.name and old_name not in {"", "[Unknown Student]"} and owner.name.casefold() != old_name.casefold())))
     if owner and not conflict:
         sid = owner.student_id
-        student.update(stu_id=sid, stu_name=owner.name or "[Unknown Student]")
+        missing = filename_identity_fallbacks(student, result.filename)
+        compatible = "stu_id" in missing or str(student["stu_id"]).casefold() == sid.casefold()
+        name = old_name if compatible and "stu_name" not in missing else identity_filename(result.filename)
+        student.update(stu_id=sid, stu_name=owner.name or name)
     elif native and uncertain:
         # In particular, discard a substring-only roster guess from a class folder.
-        sid = PurePosixPath(result.filename).stem[:160]
-        student.update(stu_id=sid, stu_name="[Unknown Student]")
-    matched = bool(owner and owner.name and mode != "manual_review" and not conflict)
+        sid = identity_filename(result.filename)
+        student.update(stu_id=sid, stu_name=sid)
+    matched = bool(owner and not uncertain and mode != "manual_review" and not conflict
+                   and not filename_identity_fallbacks(student, result.filename))
     student["identity_status"] = "matched" if matched else "needs_review"
     result = replace(result, student=student, student_candidate=sid)
     if result.status not in {"parsed", "identity_conflict"}:
