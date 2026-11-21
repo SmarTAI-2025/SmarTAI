@@ -192,7 +192,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 HW_SYSTEM_PROMPT = """You are a professional AI teaching assistant. Analyze a single student's submission file and complete:
 
-1. **Identity Recognition**: Look for `stu_id` (student ID) and `stu_name` (name) in the **[Student Submission Content]** first. If not found in the content, try to extract them from the **[Filename]**. If you cannot find them in either place, set `stu_name` to "[Unknown Student]" and `stu_id` to the filename.
+1. **Identity Recognition**: For `stu_id` (student ID) and `stu_name` (name), look for each field independently in the **[Filename]** first. Use the **[Student Submission Content]** only if the corresponding field cannot be identified in the filename. Copy each identified value verbatim from its source, preserving characters, spelling, capitalization, internal spaces, punctuation, and leading zeros. Do not translate, transliterate, normalize, correct, infer, or invent either value. If neither source contains the name, set `stu_name` to "[Unknown Student]". If neither source contains the student ID, set `stu_id` to the original filename as a fallback.
 
 2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Preserve the OCR Markdown structure instead of flattening it: keep superscripts, subscripts, fractions, radicals, integral bounds, transposes, and norms as valid LaTeX. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks. Do not introduce hard line breaks inside one equation or sentence. Preserve fenced code and its indentation, using real decoded newlines rather than visible `\\n` text.
 
@@ -943,8 +943,8 @@ async def parse_student_answer_sources(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then the submission content "
-            "only when the filename has no usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)
@@ -1633,8 +1633,8 @@ async def parse_student_answers(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then use submission content "
-            "only when the filename does not contain a usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)
