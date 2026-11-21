@@ -118,6 +118,13 @@ def _grading_failure_feedback(
                 "请稍后重试；如反复出现，请检查代理 / 网络配置。"
             ),
         },
+        "grading_evidence_invalid": {
+            "zh_message": "有模型返回的评分依据未通过校验，本题未产生有效分数。",
+            "en_message": "A model returned scoring evidence that failed validation. This item has no valid score.",
+            "zh_suggestion": "请重试失败项，或对照作答人工评分。",
+            "en_suggestion": "Retry the failed item or review the answer and score it manually.",
+            "legacy_message": "模型的评分依据未通过校验。请重试失败项，或对照作答人工评分。",
+        },
         "parse_failed": {
             "zh_message": "该题因所有 AI 专家的返回内容均无法解析而暂未批改。",
             "en_message": "This item was not graded because none of the AI expert responses could be parsed.",
@@ -402,7 +409,13 @@ async def _grade_single_answer(
                 synthesis_method = "all_failed"
             else:
                 synthesis_method = "all_failed"
-            comment = _grading_failure_feedback(e.dominant_kind, grading_setup)
+            feedback_kind = e.dominant_kind
+            if feedback_kind == "parse_failed" and any(
+                failure.provider_failure and failure.provider_failure.code == "grading_evidence_invalid"
+                for failure in e.failures
+            ):
+                feedback_kind = "grading_evidence_invalid"
+            comment = _grading_failure_feedback(feedback_kind, grading_setup)
             reasons = []
             for failure in e.failures:
                 if failure.programming_evidence and failure.error_kind == e.dominant_kind:

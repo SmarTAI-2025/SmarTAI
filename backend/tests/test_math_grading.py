@@ -294,6 +294,20 @@ async def test_exhausted_structured_grading_saves_safe_failure_reasons():
         "assessment": "missing_json", "recovery": "schema_mismatch",
     }
     assert "PRIVATE" not in result.raw_output
+    assert result.provider_failure.code == "provider_response_invalid"
+
+
+@pytest.mark.asyncio
+async def test_exhausted_scoring_evidence_has_a_public_reason_without_private_details(monkeypatch, provider):
+    error = grading.StructuredOutputInvalidError("private validation details", failure_reason="invalid_scoring_evidence")
+    call = AsyncMock(side_effect=error)
+    monkeypatch.setattr(grading, "structured_llm_call", call)
+    with math_plans_context({"q1": plan_for()}):
+        result = await CalculationSkill(provider, language="zh").grade(problem(), answer())
+    assert result.error_kind == "parse_failed" and not result.steps
+    assert result.provider_failure.code == "grading_evidence_invalid"
+    assert "评分依据未通过校验" in result.comment
+    assert "private" not in result.comment + result.raw_output
 
 
 @pytest.mark.asyncio

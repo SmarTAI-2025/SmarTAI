@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, SkipValidation, TypeAdapter, 
 
 from backend.services.part_rubric import supplied_notation
 from backend.skills.part_scoring import INSTRUCTION as PART_SCORING_INSTRUCTION, PROOF_INSTRUCTION, PartDecision, ReasonedDecision, settle_parts
-from backend.models import ExpertResult, GradingModelOutput, ScoreAward, ScoreDeduction, StepScore
+from backend.models import ExpertResult, GradingModelOutput, ProviderFailure, ScoreAward, ScoreDeduction, StepScore
 from backend.skills.base import (
     GradingSkill, authoritative_score_instruction, build_system_prompt,
     classify_skill_error, format_deterministic_feedback,
@@ -1893,6 +1893,10 @@ class MathGradingSkill(GradingSkill):
             failed = self._blank_result(problem.q_id, problem.max_score, friendly, error_kind=kind, error=exc)
             if kind == "parse_failed":
                 response_failures[stage] = _response_failure_reason(exc)
+                if response_failures[stage] == "invalid_scoring_evidence":
+                    failed.provider_failure = ProviderFailure(code="grading_evidence_invalid")
+                    failed.comment = ("模型的评分依据未通过校验。"
+                                      if self.language in {"zh", "zh-CN"} else "The model’s scoring evidence failed validation.")
                 failed = failed.model_copy(update={"raw_output": _json({
                     "version": TRACE_VERSION, "plan_id": plan.plan_id, "response_failure": response_failures,
                 })})
