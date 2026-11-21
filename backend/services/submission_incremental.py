@@ -39,6 +39,11 @@ def repair_submission_identity(previous, current):
         placeholders = filename_identity_fallbacks(previous, filename)
         incoming_placeholders = filename_identity_fallbacks(current, filename)
         repaired_fields |= placeholders - incoming_invalid - incoming_placeholders
+        # A name returned for a different identified student cannot fill this record.
+        if ("stu_name" in repaired_fields and "stu_id" not in (invalid | placeholders | incoming_invalid | incoming_placeholders)
+                and previous.get("stu_id") != current.get("stu_id")):
+            repaired_fields.remove("stu_name")
+            remaining.update(invalid & {"stu_name"})
         identity.update({field: current[field] for field in repaired_fields})
         if invalid or placeholders:
             # A retry may return a fallback for an already verified sibling.
