@@ -64,6 +64,176 @@ def persisted(owner, operation):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("recovery", ["auto", "same", "changed", "legacy_same", "legacy_changed"])
+async def test_incomplete_question_reaches_provider_again_before_generating(monkeypatch, recovery):
+    from backend.llm.providers import LLMResponse
+    from backend.tests.part_rubric_fixtures import freeze_reply
+
+    text = "(3) Compute the limit of x / (1 + x) as x approaches zero."
+    owner, task, operation, pipeline = await setup(monkeypatch, text=text)
+    prompts, providers = [], []
+    failures = 1 if recovery == "auto" else 3
+
+    async def extract(provider, messages):
+        prompts.append(messages[-1].content)
+        providers.append(provider)
+        partial = len(prompts) <= failures
+        item = row("" if partial else "3", stem=text[:-8] if partial else text)
+        return LLMResponse(content=json.dumps({"problems": [{**item, "source_incomplete": partial}]}),
+                           model="test", provider="test", duration_ms=1)
+
+    monkeypatch.setattr(_RecoveryRegistry.Provider, "ainvoke", extract)
+    def candidates(data, targets, *_args, **_kwargs):
+        assert data["q1"]["stem"] == text
+        return freeze_reply(data["q1"], [generated(t["target"], "Verified material.") for t in targets])
+    generate = AsyncMock(side_effect=candidates)
+    monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
+    if recovery != "auto":
+        with pytest.raises(ValidationError, match="Some question text is incomplete"):
+            await pipeline.run()
+        assert len(prompts) == 3
+        generate.assert_not_awaited()
+        progress = await pipeline.reporter.snapshot()
+        assert not progress.failed_question_ids
+        _, partial = persisted(owner, operation)
+        assert [i["details"].get("reason") for i in partial["q1"]["preparation_issues"]
+                if i["code"] == "recognition_partial"] == ["incomplete_question_text"]
+        assert not any(i["code"] == "generation_failed" for i in partial["q1"]["preparation_issues"])
+        key, = (k for k in pipeline.incomplete_units if k.startswith("extract:"))
+        if recovery.startswith("legacy_"):
+            # Old releases saved the fragment with a successful chunk marker.
+            await pipeline.finish(key, pipeline.units[key])
+            assert key not in pipeline.incomplete_units
+        task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
+            "question_source_incomplete", expected_lease_token=operation.lease_token)
+        workflow = workflow_repository.get_workflow(task, owner_id=owner)
+        changed = recovery.endswith("changed")
+        registry = _RecoveryRegistry("new-model" if changed else "test-model")
+        if changed:
+            registry.provider = _RecoveryRegistry.Provider()
+        monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
+        retry = await api.retry_question_preparation(task_id=task, job_id=operation.operation_id,
+            request=api.RetryQuestionPreparationRequest(expected_workflow_revision=workflow.workflow_revision,
+                use_current_configuration=changed), background_tasks=None, current=SimpleNamespace(id=owner),
+            registry=registry)
+        operation = _claim(owner, retry["job_id"], "retry")
+
+    await api.run_durable_question_preparation(operation)
+    finished, rows = persisted(owner, operation)
+    assert finished.status == "done", finished.error_code
+    assert len(prompts) == failures + 1
+    assert "previous extraction left a question incomplete" in prompts[-1]
+    assert (providers[0] is providers[-1]) is (not recovery.endswith("changed"))
+    generate.assert_awaited_once()
+    assert list(rows) == ["q1"] and rows["q1"]["stem"] == text
+    assert rows["q1"]["rubric_draft"] and rows["q1"]["reference_answer"]
+    assert not any(i["code"] == "recognition_partial" for i in rows["q1"]["preparation_issues"])
+    assert not finished.checkpoint["incremental_errors"] and not finished.checkpoint["incremental_incomplete_units"]
+
+
+@pytest.mark.asyncio
+async def test_omitting_a_fragment_during_repair_keeps_it_and_the_verified_sibling(monkeypatch):
+    _, _, _, pipeline = await setup(monkeypatch)
+    complete = row(1, criterion="Teacher rubric.", reference_answer="Teacher answer.")
+    fragment = {**row(2, stem="First half"), "source_incomplete": True}
+    fresh = row(2, stem="Now includes the missing second half.", criterion="Rule.", reference_answer="Answer.")
+    extract = AsyncMock(side_effect=[inc._rows([complete, fragment]), inc._rows([complete]), inc._rows([fresh])])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    generate = AsyncMock(side_effect=AssertionError("Both questions have teacher material"))
+    monkeypatch.setattr(inc, "generate_missing_question_materials", generate)
+    rows = await pipeline.run()
+    assert extract.await_count == 3
+    assert [(r["number"], r["stem"]) for r in rows.values()] == [("1", complete["stem"]), ("2", fresh["stem"])]
+    assert not any(i["code"] == "recognition_partial" for r in rows.values() for i in r["preparation_issues"])
+    generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_short_unlabelled_fragment_cannot_claim_a_verified_siblings_reply(monkeypatch):
+    _, _, _, pipeline = await setup(monkeypatch)
+    fragment = {**row("", stem="x"), "source_incomplete": True}
+    sibling = row(2, stem="Solve x + 1 = 0.", criterion="Teacher rule.", reference_answer="x = -1.")
+    fixed = row(1, stem="Find the derivative of x.", criterion="Rule.", reference_answer="1.")
+    extract = AsyncMock(side_effect=[
+        inc._rows([fragment, sibling]), inc._rows([sibling]), inc._rows([fixed, sibling]),
+    ])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    rows = await pipeline.run()
+    assert extract.await_count == 3
+    assert [(r["number"], r["stem"]) for r in rows.values()] == [("1", fixed["stem"]), ("2", sibling["stem"])]
+    assert not any(inc._incomplete_stem(r) for r in rows.values())
+
+
+@pytest.mark.asyncio
+async def test_full_reread_replaces_anonymous_fragments_without_reverting_a_verified_sibling(monkeypatch):
+    _, _, _, pipeline = await setup(monkeypatch)
+    def supplied(number, stem):
+        return row(number, stem=stem, criterion="Teacher rubric.", reference_answer="Teacher answer.")
+    sibling = supplied(1, "Independent question.")
+    partials = [{**row("", stem=fragment), "source_incomplete": True} for fragment in ("(a) x", "(b) y")]
+    repaired = [supplied(2, "Find the integer roots."), supplied(3, "Compute the derivative.")]
+    extract = AsyncMock(side_effect=[inc._rows([sibling, *partials]), inc._rows([sibling, *repaired])])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    rows = await pipeline.run()
+    assert extract.await_count == 2
+    assert [r["stem"] for r in rows.values()] == [sibling["stem"], *(r["stem"] for r in repaired)]
+    assert not any(inc._incomplete_stem(r) for r in rows.values())
+
+
+@pytest.mark.asyncio
+async def test_retry_of_entirely_empty_extraction_rereads_the_source(monkeypatch):
+    _, _, operation, pipeline = await setup(monkeypatch)
+    extract = AsyncMock(side_effect=[{}, inc._rows([row(1, criterion="Rule.", reference_answer="Answer.")])])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    with pytest.raises(ValidationError, match="No questions"):
+        await pipeline.run()
+    resumed = inc.IncrementalQuestionPreparation(operation=operation, sources=pipeline.sources,
+        provider=_RecoveryRegistry().provider, provider_id="test-provider", reporter=ProgressReporter(operation.operation_id),
+        score_policy=pipeline.policy, read_source=pipeline.read_source)
+    rows = await resumed.run()
+    assert rows["q1"]["stem"] == "Explain item 1."
+    assert extract.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stopped", ["before_reply", "after_partial_write", "after_complete_write"])
+async def test_interrupted_fragment_repair_uses_only_this_calls_durable_outcome(monkeypatch, stopped):
+    _, _, operation, pipeline = await setup(monkeypatch, text="A self-contained exercise.")
+    original_read = inc.read_base_preparation_artifact
+    complete = row(1, criterion="Rule.", reference_answer="Answer.")
+    partial = {**complete, "source_incomplete": True}
+    calls = 0
+    async def extract(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2 and stopped == "before_reply":
+            raise asyncio.CancelledError
+        return inc._rows([partial if calls == 1 or (calls == 2 and stopped == "after_partial_write") else complete])
+    def crash_after_write(*args, **kwargs):
+        saved = original_read(*args, **kwargs)
+        if calls == 2 and stopped != "before_reply":
+            raise asyncio.CancelledError
+        return saved
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    monkeypatch.setattr(inc, "read_base_preparation_artifact", crash_after_write)
+    with pytest.raises(asyncio.CancelledError):
+        await pipeline.run()
+    monkeypatch.setattr(inc, "read_base_preparation_artifact", original_read)
+    resumed = inc.IncrementalQuestionPreparation(operation=operation, sources=pipeline.sources,
+        provider=_RecoveryRegistry().provider, provider_id="test-provider", reporter=ProgressReporter(operation.operation_id),
+        score_policy=pipeline.policy, read_source=pipeline.read_source)
+    if stopped == "before_reply":
+        with pytest.raises(RuntimeError, match="provider_submit_uncertain"):
+            await resumed.run()
+        assert calls == 2
+    else:
+        rows = await resumed.run()
+        assert not inc._incomplete_stem(rows["q1"])
+        assert calls == (3 if stopped == "after_partial_write" else 2)
+        assert not resumed.incomplete_units
+
+
+@pytest.mark.asyncio
 async def test_one_chunk_is_durable_while_another_waits_and_manual_never_calls_model(monkeypatch):
     owner, task, operation, pipeline = await setup(monkeypatch)
     blocked = asyncio.Event()

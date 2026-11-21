@@ -1076,12 +1076,15 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
         ).model_dump()
     from backend.services.part_rubric import alternative_text
     from backend.services.rubric_display import rubric_display, alternative_display, show_alternative, alternative_cap_issue
-    from backend.services.math_grading_context import problem_from_question
+    from backend.services.math_grading_context import problem_from_question, uses_math_grading
     from backend.services.rubric_drafts import saved_draft
     programming = is_programming_question_type(question.type)
-    verified = None
-    if (programming or math_plan is None) and presentation.get("rubric_draft"):
-        verified = saved_draft(problem_from_question(question), allow_incomplete_alternative=True)
+    math_question = uses_math_grading(question.type)
+    verified = grading_draft = None
+    if presentation.get("rubric_draft") and (math_question or programming or math_plan is None):
+        problem = problem_from_question(question)
+        grading_draft = saved_draft(problem) if math_question else None
+        verified = grading_draft or saved_draft(problem, allow_incomplete_alternative=True)
         if math_plan is None and verified:
             math_plan = verified.plan
     rubric_draft = presentation.get("rubric_draft")
@@ -1160,6 +1163,7 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
             "rubric_version": math_plan.part_rubric.rubric_version}
            if math_plan and math_plan.part_rubric else {}),
         "rubric_point_summary": rubric_summary,
+        "rubric_confirmation_required": math_question and grading_draft is None,
         "review_status": presentation.get("review_status", "needs_review"),
         "reference_answer": question.reference_answer,
         "solution_code": presentation.get("solution_code"),
@@ -5310,8 +5314,6 @@ def _public_answer_flags(flags, *, content=None, answer_type=None, review_status
 
 
 def _question_review_blockers(questions) -> list[str]:
-    from backend.services.math_grading_context import problem_from_question, uses_math_grading
-    from backend.services.rubric_drafts import saved_draft
     issues = []
     for question in questions:
         presentation = (question.source or {}).get("presentation") or {}
@@ -5328,7 +5330,7 @@ def _question_review_blockers(questions) -> list[str]:
                     and (issue.get("details") or {}).get("reason") in {
                         "programming_test_award_unset", "required_programming_tests_missing",
                     } for issue in problem["preparation_issues"]))
-                or (uses_math_grading(question.type) and saved_draft(problem_from_question(question)) is None)
+                or problem["rubric_confirmation_required"]
                 or any(question_issue_blocks_progress(issue, presentation)
                        for issue in review_issues if issue.get("code") != "manual_completion_required")):
             issues.append("question_review_blocked")

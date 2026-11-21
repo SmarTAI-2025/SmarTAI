@@ -350,6 +350,7 @@ async def _extract_problems_call(
     allow_empty: bool = False,
     partial_source: bool = False,
     source_context: str = "",
+    repair_reason: str = "",
 ) -> Dict[str, Dict[str, Any]]:
     """Run one bounded LLM extraction call on a single chunk of source text.
 
@@ -421,6 +422,8 @@ async def _extract_problems_call(
     recovery_guidance = ("\nThis is incremental extraction from supplied source text. Do not reconstruct missing pages. "
         "Retain every available question fragment, even when incomplete. Add boolean source_incomplete=true "
         "only for a question whose opening, continuation, condition or subpart is missing. "
+        "A self-contained subquestion can be complete without a major question number. Preserve its printed "
+        "label and do not invent missing instructions or infer completeness from numbering alone. "
         "A missing page does not make unrelated complete questions incomplete. "
         "Combine distinct saved fragments only when their question identity is supported; retain alternatives. "
         "Extract questions only from saved problem sources. Supporting material must never fill a missing stem. "
@@ -431,6 +434,8 @@ async def _extract_problems_call(
         "and source=teacher. Never combine values from different examples. "
         "Do not create new test cases. Never claim a created case was supplied by the teacher."
         if partial_source else "")
+    if repair_reason:
+        user_content += "\n[Extraction retry]\nRe-extract this chunk from the supplied text. " + repair_reason
     if dotted_headers:
         user_content += ("\n[Source heading typography] These spaced headings are ambiguous, not confirmed numbers. "
                      "Use the surrounding source and requested question numbers to distinguish a hierarchical "

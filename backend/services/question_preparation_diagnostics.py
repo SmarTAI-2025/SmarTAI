@@ -141,7 +141,7 @@ def public_preparation_review(value):
              "math_rubric_advisory", "ai_source_conflict", "unmapped_source_content", "max_score_not_found",
              "default_max_score_requires_review", "material_recognition_review_required", "material_parser_provider_required"}
     fields = {"stem", "answer", "rubric", "source", "programming_tests", "max_score"}
-    reasons = {"conflicting_printed_formula", "invalid_structured_rubric", "test_case_output_conflict", "alternative_cap_review",
+    reasons = {"conflicting_printed_formula", "incomplete_question_text", "invalid_structured_rubric", "test_case_output_conflict", "alternative_cap_review",
                "required_programming_tests_missing", "programming_test_award_unset", "teacher_rule_interpretation"}
     for row in value[:500] if isinstance(value, list) else []:
         if not isinstance(row, dict) or not isinstance(row.get("q_id"), str):
