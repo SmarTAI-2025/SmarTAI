@@ -196,13 +196,23 @@ _PAGE_GAP_PREFIX = re.compile(
     r"(?:\s*[（(](?:[a-z]|\d+|续[^()（）]*|continued)[）)])*\s*",
     re.IGNORECASE,
 )
-_PAGE_NUMBER_FOOTER = re.compile(
+_PAGE_NUMBER_LINE = re.compile(
     r"(?:[-–—][ \t]+([0-9]+)[ \t]+[-–—]|Page[ \t]+([0-9]+)|第[ \t]*([0-9]+)[ \t]*页)",
     re.IGNORECASE,
 )
 _SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
 _EXPONENT = re.compile(rf"[{_SUPERSCRIPT_DIGITS}]+|\^([0-9])(?![0-9])")
 _EXPONENT_DIGITS = str.maketrans(_SUPERSCRIPT_DIGITS, "0123456789")
+
+
+def _is_page_number_line(line: str, page: int) -> bool:
+    marker = _PAGE_NUMBER_LINE.fullmatch(line.strip())
+    return marker is not None and str(page) in marker.groups()
+
+
+def _without_page_number_header(text: str, page: int) -> str:
+    first_line, _, rest = text.lstrip().partition("\n")
+    return rest if _is_page_number_line(first_line, page) else text
 
 
 def _page_gap_text(value):
@@ -237,10 +247,12 @@ def answer_boundaries_on_read_pages(read_pages, problems, coverage):
     from backend.services.question_matching import question_number_aliases, resolve_question_match
 
     aliases = {alias: q_id for q_id, labels in question_number_aliases(problems).items() for alias in labels}
-    units = source_question_units(read_pages, known_numbers=set(aliases), number_key=aliases.get,
+    failed_pages = set(coverage.get("failed_pages") or ())
+    boundary_pages = {page: _without_page_number_header(text, page) if page - 1 in failed_pages else text
+                      for page, text in read_pages.items()}
+    units = source_question_units(boundary_pages, known_numbers=set(aliases), number_key=aliases.get,
                                   qualified=True, check_opening=True, source_end_page=coverage.get("total_pages"))
     closed, openings, leading_headings = set(), {}, {}
-    failed_pages = set(coverage.get("failed_pages") or ())
     for unit in units:
         gap_page = unit.previous_gap_page
         follows_failure = gap_page is not None and gap_page in failed_pages
@@ -285,7 +297,7 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
     pages = sorted(read_pages)
     failed = set(failed_pages)
     aliases = number_aliases or {}
-    text, offsets, ends, body_ends, previous = [], [], [], [], None
+    text, offsets, body_starts, ends, body_ends, previous = [], [], [], [], [], None
     offset = 0
     for page in pages:
         if previous is not None:
@@ -294,11 +306,13 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
         offsets.append(offset)
         raw = read_pages[page].rstrip()
         normalized = _page_gap_text(raw)
+        after_header = _without_page_number_header(raw, page) if page - 1 in failed else raw
+        header_length = len(normalized) - len(_page_gap_text(after_header)) if after_header != raw else 0
+        body_starts.append(offset + header_length)
         body, _, last_line = raw.rpartition("\n")
-        footer = _PAGE_NUMBER_FOOTER.fullmatch(last_line.strip())
         # Keep the original OCR for locating answers. Only an independent
         # trailing marker with the actual page number can shorten the edge.
-        body_length = len(_page_gap_text(body)) if footer and str(page) in footer.groups() else len(normalized)
+        body_length = len(_page_gap_text(body)) if _is_page_number_line(last_line, page) else len(normalized)
         body_ends.append(offset + body_length)
         text.append(normalized)
         offset += len(normalized)
@@ -350,8 +364,10 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
             first, last = pages[first_index], pages[last_index]
             # Being the closest *matched* answer is insufficient: unlocated
             # work may still lie between a match and the missing page.
-            if first - 1 in failed:
-                prefix = source[offsets[first_index]:start].strip()
+            body_start = body_starts[first_index]
+            if (first - 1 in failed and min(end, body_ends[first_index]) > body_start
+                    and (start == offsets[first_index] or start >= body_start)):
+                prefix = source[body_start:start].strip()
                 label = _PAGE_GAP_PREFIX.fullmatch(prefix) if prefix and not prefix.isdigit() else None
                 matching_label = label and unicodedata.normalize("NFKC", label["number"]) in aliases.get(q_id, ())
                 if not prefix or matching_label:
