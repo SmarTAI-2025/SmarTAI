@@ -1004,11 +1004,17 @@ async def parse_student_answer_sources(
                 "without judging whether the student answered correctly or completed the solution."
                 if independent_answers and opening_ids else ""
             )
+            coverage = (getattr(source, "recognition", None) or {}).get("coverage") or {}
+            gap_instruction = (
+                "Some source pages were not read. Flag recognition_incomplete only when an unread page cuts off this answer."
+                if coverage.get("failed_pages") or coverage.get("unprocessed_pages")
+                else "No unread page was reported for this text. Do not flag recognition_incomplete for omitted proof steps "
+                     "or illegible words. Keep an unfinished student answer as written; use unclear_text for illegible writing."
+            )
             messages = [
                 SystemMessage(content=HW_SYSTEM_PROMPT +
-                    "\nNever reconstruct missing pages or assume unread work is blank. "
-                    "Preserve available answer fragments; flag an answer recognition_incomplete "
-                    "when its continuation or steps are missing." + opening_guidance),
+                    "\nNever reconstruct missing pages or assume unread work is blank. Preserve visible fragments. "
+                    + gap_instruction + opening_guidance),
                 HumanMessage(content=user_message),
             ]
             try:

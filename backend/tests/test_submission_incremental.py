@@ -740,6 +740,8 @@ async def test_pdf_gap_handoff_advises_only_at_failed_page_edges(
     else:
         assert not answers["1.1.29"]["flag"]
     assert len(calls) == 1 and ("source_opening" in calls[0]) == unread
+    assert ("an unread page cuts off this answer" in calls[0]) == unread
+    assert ("Keep an unfinished student answer as written" in calls[0]) != unread
 
 
 @pytest.mark.asyncio
