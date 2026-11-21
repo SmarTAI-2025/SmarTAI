@@ -363,9 +363,55 @@ activate_release() {
 }
 
 
+migrate_database() {
+    log "Database migration required"
+    log "Stopping application services before backup/migration"
+
+    MIGRATION_PHASE=backup
+    systemctl stop "$SERVICE" "$ADMIN_SERVICE"
+
+    BACKUP_FILE="$BACKUPS/predeploy-${SHA}-$(date -u '+%Y%m%dT%H%M%SZ').dump"
+
+    log "Creating PostgreSQL backup: $BACKUP_FILE"
+
+    if ! runuser -u postgres -- \
+        pg_dump \
+        -Fc \
+        -d smartai \
+        -f "$BACKUP_FILE.partial"
+    then
+        die "PostgreSQL backup failed"
+    fi
+
+    mv -- "$BACKUP_FILE.partial" "$BACKUP_FILE"
+
+    log "Applying Alembic migrations"
+    MIGRATION_PHASE=migrating
+
+    if ! runuser -u smartai -- bash -c '
+set -a
+source /etc/smartai/smartai.env
+set +a
+cd "$1"
+exec .venv/bin/python -m alembic upgrade head
+' _ "$RELEASE"
+    then
+        die "Alembic migration failed"
+    fi
+}
+
+
 recover_release() {
-    if [[ "$MIGRATION_NEEDED" == "1" ]]; then
-        log "Migration was applied; database and paired release recovery require manual review"
+    if [[ "$MIGRATION_PHASE" == backup ]]; then
+        if [[ -n "$BACKUP_FILE" ]]; then
+            rm -f -- "$BACKUP_FILE.partial"
+        fi
+        log "Migration has not started; starting the current services"
+        systemctl start "$SERVICE" "$ADMIN_SERVICE" && wait_for_release "$OLD_RUNNER_IMAGE"
+        return
+    fi
+    if [[ "$MIGRATION_PHASE" == migrating ]]; then
+        log "Migration was attempted; database and paired release recovery require manual review"
         log "Pre-deploy backup: $BACKUP_FILE"
         return 1
     fi
@@ -376,6 +422,47 @@ recover_release() {
         wait_for_release "$OLD_RUNNER_IMAGE"
 }
 
+
+cleanup_on_exit() {
+    rm -f -- "${TARBALL:-}" 2>/dev/null || true
+    rm -rf -- "${ADMIN_BUILD_DIR:-}" 2>/dev/null || true
+
+    if [[ "$DEPLOY_OK" -eq 0 ]]; then
+        if [[ "$ACTIVATION_STARTED" -eq 1 || "$MIGRATION_PHASE" != none ]]; then
+            recover_release || log "ERROR: Release recovery requires administrator attention"
+        fi
+        # Keep the candidate, its venv, and the completed dump available to
+        # the operator even when migration failed before the symlink switch.
+        if [[ "$MIGRATION_PHASE" == migrating ]]; then
+            log "Retaining candidate release: $RELEASE"
+            return
+        fi
+
+        if [[ "$TARGET_RELEASE_CREATED" -eq 1 ]]; then
+            local current_now
+            current_now="$(readlink -f "$CURRENT" 2>/dev/null || true)"
+
+            if [[ "$current_now" != "$RELEASE" ]]; then
+                rm -rf -- "$RELEASE" 2>/dev/null || true
+            fi
+        fi
+
+        if [[ "$TARGET_ENV_CREATED" -eq 1 ]]; then
+            local referenced=0 release env
+
+            shopt -s nullglob
+            for release in "$RELEASES"/*; do
+                [[ -L "$release/.venv" ]] || continue
+                env="$(readlink -f "$release/.venv" 2>/dev/null || true)"
+                [[ "$env" == "$CACHE_ENV" ]] && referenced=1
+            done
+            shopt -u nullglob
+
+            [[ "$referenced" -eq 1 ]] \
+                || rm -rf -- "$CACHE_ENV" 2>/dev/null || true
+        fi
+    fi
+}
 
 if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
     return
@@ -442,45 +529,11 @@ TARGET_RELEASE_CREATED=0
 TARGET_ENV_CREATED=0
 DEPLOY_OK=0
 MIGRATION_NEEDED=0
+MIGRATION_PHASE=none
 BACKUP_FILE=""
 ADMIN_BUILD_DIR=""
 ACTIVATION_STARTED=0
 
-
-cleanup_on_exit() {
-    rm -f -- "${TARBALL:-}" 2>/dev/null || true
-    rm -rf -- "${ADMIN_BUILD_DIR:-}" 2>/dev/null || true
-
-    if [[ "$DEPLOY_OK" -eq 0 ]]; then
-        if [[ "$ACTIVATION_STARTED" -eq 1 ]]; then
-            recover_release || log "ERROR: Automatic release recovery did not complete"
-        fi
-
-        if [[ "$TARGET_RELEASE_CREATED" -eq 1 ]]; then
-            local current_now
-            current_now="$(readlink -f "$CURRENT" 2>/dev/null || true)"
-
-            if [[ "$current_now" != "$RELEASE" ]]; then
-                rm -rf -- "$RELEASE" 2>/dev/null || true
-            fi
-        fi
-
-        if [[ "$TARGET_ENV_CREATED" -eq 1 ]]; then
-            local referenced=0 release env
-
-            shopt -s nullglob
-            for release in "$RELEASES"/*; do
-                [[ -L "$release/.venv" ]] || continue
-                env="$(readlink -f "$release/.venv" 2>/dev/null || true)"
-                [[ "$env" == "$CACHE_ENV" ]] && referenced=1
-            done
-            shopt -u nullglob
-
-            [[ "$referenced" -eq 1 ]] \
-                || rm -rf -- "$CACHE_ENV" 2>/dev/null || true
-        fi
-    fi
-}
 
 trap cleanup_on_exit EXIT
 trap 'exit 129' HUP
@@ -705,41 +758,7 @@ PY
 
 
 if [[ "$MIGRATION_NEEDED" == "1" ]]; then
-    log "Database migration required"
-    log "Stopping application services before backup/migration"
-
-    systemctl stop "$SERVICE" "$ADMIN_SERVICE"
-
-    BACKUP_FILE="$BACKUPS/predeploy-${SHA}-$(date -u '+%Y%m%dT%H%M%SZ').dump"
-
-    log "Creating PostgreSQL backup: $BACKUP_FILE"
-
-    if ! runuser -u postgres -- \
-        pg_dump \
-        -Fc \
-        -d smartai \
-        -f "$BACKUP_FILE"
-    then
-        rm -f -- "$BACKUP_FILE" 2>/dev/null || true
-        systemctl start "$SERVICE" || true
-        systemctl start "$ADMIN_SERVICE" || true
-        die "PostgreSQL backup failed"
-    fi
-
-    log "Applying Alembic migrations"
-
-    if ! runuser -u smartai -- bash -c '
-set -a
-source /etc/smartai/smartai.env
-set +a
-cd "$1"
-exec .venv/bin/python -m alembic upgrade head
-' _ "$RELEASE"
-    then
-        systemctl start "$SERVICE" || true
-        systemctl start "$ADMIN_SERVICE" || true
-        die "Alembic migration failed"
-    fi
+    migrate_database
 else
     log "Database already at target Alembic head; backup not required"
 fi

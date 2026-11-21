@@ -12,10 +12,10 @@ OLD_IMAGE = "sha256:" + "a" * 64
 NEW_IMAGE = "sha256:" + "b" * 64
 
 
-def run_deploy_functions(shell, *args):
+def run_deploy_functions(shell, *args, check=True):
     return subprocess.run(
         ["bash", "-c", 'source "$1"; shift\n' + shell, "test-deploy", DEPLOY_SCRIPT, *args],
-        check=True,
+        check=check,
         capture_output=True,
         text=True,
         timeout=15,
@@ -97,9 +97,11 @@ OLD_RELEASE="$BASE/previous"
 RELEASE="$BASE/candidate"
 SHA=new
 MIGRATION_NEEDED=0
+MIGRATION_PHASE=none
 BACKUP_FILE=previous.dump
 if [[ "$result" == migration ]]; then
     MIGRATION_NEEDED=1
+    MIGRATION_PHASE=migrating
 fi
 log() { printf '%s\n' "$*"; }
 sleep() { :; }
@@ -148,3 +150,68 @@ fi
         assert not starts.exists()
     else:
         assert starts.read_text().splitlines() == [str(candidate)]
+
+
+@pytest.mark.parametrize("outcome", ["stop_failure", "backup_failure", "backup_signal", "migration_failure",
+                                     "migration_signal", "success"])
+def test_migration_recovery_only_restarts_the_previous_services_before_alembic(tmp_path, outcome):
+    previous = tmp_path / "previous"
+    candidate = tmp_path / "candidate"
+    for release in (previous, candidate):
+        release.mkdir()
+    (tmp_path / "current").symlink_to(previous, target_is_directory=True)
+
+    result = run_deploy_functions(
+        r"""
+BASE="$1"
+outcome="$2"
+CURRENT="$BASE/current"
+RELEASE="$BASE/candidate"
+OLD_RUNNER_IMAGE=old-image
+BACKUPS="$BASE"
+SHA=example
+TARGET_RELEASE_CREATED=1
+TARGET_ENV_CREATED=0
+DEPLOY_OK=0
+ACTIVATION_STARTED=0
+MIGRATION_PHASE=none
+BACKUP_FILE=""
+log() { echo "$*"; }
+systemctl() {
+    echo "$*" >> "$BASE/service-actions"
+    [[ "$1" != stop || "$outcome" != stop_failure ]]
+}
+wait_for_release() { echo "$1" >> "$BASE/verified-images"; }
+runuser() {
+    if [[ "$2" == postgres ]]; then
+        echo "example backup" > "${!#}"
+        if [[ "$outcome" == backup_signal ]]; then kill -TERM "$$"; fi
+        [[ "$outcome" != backup_failure ]]
+    else
+        [[ "$2" == smartai && -f "$BACKUP_FILE" ]] || return 2
+        echo attempted > "$BASE/migration"
+        if [[ "$outcome" == migration_signal ]]; then kill -TERM "$$"; fi
+        [[ "$outcome" != migration_failure ]]
+    fi
+}
+trap cleanup_on_exit EXIT
+trap 'exit 143' TERM
+migrate_database
+DEPLOY_OK=1
+""",
+        str(tmp_path), outcome, check=False,
+    )
+    expected_status = 143 if outcome.endswith("_signal") else 0 if outcome == "success" else 1
+    assert result.returncode == expected_status, result.stderr
+    reached_migration = (tmp_path / "migration").exists()
+    assert reached_migration == (outcome.startswith("migration_") or outcome == "success")
+    assert bool(list(tmp_path.glob("*.dump"))) == reached_migration
+    assert not list(tmp_path.glob("*.partial"))
+    assert candidate.exists() == reached_migration
+    assert (tmp_path / "current").resolve() == previous
+    actions = (tmp_path / "service-actions").read_text().splitlines()
+    assert actions == ["stop smartai smartai-admin"] + ([] if reached_migration else ["start smartai smartai-admin"])
+    if reached_migration:
+        assert ("require manual review" in result.stdout) == (outcome != "success")
+    else:
+        assert (tmp_path / "verified-images").read_text().strip() == "old-image"
