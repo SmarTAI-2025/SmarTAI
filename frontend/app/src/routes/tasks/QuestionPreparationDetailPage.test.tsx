@@ -145,7 +145,7 @@ vi.mock("@/api/hooks/tasks", () => ({
 }));
 
 vi.mock("@/hooks/useQuestionStemSaves", () => ({
-  useQuestionStemSaves: () => ({ byQuestion: new Map(), busy: false, submit: submitStem }),
+  useQuestionStemSaves: () => ({ forField: () => undefined, busy: false, submit: submitStem }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
@@ -852,15 +852,16 @@ it("protects a pending answer edit before submitting the stem and preserves the 
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope).sort()).toEqual(["question:task-1:Q1:reference_answer", "question:task-1:Q1:stem"]);
   const [stemSave, answerSave] = question.getAllByRole("button", { name: "保存" });
   await user.click(stemSave);
-  expect(await question.findByText("请先处理本题其他未保存的修改，再更新题干。")).toBeInTheDocument();
+  expect(await question.findByText("请先处理本题其他未保存的修改，再保存。")).toBeInTheDocument();
   expect(submitStem).not.toHaveBeenCalled();
   await user.click(answerSave);
+  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 7, qId: "Q1", field: "reference_answer", value: "explicit reference answer", retryOf: undefined });
   await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]));
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
   submitStem.mockRejectedValueOnce(new Error("QA failed save"));
   await user.click(question.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(question.getByText(/请稍后重试保存/)).toBeInTheDocument());
-  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 8, qId: "Q1", stem: "explicit stem", retryOf: undefined });
+  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 7, qId: "Q1", field: "stem", value: "explicit stem", retryOf: undefined });
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]);
 });
 

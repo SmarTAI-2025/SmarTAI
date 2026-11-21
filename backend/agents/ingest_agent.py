@@ -2439,6 +2439,11 @@ async def generate_missing_question_materials(
             "existing_reference_answer": str(
                 problem.get("reference_answer") or ""
             ),
+            **({"missing_reference_parts": problem["missing_reference_parts"],
+                "reference_instruction": "Supply only these missing labeled answers. Preserve the existing teacher text."}
+               if problem.get("missing_reference_parts") else {}),
+            **({"reference_instruction": "Provide only the missing derivation supporting the teacher's supplied result."}
+               if problem.get("missing_derivation") else {}),
             **({"required_programming_test_points": problem["required_programming_test_points"]}
                if "required_programming_test_points" in problem else {}),
             "existing_solution_code": str(

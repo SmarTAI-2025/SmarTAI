@@ -362,6 +362,7 @@ export function useUpdateProblem() {
       reference_answer?: string | null;
       solution_code?: string | null;
       test_cases?: import("@/types").TestCase[] | null;
+      test_case_origins?: (number | null)[];
       expectedWorkflowRevision?: number;
     }) => tasksApi.updateProblem(taskId, qId, {
       ...patch,

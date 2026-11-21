@@ -949,7 +949,7 @@ def _rebind_display_policy_checks(old_rules, new_rules, checks):
     return tuple(rebound)
 
 
-def rebind_review_edit(prior, old_problem, problem):
+def rebind_review_edit(prior, old_problem, problem, *, reuse_scoring_rules=False):
     """Reuse structure only for edits whose scoring destination is unambiguous."""
     from backend.services.part_rubric import _POLICY_TOKEN, alternative_clauses, ordinary_criterion
     from backend.services.question_structure import _allocation_marker_pattern
@@ -962,8 +962,9 @@ def rebind_review_edit(prior, old_problem, problem):
     override_texts = lambda context: {k: v.get("binding_text", v["text"]) for k, v in context.get("alternative_rules", {}).items()}
     if (all(old[k] == new[k] for k in ("type", "max_score"))
             and override_texts(old) == override_texts(new)
-            and all(scoring_stem(old[k]) == scoring_stem(new[k])
-                    for k in ("stem", "criterion", "reference_answer"))):
+            and scoring_stem(old["criterion"]) == scoring_stem(new["criterion"])
+            and (reuse_scoring_rules or all(scoring_stem(old[k]) == scoring_stem(new[k])
+                                          for k in ("stem", "reference_answer")))):
         # Display-only edits do not re-extract any amounts. Keep the complete
         # accepted ledger, including AI supplements and teacher exceptions.
         rules = prior.plan.part_rubric

@@ -526,8 +526,9 @@ def _validate_major_question_candidates(
             normalized_answer = unicodedata.normalize(
                 "NFKC", candidate.text_value or ""
             ).casefold()
-            missing = [part.label for part in structure.subparts
-                       if not re.search(_allocation_marker_pattern(part.label), normalized_answer, re.I)]
+            requested_labels = problem.get("missing_reference_parts") or [part.label for part in structure.subparts]
+            missing = [label for label in requested_labels
+                       if not re.search(_allocation_marker_pattern(label), normalized_answer, re.I)]
             if missing:
                 raise ValidationError(
                     "The generated answer omitted subparts: " + ", ".join(missing),

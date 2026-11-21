@@ -41,6 +41,9 @@ def test_question_edits_resolve_only_affected_field_and_confirmation_handles_rem
         source = copy.deepcopy(question.source or {})
         pres = source.setdefault("presentation", {})
         pres["review_status"] = initial_status
+        # An existing teacher answer remains an independent source when only
+        # the stem is edited. An actually missing answer is now supplemented.
+        question.reference_answer = "Teacher-supplied answer."
         pres["preparation_issues"] = [dict(issue_id=field, q_id="q1", field=field, code="low_confidence",
             severity="warning", status="open", details={"confidence": .2}) for field in ["stem", "answer"]]
         question.source = source

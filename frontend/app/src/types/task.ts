@@ -81,6 +81,9 @@ export interface QuestionStemSave {
   workflow_revision: number | null;
   error_code: string | null;
   stem?: string;
+  field?: "stem" | "reference_answer" | "solution_code";
+  reference_answer?: string;
+  solution_code?: string;
 }
 
 export interface ProblemInfo {
@@ -105,6 +108,11 @@ export interface ProblemInfo {
   review_status?: "needs_review" | "edited" | "confirmed";
   reference_answer?: string | null;
   solution_code?: string | null;
+  programming_reference_binding?: {
+    field: "solution_code" | "reference_answer" | "generated_code" | null;
+    stale_fields: string[];
+    generated_code?: string;
+  };
   test_cases?: TestCase[] | null;
   material_provenance?: Partial<Record<"criterion" | "reference_answer" | "test_cases", MaterialFieldProvenance>>;
   ai_completion_provenance?: Partial<Record<AICompletionTarget, AICompletionProvenance>>;

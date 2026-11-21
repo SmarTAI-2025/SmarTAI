@@ -160,6 +160,36 @@ def bind_code_output(candidate, *, stem, document, incomplete=False):
     return CodeOutputQuestion(stem_sha256=unavailable.stem_sha256, source=source)
 
 
+def rebind_edited_code_output(previous, stem):
+    """Bind the program and explicit input from the teacher's edited question."""
+    unavailable = CodeOutputQuestion(stem_sha256=stem_digest(stem))
+    source = CodeOutputQuestion.model_validate(previous).source
+    blocks = list(_FENCE.finditer(stem))
+    if source is None or len(blocks) != 1:
+        return unavailable
+    block, = blocks
+    prose = stem[:block.start()] + stem[block.end():]
+    language = _LANGUAGES.get(block["language"].strip().lower(), source.language)
+    lines = prose.splitlines()
+    if source.input_quote in prose and "\n" in source.input_quote:
+        quote, stdin = source.input_quote, source.stdin
+    else:
+        inputs = []
+        for line in lines:
+            explicit = _INPUT.fullmatch(line)
+            values = [explicit["payload"]] if explicit else _INLINE_INPUT.findall(line)
+            inputs.extend((line, _option_text(value)) for value in values)
+        if len(inputs) != 1:
+            return unavailable
+        quote, stdin = inputs[0]
+    choices = {key: _option_text(value) for key, value in _OPTION.findall(prose)}
+    if bool(choices) != (source.form == "choice"):
+        return unavailable
+    candidate = source.model_copy(update={"code": block["code"], "language": language, "stdin": stdin,
+                                          "input_quote": quote, "choices": choices})
+    return bind_code_output(candidate.model_dump(), stem=stem, document=stem)
+
+
 def code_output_data(problem):
     """Read the server-owned descriptor from preparation or persisted provenance."""
     if isinstance(problem, dict):

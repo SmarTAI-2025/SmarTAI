@@ -221,10 +221,17 @@ async def test_programming_regeneration_preserves_teacher_test_budget(edit, monk
         "programming_scoring": {"test_points": test_points, "input_rules": "Input x is an integer."},
     })
     edit = owner, task, saved["workflow_revision"], client
-    stem = "Implement cube(x) for integer x."
-    answer = "Return x * x * x."
+    stem = "Implement cube(x) for integer x. Return x ** 3."
+    answer = "Return x * x * x.\n```python\ndef cube(x): return x ** 3\n```"
     rule = "Returns the correct value."
-    provider = Provider([response(answer, rule, test_points)])
+    from backend.tests.test_programming_question_edit import provider_for
+    generated = [response(answer, rule, test_points)]
+    if test_points:
+        tests = [{"io_mode": "function", "function_args": [i]} for i in range(10)]
+        generated.extend(provider_for({"test_cases": tests}).responses)
+        generated.append(json.dumps({"checks": [{"position": i + 1, "verdict": "allowed",
+            "source_quote": "for integer x", "reason": "The argument is an integer."} for i in range(10)]}))
+    provider = Provider(generated)
     submit(edit, stem=stem)
     await run_once(worker(monkeypatch, provider))
     assert status(edit)["status"] == "done", status(edit)
@@ -232,7 +239,8 @@ async def test_programming_regeneration_preserves_teacher_test_budget(edit, monk
     draft = saved_draft(problem_from_question(after))
     assert draft is not None and draft.programming_scoring.test_points == test_points
     assert draft.programming_scoring.input_rules == "Input x is an integer."
-    assert answer == after.reference_answer and rule.rstrip(".") in after.criterion
+    assert answer == after.reference_answer and after.criterion == f"Returns the correct value: {10 - test_points} points."
+    assert len(after.test_cases or []) == (10 if test_points else 0)
     assert "functional tests" not in after.criterion
 
 
