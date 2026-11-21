@@ -396,6 +396,7 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
         </p>
 
         <StageProviderSelect
+          allowByok
           id="submission-recognition-provider"
           label={localText(locale, "作答识别模型", "Submission recognition model")}
           hint={localText(

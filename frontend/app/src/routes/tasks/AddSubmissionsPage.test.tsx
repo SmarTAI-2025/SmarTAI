@@ -34,6 +34,7 @@ const taskState = vi.hoisted(() => ({
 
 const inputState = vi.hoisted(() => ({ input: null as unknown }));
 beforeEach(() => { vi.spyOn(window, "alert").mockImplementation(() => {}); });
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
 vi.mock("@/api/workflowInputs", () => ({ useWorkflowInput: () => ({ data: { input: inputState.input }, isError: false, isLoading: false }) }));
 vi.mock("@/api/hooks", () => ({
   useStageProviders: () => ({

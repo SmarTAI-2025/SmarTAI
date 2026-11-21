@@ -64,6 +64,7 @@ export const expertKeys = {
   all: ["experts"] as const,
   list: () => ["experts", "list"] as const,
   catalog: () => ["experts", "catalog"] as const,
+  connections: () => ["experts", "connections"] as const,
   stage: () => ["experts", "stage-options"] as const,
 };
 

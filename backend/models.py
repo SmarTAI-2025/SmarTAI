@@ -582,6 +582,9 @@ WireProtocol = Literal[
 ]
 
 
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
+
+
 class ProviderConfig(BaseModel):
     """Configuration for a single LLM provider."""
     provider_type: ProviderType
@@ -594,6 +597,8 @@ class ProviderConfig(BaseModel):
         description="Effective API protocol; omitted means the provider default.",
     )
     enabled: bool = True
+    byok_connection_id: Optional[str] = Field(default=None, exclude=True)
+    reasoning_effort: Optional[ReasoningEffort] = None
     # Evidence is not part of workflow input/fingerprints or credential exports.
     image_capability_status: Literal["unverified", "passed", "unsupported", "inconclusive"] = Field(default="unverified", exclude=True)
     image_checked_at: Optional[float] = Field(default=None, exclude=True)
