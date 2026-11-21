@@ -23,6 +23,7 @@ from sqlalchemy.exc import IntegrityError
 
 from backend.auth import require_teacher, require_task_teacher
 from backend.config import settings
+from backend.db import byok_repository
 from backend.db.provider_repository import (
     DefaultProviderNotEnabled,
     DefaultProviderReplacementRequired,
@@ -58,7 +59,8 @@ from backend.llm.registry import (
 )
 from backend.llm.providers import ProviderRequestError, VisionImage, validate_provider_api_key
 from backend.llm.image_capability import make_image_challenge, IMAGE_CHALLENGE_PROMPT, is_explicit_image_rejection
-from backend.models import ProviderConfig, ProviderType, User, WireProtocol
+from backend.models import ProviderConfig, ProviderType, ReasoningEffort, User, WireProtocol
+from backend.llm.model_discovery import ModelCatalog, discover_models, valid_model_id
 from backend.services.stage_provider_routing import list_stage_provider_options
 
 logger = logging.getLogger(__name__)
@@ -200,6 +202,153 @@ def _validated_api_key(api_key: str) -> str:
         except ProviderRequestError as exc:
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"code": exc.code}) from None
     return api_key
+
+
+class ByokConnectionSettings(BaseModel):
+    display_name: str | None = Field(default=None, max_length=120)
+    rpm: int = Field(default=0, ge=0, le=10_000)
+
+
+class CreateByokConnection(ByokConnectionSettings):
+    provider_type: ProviderType
+    api_key: str = Field(min_length=1, max_length=512)
+    base_url: str | None = Field(default=None, max_length=512)
+    wire_protocol: WireProtocol | None = None
+
+
+class EditByokConnection(ByokConnectionSettings):
+    api_key: str | None = Field(default=None, max_length=512)
+
+
+class ByokModelChoice(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+    reasoning_effort: ReasoningEffort | None = None
+
+
+def _connection_view(record):
+    return {
+        "id": record.id, "provider_type": record.provider_type,
+        "base_url": record.base_url, "endpoint_identity": record.endpoint_identity,
+        "wire_protocol": record.wire_protocol, "display_name": record.display_name,
+        "rpm": record.rpm, "models": record.models, "catalog_status": record.catalog_status,
+        "enabled": settings.custom_provider_endpoints_available or not is_user_defined_provider_endpoint(
+            record.provider_type, record.base_url, record.wire_protocol,
+        ),
+    }
+
+
+def _require_connection(owner_id, connection_id):
+    record = byok_repository.get_connection(owner_id, connection_id)
+    if record is None:
+        raise HTTPException(404, detail={"code": "byok_connection_not_found"})
+    return record
+
+
+def _discovery(owner_id: str, provider_type: str, base_url: str | None, protocol: str, key: str) -> ModelCatalog:
+    if is_user_defined_provider_endpoint(provider_type, base_url, protocol):
+        if not settings.custom_provider_endpoints_available:
+            raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})
+        try:
+            _check_custom_probe_limit(owner_id, "model_catalog")
+        except HTTPException as exc:
+            if exc.status_code != 429:
+                raise
+            return ModelCatalog([], "rate_limited")
+    return discover_models(provider_type, base_url, protocol, key)
+
+
+@router.get("/connections")
+def list_byok_connections(current: User = Depends(require_teacher)):
+    return [_connection_view(record) for record in byok_repository.list_connections(current.id)]
+
+
+@router.post("/connections", status_code=201)
+def add_byok_connection(request: CreateByokConnection, current: User = Depends(require_teacher)):
+    master_key = settings.provider_encryption_key
+    if not master_key:
+        raise provider_encryption_not_configured_error(api_key_was_submitted=True)
+    key = _validated_api_key(request.api_key)
+    if not key:
+        raise HTTPException(422, detail={"code": "expert_fields_blank"})
+    base_url, identity, protocol = _validate_provider_request(
+        request.provider_type, request.base_url, request.wire_protocol,
+    )
+    if is_user_defined_provider_endpoint(request.provider_type, base_url, protocol):
+        custom_count = sum(is_user_defined_provider_endpoint(
+            row.provider_type, row.base_url, row.wire_protocol,
+        ) for row in byok_repository.list_connections(current.id))
+        if custom_count >= settings.custom_provider_max_per_owner:
+            raise HTTPException(409, detail={"code": "custom_provider_limit_reached"})
+    catalog = _discovery(current.id, request.provider_type, base_url, protocol, key)
+    record = byok_repository.create_connection(
+        current.id, provider_type=request.provider_type, base_url=base_url, endpoint_identity=identity,
+        protocol=protocol, display_name=(request.display_name or "").strip() or None,
+        rpm=request.rpm, api_key=key, master_key=master_key, catalog=catalog,
+    )
+    return _connection_view(record)
+
+
+def _save_connection(record, *, new_key: str | None, display_name: str | None, rpm: int):
+    master_key = settings.provider_encryption_key
+    if not master_key:
+        raise provider_encryption_not_configured_error(api_key_was_submitted=bool(new_key))
+    key = new_key or byok_repository.connection_key(record, master_key)
+    catalog = _discovery(record.owner_id, record.provider_type, record.base_url, record.wire_protocol, key)
+    saved = byok_repository.update_connection(
+        record, api_key=new_key, master_key=master_key, display_name=display_name, rpm=rpm, catalog=catalog,
+    )
+    if saved is None:
+        raise HTTPException(409, detail={"code": "byok_connection_changed"})
+    return _connection_view(saved)
+
+
+@router.put("/connections/{connection_id}")
+def edit_byok_connection(connection_id: str, request: EditByokConnection, current: User = Depends(require_teacher)):
+    record = _require_connection(current.id, connection_id)
+    return _save_connection(
+        record, new_key=_validated_api_key(request.api_key or "") or None,
+        display_name=(request.display_name or "").strip() or None, rpm=request.rpm,
+    )
+
+
+@router.post("/connections/{connection_id}/refresh")
+def refresh_byok_connection(connection_id: str, current: User = Depends(require_teacher)):
+    record = _require_connection(current.id, connection_id)
+    return _save_connection(record, new_key=None, display_name=record.display_name, rpm=record.rpm)
+
+
+@router.delete("/connections/{connection_id}")
+def remove_byok_connection(connection_id: str, current: User = Depends(require_teacher)):
+    try:
+        removed = byok_repository.delete_connection(current.id, connection_id)
+    except DefaultProviderReplacementRequired as exc:
+        raise HTTPException(409, detail={"code": "expert_default_replacement_required"}) from exc
+    if not removed:
+        raise HTTPException(404, detail={"code": "byok_connection_not_found"})
+    return {"status": "success"}
+
+
+@router.post("/connections/{connection_id}/model")
+def choose_byok_model(connection_id: str, request: ByokModelChoice, current: User = Depends(require_teacher)):
+    if not settings.provider_encryption_key:
+        raise provider_encryption_not_configured_error()
+    record = _require_connection(current.id, connection_id)
+    if is_user_defined_provider_endpoint(record.provider_type, record.base_url, record.wire_protocol):
+        if not settings.custom_provider_endpoints_available:
+            raise HTTPException(403, detail={"code": "custom_provider_endpoints_disabled"})
+    model = request.model.strip()
+    if not valid_model_id(model):
+        raise HTTPException(422, detail={"code": "byok_model_invalid"})
+    try:
+        provider_id = byok_repository.bind_model(current.id, connection_id, model, request.reasoning_effort)
+    except LookupError:
+        raise HTTPException(404, detail={"code": "byok_connection_not_found"}) from None
+    except ValueError as exc:
+        code = str(exc)
+        if code not in {"byok_model_not_listed", "byok_effort_unsupported", "byok_model_disabled"}:
+            raise
+        raise HTTPException(422, detail={"code": code}) from None
+    return {"provider_id": provider_id}
 
 
 @router.post("/keys")

@@ -35,7 +35,6 @@ vi.mock("@/api/hooks", () => ({
   useVerifyExpertImage: () => ({ isPending: hookState.imagePending, mutateAsync: verifyImage }),
   useExperts: () => ({ data: hookState.experts, isLoading: false, isError: false, isFetching: false, refetch: vi.fn() }),
   useProviderCatalog: () => ({ data: hookState.catalog, isLoading: false, isError: false, refetch: vi.fn() }),
-  useAddExpertKey: () => ({ isPending: false, mutateAsync: addExpert }),
   useUpdateExpert: () => ({ isPending: false, mutateAsync: updateExpert }),
   useSelectExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useSetDefaultExpert: () => ({ isPending: false, mutateAsync: vi.fn() }),
@@ -59,6 +58,11 @@ vi.mock("@/api/hooks", () => ({
     isPending: false,
     mutateAsync: deleteBaiduOCRCredentials,
   }),
+}));
+
+vi.mock("@/api/hooks/byok", () => ({
+  useByokConnections: () => ({ data: [] }),
+  useSaveByokConnection: () => ({ isPending: false, mutateAsync: addExpert }),
 }));
 
 function renderPage() {
@@ -132,7 +136,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
       last_checked_at: null,
       verification_error_code: null,
     };
-    addExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
+    addExpert.mockResolvedValue({ id: "connection-a", catalog_status: "ready" });
     updateExpert.mockResolvedValue({ status: "success", provider_id: "pc-test" });
     verifyImage.mockResolvedValue({ image_capability_status: "passed" });
     saveBaiduOCRCredentials.mockResolvedValue({ status: "success" });
@@ -140,7 +144,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     deleteBaiduOCRCredentials.mockResolvedValue({ status: "success" });
   });
 
-  it("uses the verified catalog default for new configurations and the requested provider order", async () => {
+  it("shows official endpoints and the requested provider order without a model field", async () => {
     hookState.catalog.find((item) => item.provider_type === "openai")!.default_model = "gpt-6-luna";
     const user = userEvent.setup(); renderPage();
     await user.click(screen.getByRole("button", { name: "添加模型配置" }));
@@ -149,7 +153,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(within(provider).getAllByRole("option").map((item) => (item as HTMLOptionElement).value))
       .toEqual(["gemini", "openai", "anthropic", "deepseek", "zhipu", "moonshot", "qwen", "tencent", "doubao", "minimax"]);
     await user.selectOptions(provider, "openai");
-    expect(within(dialog).getByDisplayValue("gpt-6-luna")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("模型名称")).not.toBeInTheDocument();
     expect(within(dialog).getByDisplayValue("https://api.openai.com/v1")).toBeInTheDocument();
     expect(addExpert).not.toHaveBeenCalled();
   });
@@ -167,17 +171,17 @@ describe("ExpertsPage editable vendor Base URL", () => {
     ["tencent", "hy3", "https://tokenhub.tencentmaas.com/v1"],
     ["doubao", "doubao-seed-2-1-lite-260915", "https://ark.cn-beijing.volces.com/api/v3"],
     ["minimax", "MiniMax-M3", "https://api.minimax.cn/v1"],
-  ])("saves %s with its official defaults without testing automatically", async (providerType, model, baseUrl) => {
+  ])("saves %s with its official endpoint without testing automatically", async (providerType, _model, baseUrl) => {
     const user = userEvent.setup(); renderPage();
     await user.click(screen.getByRole("button", { name: "添加模型配置" }));
     const dialog = screen.getByRole("dialog");
     await user.selectOptions(within(dialog).getByLabelText("服务商"), providerType);
-    expect(within(dialog).getByDisplayValue(model)).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("模型名称")).not.toBeInTheDocument();
     expect(within(dialog).getByDisplayValue(baseUrl)).toBeInTheDocument();
     await user.type(within(dialog).getByLabelText(/API key/i), "synthetic-key");
     await user.click(within(dialog).getByRole("button", { name: "保存配置" }));
     await waitFor(() => expect(addExpert).toHaveBeenCalledWith(expect.objectContaining({
-      provider_type: providerType, model, base_url: baseUrl, api_key: "synthetic-key",
+      request: expect.objectContaining({ provider_type: providerType, base_url: baseUrl, api_key: "synthetic-key" }),
     })));
     expect(verifyExpert).not.toHaveBeenCalled();
     expect(verifyImage).not.toHaveBeenCalled();
@@ -323,8 +327,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
     expect(screen.queryByRole("option", { name: /自定义 OpenAI-compatible/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
 
-    await user.clear(screen.getByLabelText("模型名称"));
-    await user.type(screen.getByLabelText("模型名称"), "school-model");
+    expect(screen.queryByLabelText("模型名称")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/^API key/), "sk-secret-value");
     await user.clear(baseUrl);
     await user.type(baseUrl, "https://api.llm.ustc.edu.cn/v1");
@@ -332,11 +335,13 @@ describe("ExpertsPage editable vendor Base URL", () => {
 
     await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
     expect(addExpert).toHaveBeenCalledWith(expect.objectContaining({
-      provider_type: "deepseek",
-      model: "school-model",
-      base_url: "https://api.llm.ustc.edu.cn/v1",
+      request: expect.objectContaining({
+        provider_type: "deepseek",
+        base_url: "https://api.llm.ustc.edu.cn/v1",
+        wire_protocol: null,
+      }),
     }));
-    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("wire_protocol");
+    expect(addExpert.mock.calls[0]?.[0].request).not.toHaveProperty("model");
     expect(screen.queryByDisplayValue("sk-secret-value")).not.toBeInTheDocument();
     expect(window.localStorage.getItem("sk-secret-value")).toBeNull();
   });
@@ -354,8 +359,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 
     await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
-    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 0 });
-    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+    expect(addExpert.mock.calls[0]?.[0].request).toMatchObject({ rpm: 0 });
+    expect(addExpert.mock.calls[0]?.[0].request).not.toHaveProperty("max_concurrent");
   });
 
   it("lets the backend derive concurrency when saving RPM 10", async () => {
@@ -368,8 +373,8 @@ describe("ExpertsPage editable vendor Base URL", () => {
     await user.click(screen.getByRole("button", { name: "保存配置" }));
 
     await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
-    expect(addExpert.mock.calls[0]?.[0]).toMatchObject({ rpm: 10 });
-    expect(addExpert.mock.calls[0]?.[0]).not.toHaveProperty("max_concurrent");
+    expect(addExpert.mock.calls[0]?.[0].request).toMatchObject({ rpm: 10 });
+    expect(addExpert.mock.calls[0]?.[0].request).not.toHaveProperty("max_concurrent");
   });
 
   it("updates an existing configuration without resubmitting its legacy concurrency", async () => {
@@ -414,8 +419,7 @@ describe("ExpertsPage editable vendor Base URL", () => {
 
     await user.click(screen.getByRole("button", { name: "添加模型配置" }));
     await user.selectOptions(screen.getByLabelText("服务商"), "anthropic");
-    await user.clear(screen.getByLabelText("模型名称"));
-    await user.type(screen.getByLabelText("模型名称"), "claude-relay-model");
+    expect(screen.queryByLabelText("模型名称")).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/^API key/), "sk-relay-secret");
     await user.clear(screen.getByLabelText(/API Base URL/));
     await user.type(screen.getByLabelText(/API Base URL/), "https://relay.example.com/v1");
@@ -425,9 +429,11 @@ describe("ExpertsPage editable vendor Base URL", () => {
 
     await waitFor(() => expect(addExpert).toHaveBeenCalledTimes(1));
     expect(addExpert).toHaveBeenCalledWith(expect.objectContaining({
-      provider_type: "anthropic",
-      base_url: "https://relay.example.com/v1",
-      wire_protocol: "openai_chat_completions",
+      request: expect.objectContaining({
+        provider_type: "anthropic",
+        base_url: "https://relay.example.com/v1",
+        wire_protocol: "openai_chat_completions",
+      }),
     }));
   });
 

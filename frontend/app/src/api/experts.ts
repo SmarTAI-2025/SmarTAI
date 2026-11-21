@@ -1,6 +1,8 @@
 import { deleteJSON, getJSON, postJSON, putJSON, type AuthAwareRequestConfig } from "./client";
 import type {
   AddExpertKeyRequest,
+  ByokConnection,
+  ReasoningEffort,
   ExpertConfig,
   ExpertMutationResponse,
   ExpertVerificationResponse,
@@ -69,4 +71,41 @@ export function removeExpert(providerId: string): Promise<ExpertMutationResponse
 export async function verifyExpertImage(providerId: string): Promise<Pick<ExpertConfig, "image_capability_status" | "image_checked_at" | "image_reason">> {
   // Allow the default 60s server probe deadline to return its persisted result.
   return postJSON(`/experts/${encodeURIComponent(providerId)}/verify-image`, {}, { timeout: 75_000 });
+}
+
+
+const connectionUrl = "/experts/connections";
+
+export type SaveByokConnection = Omit<AddExpertKeyRequest, "model">;
+type EditByokConnection = Pick<SaveByokConnection, "display_name" | "rpm"> & { api_key?: string };
+export type ByokChoice = { connectionId: string; model: string; effort: ReasoningEffort | null };
+
+export async function listByokConnections(): Promise<ByokConnection[]> {
+  const rows = await getJSON<ByokConnection[]>(connectionUrl);
+  return Array.isArray(rows)
+    ? rows.filter((row) => row && typeof row.id === "string" && Array.isArray(row.models))
+    : [];
+}
+
+export function saveByokConnection(request: SaveByokConnection): Promise<ByokConnection> {
+  return postJSON(connectionUrl, request, { timeout: 25_000 });
+}
+
+export function updateByokConnection(connectionId: string, request: EditByokConnection): Promise<ByokConnection> {
+  return putJSON(`${connectionUrl}/${encodeURIComponent(connectionId)}`, request, { timeout: 25_000 });
+}
+
+export function refreshByokConnection(connectionId: string): Promise<ByokConnection> {
+  return postJSON(`${connectionUrl}/${encodeURIComponent(connectionId)}/refresh`, {}, { timeout: 25_000 });
+}
+
+export function removeByokConnection(connectionId: string): Promise<{ status: string }> {
+  return deleteJSON(`${connectionUrl}/${encodeURIComponent(connectionId)}`);
+}
+
+export function bindByokModel(choice: ByokChoice): Promise<{ provider_id: string }> {
+  return postJSON(`${connectionUrl}/${encodeURIComponent(choice.connectionId)}/model`, {
+    model: choice.model,
+    reasoning_effort: choice.effort,
+  });
 }

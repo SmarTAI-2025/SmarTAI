@@ -49,10 +49,14 @@ def build_configured_provider(config: ProviderConfig, *, stored: StoredProviderC
     provider = build_provider(config)
     if stored is not None:
         owner = config.scheduling_owner
-        provider._adaptive_source = (owner, stored.id)
+        connection_id = config.byok_connection_id
+        source_id = f"connection:{connection_id}" if connection_id else stored.id
+        revision = stored.connection_updated_at if connection_id else stored.updated_at
+        provider._adaptive_source = (owner, source_id)
         provider._adaptive_binding = (
-            f"{owner}:{stored.id}", stored.adaptive_limits, stored.updated_at,
-            partial(record_adaptive_limits, owner, stored.id, expected_updated_at=stored.updated_at),
+            f"{owner}:{source_id}", stored.adaptive_limits, revision,
+            partial(record_adaptive_limits, owner, connection_id or stored.id,
+                    expected_updated_at=revision, connection=bool(connection_id)),
         )
     elif shared_pool:
         # All owners using these platform credentials share one durable estimate.
@@ -491,6 +495,8 @@ class ExpertRegistry:
                     (config.display_name or "").strip()
                     or f"{provider_label} · {config.model}"
                 )
+                if config.reasoning_effort:
+                    label += f" · {config.reasoning_effort}"
                 base_labels[provider_id] = label
                 label_key = label.casefold()
                 label_counts[label_key] = label_counts.get(label_key, 0) + 1
@@ -542,6 +548,8 @@ class ExpertRegistry:
                     "provider_id": pid,
                     "provider_type": c.provider_type,
                     "model": c.model,
+                    "byok_connection_id": c.byok_connection_id,
+                    "reasoning_effort": c.reasoning_effort,
                     "base_url": c.base_url,
                     "endpoint_identity": c.endpoint_identity,
                     "endpoint_descriptor": endpoint_descriptors[pid],
@@ -557,7 +565,7 @@ class ExpertRegistry:
                     "rpm": c.rpm,
                     "scope": "shared" if shared else "owner",
                     "is_shared": shared,
-                    "editable": not shared,
+                    "editable": not shared and c.byok_connection_id is None,
                     "supports_vision": getattr(provider, "supports_vision", None),
                     "image_capability_status": image_config.image_capability_status,
                     "image_checked_at": _iso_utc_timestamp(image_config.image_checked_at),
