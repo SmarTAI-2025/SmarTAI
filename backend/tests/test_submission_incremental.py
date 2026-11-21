@@ -21,6 +21,11 @@ from backend.tests.test_task_background_workflows import _BackgroundTasks, _Regi
 
 @pytest.mark.parametrize(("text", "reasons", "confidence", "blocked"), [
     ("[unclear] [unclear] in handwritten equations", ["low_confidence_content"], None, True),
+    ("[unclear] in handwriting without a legible heading", ["low_confidence_content"], 1, True),
+    ("1.1.5. Proof: [unclear]", ["low_confidence_content"], 1, True),
+    ("1.1.7. Proof: [unclear]", ["low_confidence_content"], 1, False),
+    ("1.1.7. Proof: [unclear]", ["low_confidence_content"], None, False),
+    ("[unclear] near handwriting", [], 1, False),
     ("A legible different answer", [], None, False),
     ("1.1.6. Proof: from x = 0, its inverse does not exist.", [], .98, True),
     ("1.1.6. Proof:", [], .98, False),

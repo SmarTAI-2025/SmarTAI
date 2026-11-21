@@ -813,16 +813,16 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
     # identity fields. Its answers stay unrecognized under the same 1,000 cap.
     raw_answers = parsed.stu_ans if isinstance(parsed.stu_ans, list) and len(parsed.stu_ans) <= 1000 else []
     summary = getattr(source, "recognition", None) or {}
-    doubtful_labels = set()
-    unreadable_ocr = False
+    doubtful_blanks = set()
     if summary:
         blank_ids = {r["q_id"] for r in raw_answers if isinstance(r, dict) and isinstance(r.get("q_id"), str)
                      and isinstance(r.get("content"), str) and not r["content"].strip()}
         if blank_ids:
-            from backend.services.question_matching import blank_questions_with_nearby_source_labels
-            doubtful_labels = blank_questions_with_nearby_source_labels(source.text or "", problems_data, blank_ids)
-            unreadable_ocr = ("low_confidence_content" in (summary.get("confidence_reasons") or [])
-                              and "[unclear" in (source.text or "").casefold())
+            from backend.services.question_matching import blank_questions_needing_source_review
+            doubtful_blanks = blank_questions_needing_source_review(
+                source.text or "", problems_data, blank_ids,
+                low_confidence_ocr="low_confidence_content" in (summary.get("confidence_reasons") or []),
+            )
     for raw in raw_answers:
         if not isinstance(raw, dict):
             continue
@@ -857,8 +857,7 @@ def _independent_submission_payload(parsed, source, problems_data, known_questio
         answer = StudentAnswerInfo.model_validate(candidate).model_dump()
         # A model-declared blank needs checking if the OCR itself leaves
         # relevant writing unreadable or a nearby written heading unmatched.
-        if not answer["content"].strip() and (q_id in doubtful_labels or (
-                unreadable_ocr and answer.get("recognition_confidence") is None)):
+        if not answer["content"].strip() and q_id in doubtful_blanks:
             answer["flag"] = ["recognition_incomplete", *answer["flag"]]
             # Confidence and review flags describe this rejected blank. A
             # recovered transcription must retain its own confidence and flags.
