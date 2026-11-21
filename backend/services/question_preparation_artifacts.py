@@ -23,6 +23,7 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -668,11 +669,22 @@ def find_base_preparation_snapshot(*, digest, stage=QUESTIONS_EXTRACTED_STAGE, *
             file_id, stage=stage, storage=storage, **context))
 
 
-def read_incremental_preparation_units(*, checkpoint, artifact_refs, **context):
+@dataclass
+class RestoredPreparationUnits:
+    units: dict[str, dict]
+    refs: dict[str, str]
+    attempts: dict[str, int]
+    incomplete: set[str]
+    inflight: set[str]
+
+
+def read_incremental_preparation_units(*, checkpoint, artifact_refs, **context) -> RestoredPreparationUnits:
     """Read the bounded manifest, including one interrupted planned object write."""
     from concurrent.futures import ThreadPoolExecutor
     refs = dict(checkpoint.get("incremental_unit_artifacts") or {})
     attempts = dict(checkpoint.get("artifact_attempts") or {})
+    incomplete = set(checkpoint.get("incremental_incomplete_units") or [])
+    inflight = set(checkpoint.get("incremental_inflight_units") or [])
     units = {}
     def read_unit(item):
         key, file_id = item
@@ -699,9 +711,17 @@ def read_incremental_preparation_units(*, checkpoint, artifact_refs, **context):
         if stored is not None:
             saved = read_base_preparation_artifact(stored.id, stage=QUESTIONS_EXTRACTED_STAGE, **bound)
             units[key], refs[key], attempts[stored.id] = saved.payload.problem_data, stored.id, attempt
+            outcome = plan.get("outcome")
+            if outcome == "complete":
+                incomplete.discard(key)
+            elif outcome in {"retry", "uncertain"}:
+                incomplete.add(key)
+            if outcome in {"complete", "retry"}:
+                inflight.discard(key)
     for key in checkpoint.get("incremental_empty_units") or []:
         units.setdefault(key, {})
-    return units, refs, attempts
+    inflight.difference_update(units.keys() - incomplete)
+    return RestoredPreparationUnits(units, refs, attempts, incomplete, inflight)
 
 
 def save_base_preparation_artifact(

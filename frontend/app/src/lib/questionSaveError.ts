@@ -2,7 +2,18 @@ import { getAPIErrorCode } from "@/api/client";
 const tx = (locale: string, zh: string, en: string) => locale === "zh-CN" ? zh : en;
 
 export function questionSaveError(error: unknown, locale: string) {
-  switch (getAPIErrorCode(error)) {
+  return questionSaveErrorCode(getAPIErrorCode(error), locale);
+}
+
+export function questionSaveErrorCode(code: string | null | undefined, locale: string) {
+  switch (code) {
+    case "question_stem_required":
+      return tx(locale, "请输入题干后再保存。", "Enter the question before saving.");
+    case "question_stem_has_other_edits":
+      return tx(locale, "请先处理本题其他未保存的修改，再更新题干。", "Resolve the other unsaved edits to this question before updating the question text.");
+    case "question_preparation_wall_time_limit_reached":
+    case "provider_timeout":
+      return tx(locale, "更新标答和评分标准超时，请重试保存。", "Updating the answer and rubric timed out. Try saving again.");
     case "no_provider_configured":
     case "recognition_provider_not_enabled":
       return tx(locale, "请先在 API 设置中启用模型，解析新评分标准后再保存。", "Enable a model in API settings to interpret the updated scoring rules, then save again.");

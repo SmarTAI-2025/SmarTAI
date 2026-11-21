@@ -1,9 +1,11 @@
+import { useByokConnections } from "@/api/hooks/byok";
+import { ByokModelSelect } from "@/components/models/ByokModelSelect";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
 import { cn } from "@/lib/cn";
 import { modelDisplayName, modelSecondaryLabel, sortByProvider } from "@/lib/modelPresentation";
 import type { ExpertConfig } from "@/types";
 
-export function StageProviderSelect({
+function FixedStageProviderSelect({
   id,
   label,
   hint,
@@ -82,4 +84,34 @@ function safeModelSecondaryLabel(expert: ExpertConfig) {
     provider_type: expert.provider_type || "unknown",
     model: expert.model || expert.provider_id,
   });
+}
+
+
+type StageProviderSelectProps = Parameters<typeof FixedStageProviderSelect>[0] & { allowByok?: boolean };
+
+export function StageProviderSelect(props: StageProviderSelectProps) {
+  return props.allowByok ? <StageConnectionSelect {...props} /> : <FixedStageProviderSelect {...props} />;
+}
+
+function StageConnectionSelect(props: StageProviderSelectProps) {
+  const byok = useByokConnections();
+  const connections = byok.data?.filter((connection) => connection.enabled !== false);
+  if (!connections?.length) return <FixedStageProviderSelect {...props} />;
+  return <section className={cn("grid min-w-0 gap-3 rounded-[10px] border bg-card px-4 py-3", props.className)}>
+    <div className="min-w-0">
+      <h3 className="text-sm font-semibold">{props.label}</h3>
+      {props.hint ? <p className="mt-1 text-xs leading-5 text-muted-foreground">{props.hint}</p> : null}
+    </div>
+    <ByokModelSelect
+      id={props.id}
+      locale={props.locale}
+      connections={connections}
+      experts={sortByProvider(props.experts)}
+      value={props.value}
+      disabled={props.disabled}
+      onChange={props.onChange}
+      allowEmpty={props.allowEmpty}
+      placeholder={props.placeholder}
+    />
+  </section>;
 }

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   upload: vi.fn(),
 }));
 
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
 vi.mock("@/api/hooks", () => ({
   useCreateCourseMaterialGroup: () => ({ isPending: false, mutateAsync: vi.fn() }),
   useDeleteCourseMaterial: () => ({ isPending: false, mutateAsync: mocks.deleteMaterial }),

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { QuestionStemSave } from "../src/types";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 const permutation = String.raw`\begin{array}{r@{\quad}r@{\quad}r@{\quad}r@{\quad}r}
@@ -34,6 +35,7 @@ $$ (x * y) * z = x + y + z - [x + y + z]$（等于 $x * (y * z)$）。
     const task = { task_id: "math-display", name: "Math display", status: "problems_ready", workflow_revision: 1,
       problem_data: { q1: problem }, student_data: {}, problem_count: 1, student_count: 0,
       created_at: 1, updated_at: 1, kb_docs: {}, kb_doc_count: 0 };
+    let stemSave: QuestionStemSave | undefined;
     await page.route(`${backend}/**`, async route => {
       const request = route.request(), path = new URL(request.url()).pathname;
       const json = (value: unknown) => route.fulfill({ json: value });
@@ -41,14 +43,18 @@ $$ (x * y) * z = x + y + z - [x + y + z]$（等于 $x * (y * z)$）。
       if (path === "/auth/me") return json({ id: "teacher", username: "Teacher", role: "teacher", is_active: true });
       if (path === "/auth/activity") return json({ token: "synthetic-math-token" });
       if (request.method() !== "GET") mutations.push(path);
-      if (path === "/tasks/math-display/problems/q1" && request.method() === "PUT") {
-        const patch = request.postDataJSON() as { stem: string };
+      if (path === "/tasks/math-display/problems/q1/stem-save" && request.method() === "POST") {
+        const patch = request.postDataJSON() as { stem: string; expected_workflow_revision: number };
         expect(patch.stem).toContain(permutation);
         expect(patch.stem).toContain(`$$\n${permutation}\n$$`);
+        expect(patch.expected_workflow_revision).toBe(task.workflow_revision);
         problem.stem = patch.stem;
         task.workflow_revision += 1;
-        return json({ status: "ok", q_id: "q1", problem, workflow_revision: task.workflow_revision });
+        stemSave = { id: "stem-save", status: "done", q_id: "q1",
+          workflow_revision: task.workflow_revision, error_code: null };
+        return route.fulfill({ status: 202, json: stemSave });
       }
+      if (path === "/tasks/math-display/question-stem-saves") return json(stemSave ? [stemSave] : []);
       if (path === "/tasks/math-display") return json(task);
       if (path.endsWith("/source-files")) return json({ problem_source: null, submission_sources: {} });
       return json([]);
@@ -94,7 +100,7 @@ $$ (x * y) * z = x + y + z - [x + y + z]$（等于 $x * (y * z)$）。
       expect(scroll.left).toBeCloseTo(scroll.max, 0);
       await stemSection.screenshot({ path: info.outputPath("array-scrolled.png") });
     }
-    expect(mutations).toEqual(["/tasks/math-display/problems/q1"]);
+    expect(mutations).toEqual(["/tasks/math-display/problems/q1/stem-save"]);
     expect(errors).toEqual([]);
   });
 }

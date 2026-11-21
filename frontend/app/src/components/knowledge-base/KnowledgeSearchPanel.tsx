@@ -6,8 +6,9 @@ import { useI18n } from "@/i18n/I18nProvider";
 import { MarkdownMath } from "@/components/ui/MarkdownMath";
 import { KnowledgeCitationPreview } from "./KnowledgeCitationPreview";
 import type { KnowledgeMatch } from "@/types/knowledgeCitation";
-import type { ExpertConfig } from "@/types";
-import { listExperts } from "@/api/experts";
+import { useExperts } from "@/api/hooks/experts";
+import { useByokConnections } from "@/api/hooks/byok";
+import { ByokModelSelect } from "@/components/models/ByokModelSelect";
 import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 
 interface QueryUsage { status: string; cached?: boolean; provider_calls?: number; input_tokens?: number | null; output_tokens?: number | null }
@@ -20,7 +21,9 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   const [matches, setMatches] = useState<KnowledgeMatch[] | null>(null);
   const [pending, setPending] = useState(false);
   const [failed, setFailed] = useState(false);
-  const [experts, setExperts] = useState<ExpertConfig[]>([]);
+  const expertsQuery = useExperts(!frontier && documentIds.length > 0);
+  const byok = useByokConnections(documentIds.length > 0);
+  const experts = (frontier ? [] : expertsQuery.data ?? []).filter((item) => item.enabled && item.scope === "owner" && !item.is_shared && item.provider_kind !== "ocr");
   const [providerId, setProviderId] = useState("");
   const [rewriteFailed, setRewriteFailed] = useState(false);
   const [queryUsage, setQueryUsage] = useState<QueryUsage | null>(null);
@@ -28,14 +31,6 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   const scope = JSON.stringify([...new Set(documentIds)].sort());
   useEffect(() => { generation.current += 1; setMatches(null); setPending(false); setFailed(false); setRewriteFailed(false); setQueryUsage(null); }, [scope, providerId]);
   useEffect(() => () => { generation.current += 1; }, []);
-  useEffect(() => {
-    if (frontier) return;
-    let active = true;
-    void listExperts().then((items) => {
-      if (active) setExperts(items.filter((item) => item.enabled && item.scope === "owner" && !item.is_shared && item.provider_kind !== "ocr"));
-    }).catch(() => { if (active) setExperts([]); });
-    return () => { active = false; };
-  }, [frontier]);
   const ids = JSON.parse(scope) as string[];
   function search() {
     if (!query.trim() || pending || ids.length > 20) return;
@@ -54,13 +49,17 @@ export function KnowledgeSearchPanel({ documentIds }: { documentIds: string[] })
   }
   if (!ids.length) return null;
   return <section className="mt-4 min-w-0 border-t pt-3" aria-label={zh ? "资料内容检索" : "Search material content"}>
-    <select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={pending}
+    {!frontier && byok.data?.length ? <ByokModelSelect
+      id="knowledge-query-model" locale={locale} connections={byok.data} experts={sortByProvider(experts)}
+      value={providerId} onChange={setProviderId} disabled={pending} allowEmpty
+      placeholder={zh ? "本地检索" : "Local search"}
+    /> : <select value={providerId} onChange={(event) => setProviderId(event.target.value)} disabled={pending}
       aria-label={zh ? "检索方式" : "Search mode"} className="mb-2 h-9 w-full min-w-0 rounded-md border bg-background px-2 text-sm">
       <option value="">{zh ? "本地检索" : "Local search"}</option>
       {sortByProvider(experts).map((expert) => <option key={expert.provider_id} value={expert.provider_id}>
         {zh ? "模型辅助：" : "Model assisted: "}{modelDisplayName(expert)}
       </option>)}
-    </select>
+    </select>}
     {providerId ? <p className="mb-2 text-xs text-muted-foreground">{zh ? "仅发送查询，不发送教材；可能产生模型费用。" : "Only your query is sent, not textbooks; model charges may apply."}</p> : null}
     <div role="search" className="flex items-center gap-2">
       <input value={query} onChange={(event) => setQuery(event.target.value)} maxLength={4000}

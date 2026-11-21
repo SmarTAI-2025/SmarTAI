@@ -36,7 +36,6 @@ export function GradingProgressPage() {
   const { locale } = useI18n();
   const taskQuery = useTask(taskId);
   const progressQuery = useTaskProgress(taskId);
-  const retryGrading = useStartGrading();
   const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const intent = useGradingIntent();
   const [manualBusy, setManualBusy] = useState(false);
@@ -46,6 +45,7 @@ export function GradingProgressPage() {
   // Job IDs must come from the same snapshot. A fresh grading failure may
   // arrive before the detail query refreshes its previous failed-job pointer.
   const workflow = state?.grading_job_id !== undefined || state?.last_failed_job_id !== undefined ? state : task ?? state;
+  const retryGrading = useStartGrading([taskId, workflow?.grading_job_id]);
   const status = (state?.status ?? task?.status) as TaskStatus | undefined;
   const progress = progressQuery.progress;
   const hasReadableState = Boolean(status || task || state);
@@ -96,7 +96,7 @@ export function GradingProgressPage() {
     try {
       const response = await intent.execute(revision, (request) => retryGrading.mutateAsync({
         taskId, ...request, retryScope: "failed_only", ...(retryProviderId ? { retryProviderId } : {}),
-      }), JSON.stringify([taskId, retryProviderId]));
+      }), JSON.stringify([taskId, workflow?.grading_job_id, retryProviderId]));
       if (!response) return;
       if (response.status === "already_done" || (response.status === "already_finished" && ["completed", "partial_failed"].includes(response.run_status ?? ""))) {
         navigate(`/tasks/${taskId}/review`, { replace: true });

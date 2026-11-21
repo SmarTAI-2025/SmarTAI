@@ -6,6 +6,8 @@ import { APIError } from "@/api/client";
 import { KnowledgeSection } from "./GradingSetupPage";
 
 const attachMaterial = vi.fn();
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
+vi.mock("@/api/hooks/experts", () => ({ useExperts: () => ({ data: [] }) }));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "zh-CN", t: (key: string) => key }) }));
 
 vi.mock("@/api/hooks", () => ({

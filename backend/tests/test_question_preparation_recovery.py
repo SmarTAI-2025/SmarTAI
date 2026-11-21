@@ -419,9 +419,9 @@ def _install_incremental_preparer(
         return freeze_reply(row, [candidate.model_copy(update={"q_id":"q1", "target_id":"q1:"+candidate.target})
                 for candidate in _candidates(q_id) if candidate.target in requested])
 
-    async def finish(self, key, rows=None, error=None):
+    async def finish(self, key, rows=None, error=None, **kwargs):
         nonlocal stopped
-        await _REAL_INCREMENTAL_FINISH(self, key, rows, error)
+        await _REAL_INCREMENTAL_FINISH(self, key, rows, error, **kwargs)
         if key.startswith("generation:") and error is None and identities.get(key.split(":", 1)[1]) == cancel_after_question:
             stopped = True
             raise asyncio.CancelledError

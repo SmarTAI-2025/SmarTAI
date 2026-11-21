@@ -74,6 +74,15 @@ export interface ProgrammingScoringPolicy {
   input_rules: string;
 }
 
+export interface QuestionStemSave {
+  id: string;
+  q_id: string;
+  status: "pending" | "running" | "done" | "error";
+  workflow_revision: number | null;
+  error_code: string | null;
+  stem?: string;
+}
+
 export interface ProblemInfo {
   q_id: string;
   number: string;
@@ -86,6 +95,7 @@ export interface ProblemInfo {
     code_criterion: string;
   };
   rubric_version?: number;
+  rubric_confirmation_required?: boolean;
   recognition_confidence?: number | null;
   max_score: number;
   max_score_source?: "default_10" | "uniform" | "per_question_text" | "teacher_edited" | "legacy";
