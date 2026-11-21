@@ -28,7 +28,8 @@ class RepairImageEvidenceV1(EvidenceModel):
 
     @model_validator(mode="after")
     def valid_preparation(self):
-        if self.width * self.height > 16_000_000:
+        max_pixels = 30_000_000 if self.preparation == "oriented_image" else 16_000_000
+        if self.width * self.height > max_pixels:
             raise ValueError("repair image exceeds pixel budget")
         metadata = self.image_preparation
         if (self.preparation == "oriented_image") != (metadata is not None):
