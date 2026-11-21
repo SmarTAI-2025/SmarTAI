@@ -255,7 +255,7 @@ test("real question-review route retains question navigation while the original 
     if (route.request().method() !== "GET") { unexpected.push(path); return route.abort(); }
     if (path.endsWith("/content")) return route.fulfill({ body: pdf, contentType: "application/pdf", headers: cors });
     const value = path === "/auth/me" ? { id: "synthetic", username: "PDF local test", email: "local@example.invalid", role: "teacher", is_active: true, created_at: 0 }
-      : ["/experts/available", "/experts/stage-options", "/tasks/local-pdf/question-stem-saves"].includes(path) ? []
+      : ["/experts/available", "/experts/stage-options", "/experts/connections", "/tasks/local-pdf/question-stem-saves"].includes(path) ? []
       : path === "/tasks/local-pdf" ? task
       : path === "/tasks/local-pdf/source-files" ? { task_id: "local-pdf", workflow_revision: 1, problem_source: { source_id: "pdf", file_id: "pdf", display_name: "multiple.pdf", mime_type: "application/pdf", size_bytes: pdf.length, status: "available", preview_kind: "pdf" }, submission_sources: {} }
       : null;

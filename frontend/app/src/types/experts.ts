@@ -25,6 +25,8 @@ export interface ExpertConfig {
   provider_id: string;
   provider_type: ProviderType | string;
   model: string;
+  byok_connection_id?: string | null;
+  reasoning_effort?: ReasoningEffort | null;
   base_url?: string | null;
   endpoint_identity?: string | null;
   endpoint_descriptor?: string | null;
@@ -107,4 +109,19 @@ export interface ProviderCatalogItem {
   custom_base_url_supported: boolean;
   custom_base_url_enabled: boolean;
   base_url_editable?: boolean;
+}
+
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export interface ByokConnection {
+  id: string;
+  enabled?: boolean;
+  provider_type: ProviderType;
+  base_url: string | null;
+  endpoint_identity: string;
+  wire_protocol: WireProtocol;
+  display_name: string | null;
+  rpm: number;
+  models: { id: string; reasoning_efforts: ReasoningEffort[] }[];
+  catalog_status: "ready" | "partial" | "unavailable" | "empty" | "timeout" | "rate_limited" | "denied";
 }

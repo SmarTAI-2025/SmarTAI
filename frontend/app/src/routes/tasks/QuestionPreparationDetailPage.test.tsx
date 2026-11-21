@@ -17,6 +17,7 @@ import { QuestionPreparationDetailPage } from "./QuestionPreparationDetailPage";
 // waitFor assertion deadlines or changing any production timeout.
 vi.setConfig({ testTimeout: 20_000 });
 
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
 vi.mock("@/api/hooks/experts", () => ({ useStageProviders: () => ({
   data: [{ provider_id: "retry-model", provider_type: "openai", model: "Retry model", enabled: true, max_concurrent: 1, rpm: 10 }],
   isPending: false, isError: false,

@@ -491,6 +491,7 @@ function AddProblemsForm({ taskQuery, submittedInput, initialLanguage }: { taskQ
         </section>
 
         <StageProviderSelect
+          allowByok
           id="question-recognition-provider"
           label={tx(locale, "题目准备模型", "Question preparation model")}
           hint={tx(

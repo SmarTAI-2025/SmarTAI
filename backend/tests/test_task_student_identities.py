@@ -165,7 +165,7 @@ def test_migration_accounts_for_every_remaining_user_foreign_key():
         for table in Base.metadata.tables.values() for column in table.columns
         if any(fk.column.table.name == "users" for fk in column.foreign_keys)
     }
-    # 0035 creates this table after the 0027 placeholder cleanup. Do not add it
-    # to 0027's SQL snapshot: it does not exist when that migration executes.
-    later_references = {("shared_model_charges", "owner_id")}
+    # These tables were created after the 0027 placeholder cleanup and
+    # cannot appear in its historical SQL snapshot.
+    later_references = {("shared_model_charges", "owner_id"), ("byok_connections", "owner_id")}
     assert references == set(migration.USER_REFERENCES) | {("course_enrollments", "student_id")} | later_references

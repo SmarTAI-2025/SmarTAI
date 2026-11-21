@@ -1,5 +1,5 @@
+import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { KNOWLEDGE_SOURCE_EXTENSIONS, IMAGE_SOURCE_EXTENSIONS, knowledgeUploadMaxBytes, knowledgeUploadFormatHint, matchesUploadExtension } from "@/lib/sourceUploadPolicy";
-import { modelDisplayName, sortByProvider } from "@/lib/modelPresentation";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { materialMetadataVersion } from "@/lib/editorVersions";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
@@ -308,13 +308,17 @@ export function UploadDialog({ courses, groups, onClose, onUploaded }: UploadDia
           <input type="checkbox" className="mt-1" checked={nativeOnly} onChange={(event) => setNativeOnly(event.target.checked)} />
           <span>{tx(locale, "仅提取已有文字（不调用模型）", "Existing text only (no model calls)")}</span>
         </label>
-        {!nativeOnly ? <FormField label={tx(locale, "视觉/OCR 模型", "Vision/OCR model")}>
-          <select className={SELECT_CLASS} value={recognitionRouteId} onChange={(event) => setRecognitionRouteId(event.target.value)}>
-            <option value="">{tx(locale, "当前默认模型", "Current default model")}</option>
-            {sortByProvider((providers.data ?? []).filter((provider) => provider.enabled && provider.supports_vision !== false)).map((provider) => <option key={provider.provider_id} value={provider.provider_id}>{modelDisplayName(provider)}</option>)}
-          </select>
+        {!nativeOnly ? <>
+          <StageProviderSelect
+            allowByok allowEmpty id={`${inputId}-vision-model`}
+            label={tx(locale, "视觉/OCR 模型", "Vision/OCR model")}
+            hint="" locale={locale} value={recognitionRouteId} onChange={setRecognitionRouteId}
+            disabled={upload.isPending}
+            placeholder={tx(locale, "当前默认模型", "Current default model")}
+            experts={(providers.data ?? []).filter((provider) => provider.enabled && provider.supports_vision !== false)}
+          />
           {providers.isError ? <p role="status" className="text-xs text-muted-foreground">{tx(locale, "模型列表暂不可用，可重开窗口后再试。", "Model list unavailable. Reopen the dialog to retry.")}</p> : null}
-        </FormField> : null}
+        </> : null}
         <p className="text-xs text-muted-foreground">{tx(locale, "图片需视觉/OCR 模型识别，不能仅提取已有文字。上传后会后台识别并建立检索内容，可能产生模型费用；请等待处理完成。", "Images require vision/OCR and cannot use existing-text-only mode. Uploads are indexed in the background and may incur model charges. Wait for processing before searching.")}</p>
         <div className="grid gap-4 sm:grid-cols-2">
           <FormField label={tx(locale, "课程（可选）", "Course (optional)")}>

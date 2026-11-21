@@ -263,12 +263,35 @@ class AdminUsageEventRecord(Base):
 # ─── LLM provider config (retained) ───────────────────────────────────────────
 
 
+class ByokConnectionRecord(Base):
+    __tablename__ = "byok_connections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True,
+    )
+    provider_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    base_url: Mapped[str | None] = mapped_column(String(1024))
+    endpoint_identity: Mapped[str] = mapped_column(String(1024), nullable=False)
+    wire_protocol: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255))
+    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[str] = mapped_column(String(128), nullable=False)
+    key_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    rpm: Mapped[int] = mapped_column(Integer, nullable=False)
+    models: Mapped[list[dict]] = mapped_column(JSON, nullable=False)
+    catalog_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    adaptive_limits: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+    updated_at: Mapped[float] = mapped_column(Float, nullable=False, default=time.time)
+
+
 class ProviderConfigRecord(Base):
     __tablename__ = "provider_configs"
     __table_args__ = (
         UniqueConstraint(
-            "owner_id", "provider_type", "wire_protocol", "endpoint_identity", "model",
-            name="uq_provider_configs_owner_provider_protocol_endpoint_model",
+            "owner_id", "provider_type", "wire_protocol", "endpoint_identity", "model", "route_variant",
+            name="uq_provider_configs_route_variant",
         ),
     )
 
@@ -282,8 +305,14 @@ class ProviderConfigRecord(Base):
     endpoint_identity: Mapped[str] = mapped_column(String(1024), nullable=False)
     wire_protocol: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    encrypted_api_key: Mapped[str] = mapped_column(Text, nullable=False)
-    nonce: Mapped[str] = mapped_column(String(128), nullable=False)
+    byok_connection_id: Mapped[str | None] = mapped_column(
+        ForeignKey("byok_connections.id", name="fk_provider_configs_byok_connection", ondelete="CASCADE"),
+        index=True,
+    )
+    reasoning_effort: Mapped[str | None] = mapped_column(String(16))
+    route_variant: Mapped[str] = mapped_column(String(96), nullable=False, server_default="legacy")
+    encrypted_api_key: Mapped[str | None] = mapped_column(Text)
+    nonce: Mapped[str | None] = mapped_column(String(128))
     key_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     enabled: Mapped[bool] = mapped_column(
         default=True, server_default=text("true"), nullable=False
