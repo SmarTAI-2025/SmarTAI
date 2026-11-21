@@ -151,17 +151,61 @@ async def test_imported_teacher_pair_uses_same_adapter_and_never_substitutes_an_
         await parse(row)
 
 
+def _prepared_question(stem, **materials):
+    owner, task = _seed_task()
+    revision = task_facade._replace_draft_questions(task, owner, {"q1": {
+        "q_id": "q1", "number": "1", "type": "programming", "criterion": "Correct results.",
+        "stem": stem, **materials,
+    }}, "prepared.json")
+    return owner, task, revision
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("updated_answer", [None, "Return the sum of three copies of x."])
+async def test_implementation_generation_uses_only_the_current_answer(updated_answer):
+    from backend.services.programming_question_edit import prepare_programming_edit
+    from backend.services.programming_materials import material_problem
+    from backend.services.programming_runs import _reference
+
+    before = {
+        "q_id": "q1", "number": "1", "type": "programming", "stem": "Implement scale(x). Return 2*x.",
+        "criterion": "Correct results.", "reference_answer": "Return twice x.",
+        "solution_code": "def scale(x): return x * 2", "test_cases": [],
+        "programming_scoring": {"test_points": 0, "input_rules": ""},
+        "material_provenance": {"reference_answer": {"source_kind": "uploaded"}},
+    }
+    candidate = {**before, "stem": "Implement scale(x). Return 3*x."}
+    fields = {"stem"}
+    if updated_answer is not None:
+        candidate["reference_answer"] = updated_answer
+        fields.add("reference_answer")
+    new_code = "def scale(x): return x * 3"
+    provider = Provider([json.dumps({"candidates": [{"target_id": "q1:solution_code", "q_id": "q1",
+                          "target": "solution_code", "text_value": new_code}]})])
+    patch = await prepare_programming_edit(before=before, candidate=candidate, edited_fields=fields,
+                                          get_provider=lambda: provider)
+    assert len(provider.calls) == 1
+    request = provider.calls[0][-1].content
+    assert candidate["stem"] in request and before["solution_code"] not in request
+    assert before["reference_answer"] not in request
+    if updated_answer is not None:
+        assert updated_answer in request
+    saved = {**candidate, **patch}
+    assert saved["reference_answer"] == (updated_answer or before["reference_answer"])
+    assert saved["solution_code"] == before["solution_code"]
+    assert _reference(material_problem(saved)) == new_code
+
+
 @pytest.mark.asyncio
 async def test_mounted_editor_persists_derived_fields_and_rolls_back_invalid_batch():
-    owner, task = _seed_task(with_question=True)
-    client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
-    url = f"/tasks/{task}/problems/q1"
     stem = "实现 fib(n)。"
-    saved = client.put(url, json={"type":"programming", "stem": stem, "test_cases":[
+    reference = "def fib(n):\n    a, b = 0, 1\n    for _ in range(n): a, b = b, a + b\n    return a"
+    owner, task, _ = _prepared_question(stem, solution_code=reference, test_cases=[
         {"function_name":"fib", "function_args":[0], "expected_return":"0", "source":"teacher"},
         {"function_name":"fib", "function_args":[31], "expected_return":"999", "source":"llm_generated", "visibility":"hidden"}
-    ]})
-    assert saved.status_code == 200
+    ])
+    client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
+    url = f"/tasks/{task}/problems/q1"
     get = lambda: client.get(f"/tasks/{task}").json()
     before = get()
     cases = before["problem_data"]["q1"]["test_cases"]
@@ -203,7 +247,7 @@ def test_recovered_package_and_editor_agree_on_keyword_only_contract():
     owner, task = _seed_task()
     stem = "Implement scale(x, *, factor)."
     task_facade._replace_draft_questions(task, owner, {"q1": dict(q_id="q1", number="1",
-        type="programming", stem=stem, criterion="Correct results.", test_cases=[
+        type="programming", stem=stem, criterion="Correct results.", solution_code="def scale(x, *, factor): return x * factor", test_cases=[
             {"input":"2, factor=3", "expected_output":"6", "source":"teacher", "comparison":"numeric",
              "abs_tol":0, "rel_tol":0}])}, "restored.json")
     question, = assignment_repository.list_questions(task, teacher_id=owner)
@@ -252,10 +296,8 @@ def test_explicitly_free_name_overrides_an_example_name_and_uses_mapped_entry():
 
 
 def test_multiple_accepted_import_groups_survive_apply_and_replay():
-    owner, task = _seed_task(with_question=True)
+    owner, task, revision = _prepared_question("Implement add(a,b).")
     client = TestClient(create_app(), headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
-    first = client.put(f"/tasks/{task}/problems/q1", json={"type":"programming", "stem":"Implement add(a,b)."})
-    revision = first.json()["workflow_revision"]
     cases = [{"input":"2、3", "expected_output":"5"}, {"input":"2、-3", "expected_output":"-2"}]
     candidates = [dict(candidate_id=f"c{i}", q_id="q1", target="test_cases", confidence=1,
         match_status="exact", test_cases=[case]) for i, case in enumerate(cases)]
@@ -348,11 +390,10 @@ async def test_unnumbered_arrow_txt_upload_apply_readback_and_execute(monkeypatc
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
     forbidden = AsyncMock(side_effect=AssertionError("A literal test sheet made a model request"))
     monkeypatch.setattr("backend.agents.ingest_agent.ainvoke_with_retry", forbidden)
-    owner, task = _seed_task(with_question=True)
+    stem = "实现 add(a,b)。"
+    owner, task, _ = _prepared_question(stem)
     client = TestClient(app, headers={"Authorization": "Bearer " + create_token(owner, "teacher")})
     root = f"/tasks/{task}"
-    stem = "实现 add(a,b)。"
-    client.put(root + "/problems/q1", json={"type":"programming", "stem":stem}).raise_for_status()
     body = "2、3→5\n3、4 -> 7\n输入 4、4，预期 99"
     preflight = client.post(root + "/material-imports/preflight",
         files={"file":("teacher.txt", body.encode(), "text/plain")}, data={"targets":'["test_cases"]'})

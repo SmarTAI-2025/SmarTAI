@@ -119,6 +119,7 @@ from backend.services.question_structure import (
     QuestionRubricValidationError,
     RubricPointSummaryV1,
     build_major_question_structure,
+    scoring_stem,
     summarize_rubric_points,
     validate_rubric_points,
 )
@@ -1119,6 +1120,8 @@ def _serialize_problem(question, *, math_plan=None, feedback_language="zh") -> d
     programming_criterion = None
     if programming:
         from backend.services.programming_rubric import programming_scoring_for_review, test_award_review_issue
+        if "programming_reference_binding" in presentation:
+            programming_fields["programming_reference_binding"] = presentation["programming_reference_binding"]
 
         programming_fields["programming_scoring"] = programming_scoring_for_review(question, verified)
         if issue := test_award_review_issue(question, verified, effective_issues):
@@ -5870,7 +5873,29 @@ def update_problem(
     expected_revision: int | None = None, run_async=None,
 ) -> dict:
     args = dict(task_id=task_id, owner_id=owner_id, q_id=q_id, patch=patch)
-    result = _save_problem_edit(**args, expected_revision=expected_revision)
+    compiled = None
+    version = None
+    if {"stem", "reference_answer", "solution_code", "test_cases"}.intersection(patch):
+        from functools import partial
+        from uuid import uuid4
+        from backend.progress.tracker import ProgressReporter
+        from backend.services.question_stem_save import prepare
+        workflow = workflow_repository.get_live_workflow(task_id, owner_id=owner_id)
+        workflow = _reconcile_terminal_active_operation(task_id=task_id, owner_id=owner_id, workflow=workflow)
+        if expected_revision is not None and workflow.workflow_revision != expected_revision:
+            _raise_stale_revision()
+        if workflow.active_job_id:
+            raise InvalidTransition("The task is busy.", code="workflow_busy")
+        question = next((row for row in assignment_repository.list_questions(task_id, teacher_id=owner_id)
+                         if row.q_id == q_id), None)
+        if question is None:
+            raise NotFound("question")
+        expected_revision, version = workflow.workflow_revision, question.version
+        call = partial(prepare, question, workflow, patch, owner_id=owner_id,
+                       reporter=ProgressReporter(f"question-edit-{uuid4().hex}", total_questions=1))
+        args["patch"], compiled = run_async(call) if run_async else _run_question_edit(call)
+    result = _save_problem_edit(**args, expected_revision=expected_revision,
+                                question_version=version, compiled=compiled)
     if not isinstance(result, _PendingRubricEdit):
         return result
     # The first transaction has released its locks. Only a validated, still-current
@@ -5881,12 +5906,28 @@ def update_problem(
 
 
 def publish_linked_question_edit(operation, question_version, patch, compiled):
-    _save_problem_edit(
+    args = dict(
         task_id=operation.assignment_id, owner_id=operation.owner_id,
         q_id=operation.payload["q_id"], patch=patch,
         expected_revision=operation.payload["expected_workflow_revision"],
-        compiled=compiled, question_version=question_version, linked_edit=operation,
+        question_version=question_version, linked_edit=operation,
     )
+    pending = _save_problem_edit(**args, compiled=compiled)
+    if isinstance(pending, _PendingRubricEdit):
+        draft = _compile_review_edit(operation.owner_id, pending, None)
+        _save_problem_edit(**args, compiled=draft)
+
+
+def _run_question_edit(call):
+    # The HTTP endpoint supplies its event-loop bridge. Synchronous service
+    # callers also include maintenance and async orchestration tests.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(call())
+    from anyio.from_thread import start_blocking_portal
+    with start_blocking_portal() as portal:
+        return portal.call(call)
 
 
 def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
@@ -5958,6 +5999,14 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             patch.get("review_status") == "confirmed" and not pending_rule_review
             and uses_math_grading(patch.get("type", question.type))
         )
+        # An established written question can predate frozen rules. New teacher
+        # scoring conditions need the same compiler on the first substantive
+        # rubric edit as on a subsequent edit of an already verified plan.
+        changed_rule = changed_rule or bool(
+            question.criterion and question.reference_answer and "criterion" in patch and
+            uses_math_grading(patch.get("type", question.type)) and
+            scoring_stem(patch["criterion"] or "") != scoring_stem(question.criterion)
+        )
         prior_problem = problem_from_question(question) if changed_rule else None
         source = dict(question.source or {})
         presentation = dict(source.get("presentation") or {})
@@ -5970,7 +6019,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
 
         programming = is_programming_question_type(candidate_type)
         prior_programming_draft = saved_draft(problem_from_question(question)) if programming else None
-        programming_draft = compiled if linked_edit and programming else None
+        programming_draft = compiled if programming else None
         programming_policy = None
         if "programming_scoring" in patch:
             if not programming:
@@ -5981,19 +6030,25 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             except ValueError as exc:
                 raise ValidationError("Select the test points and provide the separate input rules.",
                                       code="invalid_programming_test_award") from exc
-        elif programming and not linked_edit and (
+        elif programming and not compiled and (
             ("criterion" in patch and (patch["criterion"] != question.criterion or prior_programming_draft is None))
             or patch.get("max_score", question.max_score) != question.max_score
         ):
             raise ValidationError("Save the test allocation with the code rubric.", code="programming_test_award_required")
-        if (programming and programming_policy is None
+        if (programming and programming_policy is None and programming_draft is None
                 and candidate_type == normalize_question_type(question.type)
+                and (patch.get("reuse_scoring_rules") or
+                     scoring_stem(patch.get("stem", question.stem)) == scoring_stem(question.stem))
                 and all(patch.get(key, getattr(question, key)) == getattr(question, key)
-                        for key in ("stem", "criterion", "max_score"))
+                        for key in ("criterion", "max_score"))
                 and not patch.get("alternative_rule_edits")):
             # Confirmations and reference-answer edits retain only an existing
             # verified rule. They do not infer a missing test allocation.
             programming_draft = prior_programming_draft
+        elif (programming and prior_programming_draft and prior_programming_draft.programming_scoring
+                and programming_policy is None and programming_draft is None and "stem" in patch
+                and "criterion" not in patch and candidate_type == normalize_question_type(question.type)):
+            programming_policy = prior_programming_draft.programming_scoring
         if programming and programming_draft is None and has_saved_scoring_contract(presentation):
             presentation["programming_scoring_required"] = True
         elif not programming:
@@ -6025,7 +6080,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             if not linked_edit:
                 presentation.pop("stem_save_teacher_criterion", None)
         original_problem = _serialize_problem(question)
-        if test_cases_edited and is_programming_question_type(patch.get("type", question.type)):
+        if test_cases_edited and not patch.get("derived_test_cases") and is_programming_question_type(patch.get("type", question.type)):
             patch["test_cases"] = _attribute_edited_test_cases(
                 patch["test_cases"], original_problem["test_cases"], source,
             )
@@ -6036,6 +6091,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         for key in (
             "review_status", "solution_code", "material_provenance",
             "ai_completion_provenance", "preparation_issues", "stem_save_teacher_criterion",
+            "teacher_material_supplements", "programming_reference_binding", "code_output",
         ):
             if key in patch:
                 presentation[key] = patch[key]
@@ -6059,12 +6115,13 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             # A previous whole-question confirmation cannot hide another field's
             # still-open advice after this field is edited.
             presentation["review_status"] = "edited"
-        if fixed_fields:
+        regenerated = {"reference_answer": "answer", "criterion": "rubric"}
+        checked_fields = {regenerated[key] for key in patch.get("regenerated_fields", ()) if key in regenerated}
+        if fixed_fields or checked_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
                 and (issue.get("field") in fixed_fields or (
-                    linked_edit and issue.get("code") == "generation_failed"
-                    and issue.get("field") in {"answer", "rubric"}))
+                    issue.get("code") == "generation_failed" and issue.get("field") in checked_fields))
                 and (not (issue.get("details") or {}).get("target")
                      or patch.get(issue["details"]["target"]))
                 and (issue.get("details") or {}).get("reason") != "invalid_structured_rubric"
@@ -6192,7 +6249,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                     code="invalid_programming_test_award",
                 ) from exc
         if programming_draft is not None:
-            if linked_edit:
+            if compiled:
                 from backend.services.programming_rubric import verified_test_points
 
                 policy = prior_programming_draft.programming_scoring if prior_programming_draft else None
@@ -6208,15 +6265,6 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 programming_draft, problem_from_question(question),
             ).model_dump(mode="json")
             question.source = {**source, "presentation": presentation}
-        if linked_edit and programming and question.test_cases:
-            issue_id = f"stem-edited-tests:{q_id}"
-            issues = [issue for issue in presentation["preparation_issues"] if issue.get("issue_id") != issue_id]
-            presentation["preparation_issues"] = [*issues, {
-                "issue_id": issue_id, "q_id": q_id, "field": "programming_tests",
-                "code": "source_conflict", "status": "open", "severity": "warning",
-                "source_tokens": [], "details": {"reason": "tests_need_review_after_stem_edit"},
-            }]
-            question.source = {**source, "presentation": presentation}
         if programming_policy is not None:
             if saved_draft(problem_from_question(question)) is None:
                 raise ValidationError("The test allocation could not be bound to this rubric.",
@@ -6226,7 +6274,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         if (patch.get("review_status") == "confirmed" and programming
                 and test_award_review_issue(question, programming_draft)):
             raise ValidationError("Fix the failed recognition or required material before confirming.", code="question_review_blocked")
-        if ((changed_rule and uses_math_grading(question.type)) or (linked_edit and compiled and not programming)
+        if ((changed_rule and uses_math_grading(question.type)) or (compiled and not programming)
                 ) and question.stem.strip() and question.criterion.strip():
             candidate = problem_from_question(question)
             prior = saved_draft(prior_problem, allow_incomplete_alternative=True) if prior_problem else None
@@ -6241,7 +6289,8 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                     prior = saved_draft(original, allow_incomplete_alternative=True)
                     if prior:
                         prior_problem = original
-            draft = compiled or saved_draft(candidate) or rebind_review_edit(prior, prior_problem, candidate)
+            draft = compiled or saved_draft(candidate) or rebind_review_edit(
+                prior, prior_problem, candidate, reuse_scoring_rules=patch.get("reuse_scoring_rules", False))
             if draft is None:
                 # Free-text edits to just an alternative cannot change the main
                 # steps or any other part, even if the model proposes changes.
@@ -6306,7 +6355,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             receipt.status = "done"
             receipt.completed_at = receipt.updated_at = time.time()
             receipt.terminal_summary = {"workflow_revision": workflow_row.workflow_revision}
-            receipt.payload = {"q_id": q_id}
+            receipt.payload = {"q_id": q_id, **({"field": receipt.payload["field"]} if "field" in receipt.payload else {})}
             receipt.checkpoint = {}
             receipt.lease_owner = receipt.lease_token = None
             receipt.lease_expires_at = receipt.lease_heartbeat_at = None

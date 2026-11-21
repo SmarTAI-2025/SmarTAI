@@ -23,12 +23,13 @@ def seeded():
                   steps=[dict(id=f"s{j}", total_pts=score, criterion=f"完成第{j+1}项")
                          for j, score in enumerate(points)], alternative={"deduct_per_error": .5})
              for i, (part, points) in enumerate(zip(structure["subparts"], [[1, 2, 1], [2], [4]]))]
+    teacher_answer = "(1) 配方法。\n(2) 顶点横坐标。\n(3) 开口向上。"
     row = dict(q_id="q1", number="1", type="计算题", stem=stem, criterion=text,
-               reference_answer="", max_score=10, question_structure=structure)
+               reference_answer=teacher_answer, max_score=10, question_structure=structure)
     _, draft = generated_rubric(row, RubricDefinition(part_rubric=dict(
         id="q1", label="1", stem=stem, total_pts=10, parts=parts)))
     assignment_repository.update_question(task, teacher_id=owner, q_id="q1", expected_version=old.version,
-        stem=stem, criterion=text, number="1", reference_answer="", source={"presentation": {
+        stem=stem, criterion=text, number="1", reference_answer=teacher_answer, source={"presentation": {
             **old.source["presentation"], "question_structure": structure,
             "rubric_schema_version": 2, "rubric_draft": draft.model_dump(mode="json")}})
     args = dict(owner_id=owner, task_id=task, q_id="q1")

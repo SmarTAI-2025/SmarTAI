@@ -316,6 +316,30 @@ async def test_stale_review_keeps_the_existing_input_checks(change):
 
 
 @pytest.mark.asyncio
+async def test_grading_an_edited_question_with_no_saved_cases_checks_fresh_inputs_against_current_reference():
+    from backend.services.programming_materials import material_problem
+    from backend.services.programming_reference_inputs import NewTestInput
+
+    stem = "用 Python 实现函数 scale(x)，输入一个整数 x，返回它的 3 倍。"
+    active = "def scale(x): return 3 * x"
+    answer = "返回 x 的 3 倍。"
+    problem = material_problem({
+        "q_id": "q1", "number": "1", "type": "编程题", "stem": stem, "criterion": "结果正确。",
+        "reference_answer": answer, "solution_code": "def scale(x): return 2 * x", "test_cases": [],
+        "programming_reference_binding": {
+            "field": "generated_code", "generated_code": active, "source_kind": "ai_generated",
+            "sha256": runs.source_hash(active), "materials_sha256": runs.reference_materials_digest(stem, answer),
+            "stale_fields": ["solution_code"],
+        },
+    })
+    provider = Provider([reviewed(positions=[1], quote="输入一个整数 x")])
+    generate = AsyncMock(return_value=([NewTestInput(args=[4]).draft()], None))
+    _, suite, error = await runs._prepare(runs.ProgrammingRun(provider), problem, provider, generate, run_sandbox, None)
+    assert not error and suite[0].expected_return == "12"
+    assert len(provider.calls) == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("frozen", [False, True])
 async def test_prepared_suite_is_reviewed_once_for_all_students_and_preserves_real_failure(frozen):
     from backend.tests.test_programming_reference_review import frozen_problem

@@ -19,7 +19,8 @@ def setup_cases(*, expected="2", extra=()):
     task_facade._replace_draft_questions(task, owner, {"q1": {
         "q_id": "q1", "number": "1", "type": "programming",
         "stem": "实现 f(xs)。xs 是有序整数列表，返回列表长度。",
-        "criterion": "正确得到列表长度给满分。",
+        "criterion": "正确得到列表长度给满分。", "reference_answer": "返回列表长度。",
+        "solution_code": "def f(xs): return len(xs)",
         "test_cases": [{"function_name": "f", "function_args": [[1, 2]],
                         "expected_return": expected, "source": "llm_generated"}, *extra],
     }}, "prepared.json")
@@ -53,7 +54,16 @@ async def test_editing_ai_case_is_executable_teacher_material_with_original_audi
     if edit in {"expected", "both"}:
         cases[0]["expected_output"] = "2"
     response = client.put(url, json={"expected_workflow_revision": before["workflow_revision"], "test_cases": cases})
-    assert response.status_code == 200
+    if edit != "both":
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["details"] == {"case_number": 1, "issue": "paired_edit"}
+        after = snapshot(client, task)
+        assert after["workflow_revision"] == before["workflow_revision"]
+        assert after["problem_data"] == before["problem_data"]
+        question, = assignment_repository.list_questions(task, teacher_id=owner)
+        assert "programming_original_ai_cases" not in question.source
+        return
+    assert response.status_code == 200, response.text
     assert client.put(url, json={"review_status": "confirmed"}).status_code == 200
     question, = assignment_repository.list_questions(task, teacher_id=owner)
     assert question.test_cases[0]["source"] == "teacher"
@@ -96,11 +106,11 @@ def test_reorder_add_remove_restore_and_existing_teacher_cases_preserve_authorit
     saved = snapshot(client, task)["problem_data"]["q1"]["test_cases"]
     assert [c["source"] for c in saved] == ["llm_generated", "llm_generated", "teacher"]
     # Add a teacher-authored example while removing one AI example.
-    added = {"input": "[[4, 5, 6]]", "expected_output": "3"}
+    added = {"function_args": [[4, 5, 6]], "expected_return": "3"}
     assert client.put(url, json={"test_cases": [saved[1], added, saved[2]]}).status_code == 200
     saved = snapshot(client, task)["problem_data"]["q1"]["test_cases"]
     assert [c.get("source", "teacher") for c in saved] == ["llm_generated", "teacher", "teacher"]
-    saved[0]["input"] = "[[6, 7]]"
+    saved[0].update(input="[[6, 7, 8, 9]]", expected_output="4")
     assert client.put(url, json={"test_cases": saved}).status_code == 200
     saved = snapshot(client, task)["problem_data"]["q1"]["test_cases"]
     assert saved[0]["source"] == "teacher"
@@ -118,7 +128,7 @@ def test_stale_or_invalid_save_cannot_mutate_authority_or_its_audit():
     owner, task, client, url = setup_cases()
     before = snapshot(client, task)
     cases = before["problem_data"]["q1"]["test_cases"]
-    cases[0]["input"] = "[[3, 4]]"
+    cases[0].update(input="[[3, 4, 5]]", expected_output="3")
     assert client.put(url, json={"expected_workflow_revision": before["workflow_revision"], "test_cases": cases}).status_code == 200
     question, = assignment_repository.list_questions(task, teacher_id=owner)
     stale = client.put(url, json={"expected_workflow_revision": before["workflow_revision"], "test_cases": []})

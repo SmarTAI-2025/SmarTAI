@@ -31,7 +31,7 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import BaseModel, Field, ValidationError as PydanticValidationError
+from pydantic import BaseModel, Field, StrictInt, ValidationError as PydanticValidationError, model_validator
 
 from backend.api.errors import domain_error_response
 from backend.analytics.admin_usage import track_usage_event
@@ -147,13 +147,28 @@ class UpdateProblemRequest(BaseModel):
     reference_answer: str | None = None
     solution_code: str | None = None
     test_cases: list[dict] | None = None
+    test_case_origins: list[StrictInt | None] | None = Field(default=None, max_length=50)
     review_status: Literal["needs_review", "edited", "confirmed"] | None = None
     review_fields: list[Literal["stem", "answer", "rubric", "programming_tests", "source", "max_score"]] | None = None
+
+    @model_validator(mode="after")
+    def bind_test_case_origins(self):
+        if self.test_case_origins is not None and (self.test_cases is None or self.expected_workflow_revision is None):
+            raise ValueError("Test case row origins require the test cases and their workflow revision.")
+        return self
 
 
 class SaveQuestionStemRequest(BaseModel):
     model_config = {"extra": "forbid"}
     stem: str = Field(min_length=1, max_length=200_000)
+    expected_workflow_revision: int = Field(ge=0)
+    retry_of: str | None = Field(default=None, max_length=64)
+
+
+class SaveQuestionMaterialRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    field: Literal["reference_answer", "solution_code"]
+    value: str = Field(max_length=200_000)
     expected_workflow_revision: int = Field(ge=0)
     retry_of: str | None = Field(default=None, max_length=64)
 
@@ -808,6 +823,14 @@ def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
 def save_question_stem(task_id: str, q_id: str, request: SaveQuestionStemRequest,
                        current: User = Depends(require_teacher)):
     return _domain(lambda: question_stem_save.start(
+        task_id=task_id, owner_id=current.id, q_id=q_id, **request.model_dump(),
+    ))
+
+
+@router.post("/{task_id}/problems/{q_id}/material-save", status_code=202)
+def save_question_material(task_id: str, q_id: str, request: SaveQuestionMaterialRequest,
+                           current: User = Depends(require_teacher)):
+    return _domain(lambda: question_stem_save.start_field(
         task_id=task_id, owner_id=current.id, q_id=q_id, **request.model_dump(),
     ))
 

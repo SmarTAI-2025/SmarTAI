@@ -180,6 +180,7 @@ def test_question_low_confidence_edit_remains_advisory(review_compiler):
     _seeded, args = _case(flags=[])
     with session_scope() as session:
         question = session.scalar(select(AssignmentQuestionRecord))
+        question.reference_answer = "Teacher's reference answer."
         question.source = {**(question.source or {}), "presentation": {**((question.source or {}).get("presentation") or {}), "preparation_issues": [{
             "issue_id": "low-source", "q_id": "q1", "field": "stem", "code": "recognition_needs_review",
             "status": "open", "severity": "warning", "details": {"confidence": 0.2},

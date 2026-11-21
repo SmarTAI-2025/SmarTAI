@@ -146,7 +146,7 @@ vi.mock("@/api/hooks/tasks", () => ({
 }));
 
 vi.mock("@/hooks/useQuestionStemSaves", () => ({
-  useQuestionStemSaves: () => ({ byQuestion: new Map(), busy: false, submit: submitStem }),
+  useQuestionStemSaves: () => ({ forField: () => undefined, busy: false, submit: submitStem }),
 }));
 
 vi.mock("@/components/new-task/NewTaskStepper", () => ({
@@ -853,15 +853,16 @@ it("protects a pending answer edit before submitting the stem and preserves the 
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope).sort()).toEqual(["question:task-1:Q1:reference_answer", "question:task-1:Q1:stem"]);
   const [stemSave, answerSave] = question.getAllByRole("button", { name: "保存" });
   await user.click(stemSave);
-  expect(await question.findByText("请先处理本题其他未保存的修改，再更新题干。")).toBeInTheDocument();
+  expect(await question.findByText("请先处理本题其他未保存的修改，再保存。")).toBeInTheDocument();
   expect(submitStem).not.toHaveBeenCalled();
   await user.click(answerSave);
+  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 7, qId: "Q1", field: "reference_answer", value: "explicit reference answer", retryOf: undefined });
   await waitFor(async () => expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]));
   await waitFor(() => expect(card.querySelectorAll("textarea")).toHaveLength(1));
   submitStem.mockRejectedValueOnce(new Error("QA failed save"));
   await user.click(question.getByRole("button", { name: "保存" }));
   await waitFor(() => expect(question.getByText(/请稍后重试保存/)).toBeInTheDocument());
-  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 8, qId: "Q1", stem: "explicit stem", retryOf: undefined });
+  expect(submitStem).toHaveBeenCalledWith({ expectedRevision: 7, qId: "Q1", field: "stem", value: "explicit stem", retryOf: undefined });
   expect((await listPageDrafts("question-draft-teacher")).map(item => item.scope)).toEqual(["question:task-1:Q1:stem"]);
 });
 
@@ -885,6 +886,29 @@ it.each([
   expect(section.queryByText(/invalid_programming_test_cases|internal diagnostic/)).toBeNull();
 });
 
+
+it("restores added test rows and sends their original positions with the reviewed revision", async () => {
+  const path = "/tasks/task-1/questions/Q3/answer";
+  const user = userEvent.setup();
+  const panel = () => within(within(document.querySelector<HTMLElement>('[data-question-id="Q3"]')!)
+    .getByText("测试样例", { selector: "h4" }).closest("section")!);
+  await renderPage(path);
+  await user.click(panel().getByRole("button", { name: "修改" }));
+  await user.click(panel().getByRole("button", { name: "添加测试样例" }));
+  const fields = panel().getAllByRole("textbox").filter(el => el.tagName === "TEXTAREA");
+  fireEvent.change(fields[3], { target: { value: "7" } });
+  fireEvent.change(fields[4], { target: { value: "13" } });
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  cleanup();
+  await renderPage(path);
+  expect(await panel().findByDisplayValue("13")).toBeVisible();
+  await user.click(panel().getByRole("button", { name: "保存测试样例" }));
+  expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+    test_case_origins: [0, null], expectedWorkflowRevision: 7,
+    test_cases: [expect.anything(), expect.objectContaining({ input: "7", expected_output: "13" })],
+  }));
+});
 
 it("saves test points, code criteria and the input domain separately", async () => {
   await renderPage();

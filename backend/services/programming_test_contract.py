@@ -316,7 +316,7 @@ def _has_function_fields(case):
             or case.function_args is not None or case.function_kwargs is not None)
 
 
-def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
+def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited, argument_vector=False):
     structured = case.function_args is not None or case.function_kwargs is not None
     is_function = _has_function_fields(case)
     if case.function_name is not None and (not case.function_name.isidentifier()
@@ -350,8 +350,7 @@ def _adapt_case(case, name, signature, *, function_mode, stdin_mode, edited):
     # Structured-only historical rows have empty display placeholders. Fill
     # those once for the existing editor. On save, its submitted fields win.
     if not structured or text or (edited and "input" in fields):
-        vector = structured
-        parsed_args, parsed_kwargs = _arguments(text, signature, vector=vector)
+        parsed_args, parsed_kwargs = _arguments(text, signature, vector=structured or argument_vector)
         if structured and _json([args, kwargs]) != _json([parsed_args, parsed_kwargs]):
             natural = _arguments(text, signature, vector=False)
             if _json([args, kwargs]) == _json(list(natural)):
@@ -417,7 +416,7 @@ def has_function_only_contract(stem: str, cases) -> bool:
     return function_mode or bool(cases) and all(_has_function_fields(case) for case in cases)
 
 
-def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]:
+def adapt_programming_cases(stem: str, cases, *, edited=False, argument_vector=False) -> list[TestCase]:
     """Validate and preserve a complete collection without consulting student code."""
     if not isinstance(cases, Sequence) or isinstance(cases, (str, bytes)) or len(cases) > 50:
         raise ProgrammingCaseError("Expected a list of at most 50 test cases.", issue="case_limit")
@@ -440,7 +439,7 @@ def adapt_programming_cases(stem: str, cases, *, edited=False) -> list[TestCase]
                 raise ProgrammingCaseError("Unknown test case fields.")
             case = TestCase.model_validate(raw, strict=True).model_copy(deep=True)
             case = _adapt_case(case, name, signature, function_mode=function_mode,
-                               stdin_mode=stdin_mode, edited=edited)
+                               stdin_mode=stdin_mode, edited=edited, argument_vector=argument_vector)
             identity = (["function", case.function_name, case.function_args if case.function_args is not None else case.input, case.function_kwargs or {}]
                         if case.io_mode == "function" else ["stdin", case.input])
             if case.io_mode == "function" and signature is not None:

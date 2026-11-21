@@ -111,7 +111,7 @@ async def verified_boundary(problem, run, public, proposal, execute, reporter):
     if (run.status != "executed" or not run.cases or not public.teacher_tests.total
             or public.teacher_tests.passed != public.teacher_tests.total):
         return None
-    reference = runs._reference(problem)
+    reference = runs._reference(problem, teacher_only=True)
     if not reference:
         return None
     # Preparation has already checked the independent teacher reference on all

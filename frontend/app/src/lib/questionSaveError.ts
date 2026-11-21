@@ -10,7 +10,15 @@ export function questionSaveErrorCode(code: string | null | undefined, locale: s
     case "question_stem_required":
       return tx(locale, "请输入题干后再保存。", "Enter the question before saving.");
     case "question_stem_has_other_edits":
-      return tx(locale, "请先处理本题其他未保存的修改，再更新题干。", "Resolve the other unsaved edits to this question before updating the question text.");
+      return tx(locale, "请先处理本题其他未保存的修改，再保存。", "Resolve other unsaved edits to this question before saving.");
+    case "programming_execution_unavailable":
+      return tx(locale, "参考代码暂时无法运行，请保留修改并重试。", "The reference code could not run. Keep your edits and retry.");
+    case "programming_cases_unavailable":
+    case "programming_case_configuration_invalid":
+    case "invalid_programming_test_cases":
+      return tx(locale, "请核对测试输入、期望结果与当前参考代码。", "Check the test input and expected result against the current reference code.");
+    case "programming_reference_conflict":
+      return tx(locale, "当前参考代码的运行结果与样例不符，请核对后保存。", "The current reference code produced a different result. Check the example before saving.");
     case "question_preparation_wall_time_limit_reached":
     case "provider_timeout":
       return tx(locale, "更新标答和评分标准超时，请重试保存。", "Updating the answer and rubric timed out. Try saving again.");

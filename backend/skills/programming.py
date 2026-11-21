@@ -201,6 +201,13 @@ def _teacher_material(problem, *, for_generation=False):
     }
     presentation = (problem._math_rubric_source or {}).get("presentation") or {}
     generated = presentation.get("ai_completion_provenance") or {}
+    if "programming_reference_binding" in presentation:
+        from backend.services.programming_runs import current_reference_texts
+        material.update(current_reference_texts({**presentation, **material, "stem": problem.stem}))
+        binding = presentation.get("programming_reference_binding") or {}
+        if binding.get("source_kind") == "ai_generated":
+            field = "solution_code" if binding.get("field") == "generated_code" else binding.get("field")
+            generated = {**generated, field: {"source_kind": "ai_generated"}}
     if for_generation:
         # A generated solution cannot serve as an independent answer oracle.
         for field in ("reference_answer", "solution_code"):

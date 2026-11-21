@@ -6,7 +6,8 @@ import type { QuestionStemSave } from "@/types";
 
 type StemSaveInput = {
   qId: string;
-  stem: string;
+  field: NonNullable<QuestionStemSave["field"]>;
+  value: string;
   expectedRevision: number;
   retryOf?: string;
 };
@@ -36,14 +37,15 @@ export function useQuestionStemSaves(taskId: string, revision: number | undefine
   }, [client, refreshRequired, saves.dataUpdatedAt, taskId]);
 
   const submit = useMutation({
-    mutationFn: ({ qId, stem, expectedRevision, retryOf }: StemSaveInput) =>
-      postJSON<QuestionStemSave>(`${taskPath}/problems/${encodeURIComponent(qId)}/stem-save`, {
-        stem, expected_workflow_revision: expectedRevision, retry_of: retryOf,
+    mutationFn: ({ qId, field, value, expectedRevision, retryOf }: StemSaveInput) =>
+      postJSON<QuestionStemSave>(`${taskPath}/problems/${encodeURIComponent(qId)}/${field === "stem" ? "stem-save" : "material-save"}`, {
+        ...(field === "stem" ? { stem: value } : { field, value }),
+        expected_workflow_revision: expectedRevision, retry_of: retryOf,
       }),
     onSuccess: async response => {
       await client.cancelQueries({ queryKey });
       client.setQueryData<QuestionStemSave[]>(queryKey, rows => [
-        ...(rows ?? []).filter(save => save.q_id !== response.q_id), response,
+        ...(rows ?? []).filter(save => save.q_id !== response.q_id || (save.field ?? "stem") !== (response.field ?? "stem")), response,
       ]);
       void client.invalidateQueries({ queryKey });
     },
@@ -54,9 +56,10 @@ export function useQuestionStemSaves(taskId: string, revision: number | undefine
     },
   });
   return {
-    byQuestion: new Map(saves.data?.map(save => [save.q_id, save])),
+    forField: (qId: string, field: QuestionStemSave["field"]) =>
+      saves.data?.find(save => save.q_id === qId && (save.field ?? "stem") === field),
     busy: submit.isPending || Boolean(refreshRequired || saves.data?.some(inProgress)),
-    submittingQuestion: submit.isPending ? submit.variables.qId : undefined,
+    submitting: submit.isPending ? submit.variables : undefined,
     submit: submit.mutateAsync,
   };
 }

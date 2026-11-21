@@ -35,10 +35,12 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
     if io_mode == "function":
         old.update(function_name="add", function_args=[2, 3], expected_return="5")
         stem = "实现 def add(a,b):"
+        reference = "def add(a, b): return a + b"
         source = "from operator import add as helper\ndef unrelated(x): return 17\ndef add(a,b): return helper(a,b)\n"
     else:
         assert io_mode == "stdin"
         stem = "编写程序，从标准输入读入两个以空格分隔的整数，在标准输出打印和。"
+        reference = "print(sum(map(int, input().split())))"
         source = "a, b = map(int, input().split())\nprint(a + b)\n"
     flags = []
     if native_filename:
@@ -49,6 +51,7 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
         answer, = source_answers(native_filename, source, {"q1":{"type":"编程题","stem":stem}}, {"q1"})
         flags = answer["flag"]
     save = client.put(path, headers=headers, json={"type":"编程题", "stem":stem,
+        "reference_answer": "Add the two integers.", "solution_code": reference,
         "criterion":"Return the sum of the two arguments (10 points).", "review_status":"edited",
         "programming_scoring": {"test_points": 0, "input_rules": ""},
         "test_cases":[old], "expected_workflow_revision":revision()})
@@ -82,7 +85,9 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
     dispatch = programming.run_sandbox
     checkpoints = []
 
-    async def observe_dispatch(code, cases, *, on_case_complete, **limits):
+    async def observe_dispatch(code, cases, *, on_case_complete=None, **limits):
+        if on_case_complete is None:
+            return await dispatch(code, cases, **limits)
         async def checkpoint(row):
             await on_case_complete(row)
             checkpoints.append((row.case_id, row.case_index, row.execution_id))
@@ -107,8 +112,8 @@ def exercise_saved_grading_flow(monkeypatch, *, io_mode, native_filename=None):
     result = task_facade.task_results(task_id=task,owner_id=owner)
     assert result["grading_run_status"] == "completed", result
     assert result["results"][0]["corrections"][0]["score"] == 10
-    assert executed.await_count == 1 and generation.await_count == 0 and scoring.await_count == 2
-    assert executed.call_args.args[0] == source
+    assert [call.args[0] for call in executed.await_args_list] == [reference, source]
+    assert generation.await_count == 0 and scoring.await_count == 2
     activity = grading_runs.get_run(run_id=job, actor_id=owner, role="teacher")["events"]
     assert activity
     assert not {e["message"] for e in activity}.intersection({

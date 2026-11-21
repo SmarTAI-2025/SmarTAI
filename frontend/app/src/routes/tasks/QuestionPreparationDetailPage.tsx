@@ -7,6 +7,7 @@ import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { objectDraftCodec, type DraftCodec } from "@/lib/pageDraftStore";
 import { QUESTION_TYPES, hasQuestionType, questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
 import { normalizeFilterType } from "@/lib/taskFilterIntent";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -239,14 +240,22 @@ function QuestionPreparationDetailPageForm() {
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
     const expectedRevision = latestWorkflowRevisionRef.current;
-    if (field === "stem" && problem.stem.trim() && expectedRevision !== undefined) {
-      if ([...dirtyKeys].some(key => key.startsWith(`${problem.q_id}:`) && key !== `${problem.q_id}:stem`)) {
+    const manualEntry = !problem[field] && problem.preparation_issues?.some(issue =>
+      issue.code === "manual_completion_required" && issue.status === "open" &&
+      Array.isArray(issue.details?.required_fields) && issue.details.required_fields.includes(field));
+    if (!manualEntry && (field === "stem" || field === "reference_answer" || field === "solution_code") && problem.stem.trim() && expectedRevision !== undefined) {
+      const dependentEditors = {
+        stem: ["answer", "scoring", "code", "tests"],
+        reference_answer: ["scoring", "code", "tests"],
+        solution_code: ["tests"],
+      }[field];
+      if (dependentEditors.some(key => dirtyKeys.has(`${problem.q_id}:${key}`))) {
         throw new APIError(409, "The question has other unsaved edits.", { code: "question_stem_has_other_edits" });
       }
-      const previousSave = stemSaves.byQuestion.get(problem.q_id);
-      const retryOf = previousSave?.status === "error" && previousSave.stem === value
+      const previousSave = stemSaves.forField(problem.q_id, field);
+      const retryOf = previousSave?.status === "error" && previousSave[field] === value
         ? previousSave.id : undefined;
-      await stemSaves.submit({ qId: problem.q_id, stem: value, expectedRevision, retryOf });
+      await stemSaves.submit({ qId: problem.q_id, field, value, expectedRevision, retryOf });
       return;
     }
     const response = await saveProblem({
@@ -258,12 +267,13 @@ function QuestionPreparationDetailPageForm() {
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
 
-  async function saveTests(problem: ProblemInfo, cases: TestCase[]) {
+  async function saveTests(problem: ProblemInfo, cases: TestCase[], origins?: (number | null)[]) {
     const response = await updateProblem.mutateAsync({
       taskId: stableTaskId,
       qId: problem.q_id,
       expectedWorkflowRevision: latestWorkflowRevisionRef.current,
       test_cases: cases,
+      ...(origins && latestWorkflowRevisionRef.current !== undefined ? { test_case_origins: origins } : {}),
     });
     latestWorkflowRevisionRef.current = response.workflow_revision;
   }
@@ -404,8 +414,8 @@ function QuestionPreparationDetailPageForm() {
                 next={filtered[index + 1] ?? null}
                 readOnly={readOnly}
                 saving={savingQuestion}
-                stemSave={stemSaves.byQuestion.get(problem.q_id)}
-                submittingStem={stemSaves.submittingQuestion === problem.q_id}
+                fieldSave={field => stemSaves.forField(problem.q_id, field)}
+                submittingField={stemSaves.submitting?.qId === problem.q_id ? stemSaves.submitting.field : undefined}
                 locale={locale}
                 onDirtyChange={setFieldDirty}
                 onSaveScoring={saveScoring}
@@ -451,7 +461,7 @@ function QuestionPreparationDetailPageForm() {
   );
 }
 
-function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, stemSave, submittingStem, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
+function QuestionPackageCard({ problem, index, total, previous, next, readOnly, saving, fieldSave, submittingField, locale, onDirtyChange, onSaveScoring, onSaveText, onSaveTests, onNavigate, onConfirm }: {
   problem: ProblemInfo;
   index: number;
   total: number;
@@ -459,17 +469,18 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
   next: ProblemInfo | null;
   readOnly: boolean;
   saving: boolean;
-  stemSave?: QuestionStemSave;
-  submittingStem: boolean;
+  fieldSave: (field: NonNullable<QuestionStemSave["field"]>) => QuestionStemSave | undefined;
+  submittingField?: QuestionStemSave["field"];
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
   onSaveScoring: (problem: ProblemInfo, maxScore: number, criterion: string, alternatives?: Record<string, string>, programmingScoring?: ProgrammingScoringPolicy) => Promise<void>;
   onSaveText: (problem: ProblemInfo, field: TextFieldKey, value: string) => Promise<void>;
-  onSaveTests: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
+  onSaveTests: (problem: ProblemInfo, cases: TestCase[], origins?: (number | null)[]) => Promise<void>;
   onNavigate: (qId: string) => void;
   onConfirm: (problem: ProblemInfo) => void;
 }) {
   const programming = isProgrammingProblem(problem);
+  const binding = problem.programming_reference_binding;
   const risks = questionReviewNotes(problem, locale, code => riskShortLabel(code, locale), { view: "detail" });
   return (
     <article id={questionAnchorId(problem.q_id)} data-question-id={problem.q_id} className="scroll-mt-[86px] overflow-hidden rounded-[10px] border bg-card">
@@ -499,10 +510,10 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
           <EditableTextField fieldKey={`${problem.q_id}:number`} label={tx(locale, "题号", "Question number")} value={problem.number ?? ""} problem={problem} field="number" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
           <EditableTextField fieldKey={`${problem.q_id}:type`} label={tx(locale, "题型", "Question type")} value={normalizeFilterType(problem.type ?? "")} problem={problem} field="type" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
         </div>
-        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} stemSave={stemSave} submittingStem={submittingStem} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+        <EditableTextField fieldKey={`${problem.q_id}:stem`} label={tx(locale, "题目", "Question")} value={problem.stem} problem={problem} field="stem" readOnly={readOnly} saving={saving} stemSave={fieldSave("stem")} submittingStem={submittingField === "stem"} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
 
         <div className="grid divide-y md:grid-cols-2 md:divide-x md:divide-y-0">
-          <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+          <EditableTextField fieldKey={`${problem.q_id}:answer`} label={tx(locale, "标答 / 解题步骤", "Reference Answer / Solution Steps")} value={problem.reference_answer ?? ""} problem={problem} field="reference_answer" stemSave={fieldSave("reference_answer")} submittingStem={submittingField === "reference_answer"} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
           <EditableScoringField fieldKey={`${problem.q_id}:scoring`} problem={problem} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveScoring} />
         </div>
 
@@ -511,7 +522,14 @@ function QuestionPackageCard({ problem, index, total, previous, next, readOnly, 
             <h3 className="text-[15px] font-bold text-foreground">{tx(locale, "编程题校验", "Programming Validation")}</h3>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">{tx(locale, "按成熟 OJ 习惯查看公开样例、隐藏测试、输入、期望输出与解释。", "Review examples and hidden tests with explicit input, expected output, and explanation.")}</p>
             <div className="mt-4 overflow-hidden rounded-[9px] border bg-card">
-              <EditableTextField compact fieldKey={`${problem.q_id}:code`} label={tx(locale, "参考代码", "Reference Solution")} value={problem.solution_code ?? ""} problem={problem} field="solution_code" readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
+              {binding?.field === "generated_code" && binding.generated_code &&
+                <section className="space-y-2 border-b px-4 py-4">
+                  <h4 className="text-sm font-semibold">{tx(locale, "本版采用的参考代码（AI 补充）", "Active reference code (AI supplement)")}</h4>
+                  <SyntaxHighlightedCode code={binding.generated_code} languageHint={problem.stem} locale={locale} />
+                </section>}
+              {binding?.field === "reference_answer" &&
+                <p className="border-b px-4 py-3 text-sm">{tx(locale, "本版使用标答中的参考代码。", "This version uses the code in the reference answer.")}</p>}
+              <EditableTextField compact fieldKey={`${problem.q_id}:code`} label={binding?.stale_fields.includes("solution_code") ? tx(locale, "原参考代码（本版停用）", "Previous reference code (inactive)") : tx(locale, "参考代码", "Reference Solution")} value={problem.solution_code ?? ""} problem={problem} field="solution_code" stemSave={fieldSave("solution_code")} submittingStem={submittingField === "solution_code"} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveText} />
               <TestCasesPanel fieldKey={`${problem.q_id}:tests`} problem={problem} readOnly={readOnly} saving={saving} locale={locale} onDirtyChange={onDirtyChange} onSave={onSaveTests} />
             </div>
           </section>
@@ -811,7 +829,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:${field}`, value: { draft }, baseline: { draft: value }, version: value, enabled: !readOnly, busy: saving, onRestore: (restored) => { setDraft(restored.draft); if (field !== "type" || restored.draft !== value) setEditing(true); } });
   const leave = useDraftLeave();
   const updatingStem = submittingStem || stemSave?.status === "pending" || stemSave?.status === "running";
-  const failedStem = stemSave?.status === "error" ? stemSave.stem : undefined;
+  const failedStem = stemSave?.status === "error" ? stemSave[stemSave.field ?? "stem"] : undefined;
   const lastValue = useRef(value);
   useEffect(() => {
     if (field === "reference_answer" && value !== lastValue.current && !localDraft.savedAt
@@ -839,7 +857,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
 
   async function save() {
     if (localDraft.conflict) return;
-    if (field === "stem") submittedStem.current = draft;
+    submittedStem.current = draft;
     setError(null);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;
@@ -861,9 +879,9 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
         </button> : null}
       </div>
       {updatingStem ? <p role="status" className="mt-3 text-sm text-primary">
-        {tx(locale, "正在更新标答和评分标准…", "Updating the reference answer and scoring rubric…")}
+        {field === "stem" ? tx(locale, "正在更新标答和评分标准…", "Updating the reference answer and scoring rubric…") : tx(locale, "正在核对关联材料…", "Checking related materials…")}
       </p> : null}
-      {failedStem && !updatingStem && !editing && !readOnly ? <div role="alert" className="mt-3 text-sm text-danger">
+      {failedStem !== undefined && !updatingStem && !editing && !readOnly ? <div role="alert" className="mt-3 text-sm text-danger">
         <p>{tx(locale, "这次题目修改已保留。", "Your changes are available to resume.")} {questionSaveErrorCode(stemSave?.error_code, locale)}</p>
         <button type="button" disabled={saving} className="mt-1 rounded text-primary underline disabled:opacity-45" onClick={() => {
           setDraft(failedStem);
@@ -899,8 +917,9 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
 
 
 function testCaseSaveError(error: unknown, locale: string) {
-  if (getAPIErrorCode(error) !== "invalid_programming_test_cases") {
-    return tx(locale, "保存失败，请重试。", "Save failed. Try again.");
+  const code = getAPIErrorCode(error);
+  if (code !== "invalid_programming_test_cases" && code !== "programming_reference_conflict") {
+    return questionSaveError(error, locale);
   }
   const details = getAPIErrorDetail(error)?.details;
   const meta = details && typeof details === "object" ? details as Record<string, unknown> : {};
@@ -908,11 +927,15 @@ function testCaseSaveError(error: unknown, locale: string) {
   const label = typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 50
     ? tx(locale, `样例 ${n} 未保存。`, `Test case ${n} was not saved. `)
     : tx(locale, "测试样例未保存。", "Test cases were not saved. ");
+  if (code === "programming_reference_conflict") return label + questionSaveError(error, locale);
   if (meta.issue === "case_limit") {
     return label + tx(locale, "每题最多 50 个样例，请核对样例列表。", "Check the list of test cases. Each question supports up to 50.");
   }
   if (meta.issue === "conflicting_expectations") {
     return label + tx(locale, "同一输入有不同的预期结果，请核对。", "The same input has different expected results. Check the expected values.");
+  }
+  if (meta.issue === "paired_edit") {
+    return label + tx(locale, "修改已有样例时，请同时修改输入和期望结果。", "Change both the input and expected result of an existing example.");
   }
   if (meta.issue === "arguments") {
     return label + tx(locale, "请核对输入与函数参数的数量、名称和格式。", "Check the number, names and format of the function arguments.");
@@ -923,6 +946,19 @@ function testCaseSaveError(error: unknown, locale: string) {
   return label + tx(locale, "请核对输入、预期结果和题目的调用要求。", "Check the input, expected result and how the question requires the code to be called.");
 }
 
+type CaseDraft = { cases: TestCase[]; origins?: (number | null)[] };
+const caseDraftShape = objectDraftCodec<CaseDraft>({ cases: [] });
+const caseDraftCodec: DraftCodec<CaseDraft> = {
+  encode: caseDraftShape.encode,
+  decode(value) {
+    const draft = caseDraftShape.decode(value);
+    if (!draft || !draft.cases.every(row => row && typeof row.input === "string" && typeof row.expected_output === "string")) return null;
+    if (draft.origins !== undefined && (!Array.isArray(draft.origins) || draft.origins.length !== draft.cases.length
+      || draft.origins.some(id => id !== null && (!Number.isInteger(id) || id < 0)))) return null;
+    return draft;
+  },
+};
+
 function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
   fieldKey: string;
   problem: ProblemInfo;
@@ -930,18 +966,25 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   saving: boolean;
   locale: string;
   onDirtyChange: (key: string, dirty: boolean) => void;
-  onSave: (problem: ProblemInfo, cases: TestCase[]) => Promise<void>;
+  onSave: (problem: ProblemInfo, cases: TestCase[], origins?: (number | null)[]) => Promise<void>;
 }) {
   const original = problem.test_cases ?? EMPTY_TEST_CASES;
   const manualEditing = useManualEditor(problem, ["test_cases"]);
   const [editing, setEditing] = useState(manualEditing && !readOnly);
   const [cases, setCases] = useState<TestCase[]>(original);
+  const initialOrigins = useMemo(() => original.map((_, index) => index), [original]);
+  const [origins, setOrigins] = useState<(number | null)[] | undefined>(initialOrigins);
   const [activeIndex, setActiveIndex] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const dirty = editing && JSON.stringify(cases) !== JSON.stringify(original);
-  useEffect(() => { if (!editing && !localDraft.savedAt) setCases(original); }, [editing, original]);
+  useEffect(() => { if (!editing && !localDraft.savedAt) { setCases(original); setOrigins(initialOrigins); } }, [editing, original, initialOrigins]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`, value: { cases }, baseline: { cases: original }, version: JSON.stringify(original), enabled: !readOnly, busy: saving, onRestore: (restored) => { setCases(restored.cases); setEditing(true); } });
+  const localDraft = useDraftProtection<CaseDraft>({
+    scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`,
+    value: { cases, origins }, baseline: { cases: original, origins: initialOrigins }, codec: caseDraftCodec,
+    version: JSON.stringify(original), enabled: !readOnly, busy: saving,
+    onRestore: restored => { setCases(restored.cases); setOrigins(restored.origins); setEditing(true); },
+  });
   const leave = useDraftLeave();
   const exampleCount = original.filter((item) => (item.visibility ?? "example") === "example").length;
   const hiddenCount = original.length - exampleCount;
@@ -950,7 +993,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
     if (localDraft.conflict) return;
     setError(null);
     try {
-      if (!await localDraft.runFormal(() => onSave(problem, cases), { cases })) return;
+      if (!await localDraft.runFormal(() => onSave(problem, cases, origins), { cases, origins })) return;
       onDirtyChange(fieldKey, false);
       setEditing(false);
     } catch (cause) {
@@ -975,7 +1018,7 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
               <div className="flex items-center justify-between gap-3">
                 <input value={testCase.title ?? ""} onChange={(event) => setCases(updateCase(cases, index, { title: event.target.value }))} placeholder={tx(locale, `样例 ${index + 1}`, `Example ${index + 1}`)} className="h-9 min-w-0 flex-1 rounded-[6px] border bg-card px-3 text-sm font-semibold outline-none focus:border-primary" />
                 <select value={testCase.visibility ?? "example"} onChange={(event) => setCases(updateCase(cases, index, { visibility: event.target.value as "example" | "hidden" }))} className="h-9 rounded-[6px] border bg-card px-2 text-xs outline-none focus:border-primary"><option value="example">{tx(locale, "公开样例", "Example")}</option><option value="hidden">{tx(locale, "隐藏测试", "Hidden")}</option></select>
-                <button type="button" onClick={() => setCases(cases.filter((_, itemIndex) => itemIndex !== index))} className="inline-flex h-9 w-9 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-red-50 hover:text-danger"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>
+                <button type="button" onClick={() => { setCases(cases.filter((_, i) => i !== index)); setOrigins(origins?.filter((_, i) => i !== index)); }} className="inline-flex h-9 w-9 items-center justify-center rounded-[6px] text-muted-foreground hover:bg-red-50 hover:text-danger"><Trash2 aria-hidden="true" className="h-4 w-4" /></button>
               </div>
               <div className="mt-3 grid gap-3 md:grid-cols-2">
                 <CaseTextarea label={tx(locale, "输入", "Input")} value={testCase.input} onChange={(value) => setCases(updateCase(cases, index, { input: value }))} />
@@ -984,7 +1027,9 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
               <div className="mt-3"><CaseTextarea label={tx(locale, "解释（可选）", "Explanation (optional)")} value={testCase.description} rows={2} onChange={(value) => setCases(updateCase(cases, index, { description: value }))} /></div>
             </article>
           ))}
-          <button type="button" onClick={() => setCases([...cases, emptyTestCase(cases.length + 1)])} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
+          {origins?.includes(null) && (!original.length || original.some(row => row.io_mode === "function" || row.function_name)) &&
+            <p className="text-xs text-muted-foreground">{tx(locale, "新增函数样例时，输入可写成参数数组。单个整数写 [4]，单个列表写 [[4]]。", "For a new function case, enter arguments as an array. Use [4] for one integer or [[4]] for one list.")}</p>}
+          <button type="button" onClick={() => { setCases([...cases, emptyTestCase(cases.length + 1, original)]); setOrigins(origins && [...origins, null]); }} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
           <div className="flex items-center justify-between gap-3 border-t pt-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ?? tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
             <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
@@ -999,7 +1044,9 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
           </div>
           <TestCaseViewer testCase={original[Math.min(activeIndex, original.length - 1)]} locale={locale} />
         </div>
-      ) : <p className="mt-4 rounded-[8px] bg-slate-50 px-4 py-5 text-sm text-muted-foreground dark:bg-slate-950/20">{tx(locale, "测试样例生成失败或尚未完成，请在风险总览查看。", "Test case generation failed or is incomplete; check the risk overview.")}</p>}
+      ) : <p className="mt-4 rounded-[8px] bg-slate-50 px-4 py-5 text-sm text-muted-foreground dark:bg-slate-950/20">{problem.programming_scoring?.test_points === 0
+        ? tx(locale, "测试配分为 0，尚无测试样例。", "Tests carry zero points. No test cases have been added.")
+        : tx(locale, "尚无测试样例。", "No test cases have been added.")}</p>}
     </section>
   );
 }
@@ -1049,8 +1096,9 @@ function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) 
   return cases.map((testCase, itemIndex) => itemIndex === index ? { ...testCase, ...patch } : testCase);
 }
 
-function emptyTestCase(index: number): TestCase {
-  return { title: `样例 ${index}`, visibility: "example", purpose: "normal", io_mode: "stdin", input: "", expected_output: "", description: "", source: "teacher", sandbox_feasible: true };
+function emptyTestCase(index: number, original: TestCase[]): TestCase {
+  const functionCases = original.length > 0 && original.every(row => row.io_mode === "function" || row.function_name);
+  return { title: `样例 ${index}`, visibility: "example", purpose: "normal", io_mode: functionCases ? "function" : "stdin", input: "", expected_output: "", description: "", source: "teacher", sandbox_feasible: true };
 }
 
 function sortProblems(problems: ProblemInfo[], locale: string) {

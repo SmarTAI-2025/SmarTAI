@@ -235,25 +235,90 @@ def _validate_report(report, cases):
             ids.add(eid)
 
 
-def _reference(problem):
-    source = (problem._math_rubric_source or {}).get("presentation") or {}
-    provenance = source.get("ai_completion_provenance") or {}
-    # A generated solution is supplementary text for the scorer. Its output
-    # cannot override a teacher's examples or certify another model's tests.
-    if problem.solution_code and "solution_code" not in provenance:
-        return _source(problem.solution_code)
-    reference = (problem.reference_answer or "").strip()
-    if "reference_answer" not in provenance and reference.lower().startswith(("```python\n", "```py\n", "```cpp\n", "```c++\n", "```c\n")):
-        return _source(reference)
-    return None
+_ANSWER_FENCE = re.compile(
+    r"^([ \t]*```(?:python|py|cpp|c\+\+|c)[^\S\n]*\r?\n.*?^[ \t]*```[^\S\n]*$)",
+    re.I | re.M | re.S,
+)
+
+
+_MARKDOWN_FENCE = re.compile(r"^[ \t]*(`{3,}|~{3,})[^\n]*\n.*?(?:^[ \t]*\1[^\S\n]*$|\Z)", re.M | re.S)
+
+
+def answer_code_block(answer):
+    """An explicitly labelled, unambiguous reference block, including its language."""
+    blocks = _ANSWER_FENCE.findall(answer or "")
+    return blocks[0] if len(blocks) == 1 and (answer or "").count("```") == 2 else None
+
+
+def reference_materials_digest(stem, answer):
+    from backend.services.question_structure import scoring_stem
+    return digest([scoring_stem(stem or ""), scoring_stem(answer or "")])
+
+
+def reference_material(problem, *, include_generated=False, teacher_only=False):
+    presentation = (problem._math_rubric_source or {}).get("presentation") or {}
+    generated = presentation.get("ai_completion_provenance") or {}
+    answer = (problem.reference_answer or "").strip()
+    if "programming_reference_binding" in presentation:
+        binding = presentation["programming_reference_binding"] or {}
+        if binding.get("materials_sha256") != reference_materials_digest(problem.stem, problem.reference_answer):
+            return None
+        field = binding.get("field")
+        if field in (binding.get("stale_fields") or ()) or teacher_only and (
+            binding.get("source_kind") == "ai_generated" or field == "generated_code" or field in generated
+        ):
+            return None
+        material = {
+            "solution_code": problem.solution_code, "reference_answer": answer_code_block(answer),
+            "generated_code": binding.get("generated_code"),
+        }.get(field)
+        if material and source_hash(material) == binding.get("sha256"):
+            return material
+        return None
+    # Legacy grading accepts only independently supplied code. Initial material
+    # generation may execute a generated solution to derive new expectations.
+    if problem.solution_code and "solution_code" not in generated:
+        return problem.solution_code
+    if "reference_answer" not in generated and (block := answer_code_block(answer)):
+        return block
+    if "reference_answer" not in generated and answer.lower().startswith((
+        "```python\n", "```py\n", "```cpp\n", "```c++\n", "```c\n",
+    )):
+        return answer
+    return problem.solution_code if include_generated and not teacher_only else None
+
+
+def _reference(problem, *, include_generated=False, teacher_only=False):
+    material = reference_material(problem, include_generated=include_generated, teacher_only=teacher_only)
+    return _source(material) if material else None
+
+
+def current_reference_texts(source):
+    """Project the version's materials for a model without disclosing retired code."""
+    texts = {field: source.get(field) for field in ("solution_code", "reference_answer")}
+    if "programming_reference_binding" not in source:
+        return texts
+    binding = source.get("programming_reference_binding") or {}
+    if binding.get("materials_sha256") != reference_materials_digest(source.get("stem"), source.get("reference_answer")):
+        binding = {}
+    if binding.get("field") != "solution_code":
+        texts["solution_code"] = None
+    if binding.get("field") != "reference_answer":
+        texts["reference_answer"] = _MARKDOWN_FENCE.sub("", texts["reference_answer"] or "").strip()
+    if binding.get("field") == "generated_code":
+        code = binding.get("generated_code")
+        if code and source_hash(code) == binding.get("sha256"):
+            texts["solution_code"] = code
+    elif binding.get("field") in texts:
+        field = binding["field"]
+        material = answer_code_block(texts[field]) if field == "reference_answer" else texts[field]
+        if not material or source_hash(material) != binding.get("sha256"):
+            texts[field] = None
+    return texts
 
 
 def _reference_language(problem, source):
-    # The teacher's reference can be written in a different language from the
-    # student answer. Prefer its explicit fence to any language in the stem.
-    provenance = ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}
-    material = (problem.solution_code if problem.solution_code and "solution_code" not in provenance
-                else problem.reference_answer)
+    material = reference_material(problem, include_generated=True)
     first = (material or "").lstrip().splitlines()[0].strip().lower()
     fenced = {"```c": "c", "```cpp": "cpp", "```c++": "cpp", "```python": "python", "```py": "python"}
     if first in fenced:
@@ -273,6 +338,9 @@ def _reference_language(problem, source):
 
 def _reference_execution_identity(problem):
     runtime = runtime_identity()
+    presentation = (problem._math_rubric_source or {}).get("presentation") or {}
+    if "programming_reference_binding" in presentation:
+        runtime["reference_binding"] = digest(presentation["programming_reference_binding"])
     try:
         source = _reference(problem)
         provenance = ((problem._math_rubric_source or {}).get("presentation") or {}).get("ai_completion_provenance") or {}
@@ -334,9 +402,10 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
                for c in cases]
     presentation = (problem._math_rubric_source or {}).get("presentation") or {}
     generated = (presentation.get("ai_completion_provenance") or {}).get("test_cases") or {}
-    # Preparation can also add tests to an existing teacher rubric that has no
-    # funded suite item. Apply the same review there; legacy grading-time test
-    # proposals retain their separate admission path.
+    # An edited question may legitimately have no saved suite. Its current
+    # reference supplies outputs, but proposed inputs still need domain review.
+    current_reference_inputs = (not problem.test_cases and presentation.get("programming_reference_binding")
+                                and all(isinstance(row, ReferenceInputCase) for row in originals))
     approved = generated.get("input_review_fingerprint")
     if ("unknown" in domains and generated.get("source_kind") == "ai_generated"
             and approved and approved == input_review_fingerprint(problem, cases)):
@@ -344,7 +413,8 @@ async def _checked_case_inputs(state, plan_key, problem, originals, cases, provi
         # rejection still takes precedence over a stored semantic decision.
         domains = ["allowed" if domain == "unknown" else domain for domain in domains]
     elif ("unknown" in domains and provider is not None
-          and (frozen_programming_steps(problem) or generated.get("source_kind") == "ai_generated")):
+          and (current_reference_inputs or frozen_programming_steps(problem)
+               or generated.get("source_kind") == "ai_generated")):
         from backend.services.programming_input_review import review_input_domains
         from backend.progress.grading_activity import observe_auxiliary_request
         state.store(STARTED, plan_key, {"q_id": problem.q_id})

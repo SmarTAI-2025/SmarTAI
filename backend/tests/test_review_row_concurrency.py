@@ -17,8 +17,7 @@ from backend.tests.test_task_background_workflows import _seed_task
 def _case(kind):
     owner, task = _seed_task(with_question=True)
     if kind == "question":
-        # Exercise real edit transactions without requiring external math-rule
-        # compilation for the deliberately changed stem in these lock tests.
+        # These locking tests run the real save without external generation.
         question = assignment_repository.list_questions(task, teacher_id=owner)[0]
         assignment_repository.update_question(task, teacher_id=owner, q_id="q1",
             expected_version=question.version, type="编程题", source={})
@@ -163,7 +162,7 @@ def assert_detail_and_row_mutation_share_revision(kind, action, *, with_revision
         kwargs = dict(task_id=task, owner_id=owner, expected_revision=revision if with_revision else None)
         if is_question:
             return task_facade.update_problem(**kwargs, q_id=target,
-                patch={"review_status": "confirmed"} if kind.endswith("confirm") else {"stem": "Edited question"})
+                patch={"review_status": "confirmed"} if kind.endswith("confirm") else {"stem": "Original."})
         if kind.startswith("answer"):
             return task_facade.update_student_answer(**kwargs, display_student_id=target, q_id="q1",
                 patch={"review_status": "confirmed"} if kind.endswith("confirm") else {"content": "Edited answer"})

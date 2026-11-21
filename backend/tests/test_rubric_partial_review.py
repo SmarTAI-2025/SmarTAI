@@ -250,9 +250,9 @@ async def test_conflict_does_not_stop_later_questions_and_survives_manual_handof
         task_facade.update_problem(**args, patch={"review_status": "confirmed", "preparation_issues": []})
     if repair_kind == "programming":
         task_facade.update_problem(**args, patch={"type": "编程题"})
-        task_facade.update_problem(**args, patch={"stem": "输入一个整数，输出它的平方。"})
-        task_facade.update_problem(**args, patch={"reference_answer": "读取输入并输出其平方。"})
-        task_facade.update_problem(**args, patch={"criterion": "输出正确得满分。",
+        task_facade.update_problem(**args, patch={"stem": "输入一个整数，输出它的平方。",
+            "reference_answer": "读取输入并输出其平方。", "solution_code": "x = int(input())\nprint(x*x)",
+            "criterion": "输出正确得满分。",
             "programming_scoring": {"test_points": 0, "input_rules": ""}})
         result = task_facade.update_problem(**args, patch={"review_status": "confirmed"})
         assert result["problem"]["review_status"] == "confirmed"
@@ -332,6 +332,7 @@ def test_changing_grading_engine_retires_only_math_review(monkeypatch, kind):
         expected_version=before.version, source={"presentation": presentation})
     monkeypatch.setattr(task_facade, "_compile_review_edit", lambda *_: pytest.fail("A programming edit must not compile a math rubric"))
     updated = task_facade.update_problem(**args, patch={"type": kind, "stem": "输入一个整数，输出其平方。",
+        "solution_code": "x = int(input())\nprint(x*x)",
         "reference_answer": "读取整数并输出平方。", "criterion": "程序输出正确得满分。",
         "programming_scoring": {"test_points": 0, "input_rules": ""}})
     assert not any(i["status"] == "open" and i["severity"] == "blocking" for i in updated["problem"]["preparation_issues"])

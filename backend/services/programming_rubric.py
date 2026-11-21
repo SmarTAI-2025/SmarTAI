@@ -12,6 +12,11 @@ def domain_criterion(problem):
         return draft.programming_scoring.input_rules
     if draft and verified_test_points(draft.plan) is not None:
         return draft.plan.part_rubric.teacher_rubric or ""
+    # An edit may have a newly accepted policy before its frozen draft exists.
+    presentation = (getattr(problem, "_math_rubric_source", {}) or {}).get("presentation") or {}
+    policy = presentation.get("programming_scoring") or {}
+    if policy.get("test_points") is not None and isinstance(policy.get("input_rules"), str):
+        return policy["input_rules"]
     return problem.criterion
 
 
@@ -47,9 +52,9 @@ def distinct_scoring_cases(problem, originals, cases):
     if not frozen_programming_steps(problem):
         return originals, cases
     from backend.services.programming_test_contract import ProgrammingCaseError, case_input_key
-    from backend.services.programming_runs import _reference, _source
+    from backend.services.programming_runs import _reference
     from backend.services.python_source_encoding import python_execution_source
-    reference = _reference(problem) or (_source(problem.solution_code) if problem.solution_code else None)
+    reference = _reference(problem, include_generated=True)
     if reference and any(case.io_mode == "function" for case in cases):
         reference = python_execution_source(reference)
     def expectation(case):

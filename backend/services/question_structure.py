@@ -624,13 +624,34 @@ def scoring_stem(stem):
     """
     if not stem:
         return stem
-    if "```" in stem or "~~~" in stem:
-        return stem.strip()
+    stem = stem.replace("\r\n", "\n")
+    # Spaces, punctuation and even the last newline can be data in literal
+    # output, code and quoted strings. A textual shortcut cannot certify them.
+    if re.search(r"(?m:^ {4}\S)|(?:逐字|原样|字符串|标准输出|"
+                 r"exact output|verbatim|string literal|regular expression)", stem, re.I):
+        return stem
+    # Ignore a prose edit beside a code block while retaining every byte of
+    # the block, its indentation and quoted data. Unclosed delimiters abstain.
+    literals = re.compile(r'(```[^\n]*\n[\s\S]*?^```(?=\s|$)|~~~[^\n]*\n[\s\S]*?^~~~(?=\s|$)|'
+                          r"""`[^`\n]+`|"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|‘[^’\n]*’)""", re.M)
+    segments = literals.split(stem)
+    if any(re.search(r'[`"“”‘’]|~~~', value) for value in segments[::2]):
+        return stem
+    return "".join(value if i % 2 else _prose_scoring_text(value) for i, value in enumerate(segments)).strip()
+
+
+def _prose_scoring_text(stem):
+    stem = re.sub(r"(?<=[\u3400-\u9fff])[，,。](?=(?:请)?(?:返回|计算|求出|输出|说明|证明))", "。", stem)
+    stem = re.sub(r"(?<=\w)[ \t]{2,}(?=\w)", " ", stem)
+    stem = re.sub(r"(?m)^(?:请(?=计算|求出|返回|说明|证明)|[Pp]lease (?=[a-z]))", "", stem)
     # The ideographic full stop is sentence punctuation even after a formula.
     # Keep ASCII dots, factorials and code punctuation significant.
     stem = re.sub(r"。+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))", "", stem)
-    return re.sub(r"(?<=[\u3400-\u9fff])[。.!！?？]+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))",
-                  "", stem.replace("\r\n", "\n")).strip()
+    stem = re.sub(r"(?<=[\u3400-\u9fff])[。.!！?？]+(?=[ \t]*(?:\n|$|[(（][0-9a-zA-Z一二三四五六七八九十]+[)）]))",
+                  "", stem)
+    # Final periods after English prose words are display punctuation. Leave
+    # a decimal point, a one-letter variable, and every math operator intact.
+    return re.sub(r"(?<=[a-z]{3})\.(?=[ \t]*$)", "", stem)
 
 
 def summarize_rubric_points(

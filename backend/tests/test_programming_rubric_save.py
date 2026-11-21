@@ -15,12 +15,12 @@ from backend.tests.test_programming_reference_review import frozen_problem, grad
 from backend.tests.test_task_background_workflows import _seed_task
 
 
-async def setup_question(*, stale=False, funded=True):
+async def setup_question(*, stale=False, funded=True, empty_tests=False):
     row = source()
     row["reference_answer"] = "Return the square of the input integer."
     row = _rows([row])["q1"]
     if funded:
-        cases = await resolve_generated_outputs(row, inputs())
+        cases = [] if empty_tests else await resolve_generated_outputs(row, inputs())
         problem = frozen_problem(row, [case.model_dump(mode="json") for case in cases])
         row = problem._math_rubric_source["presentation"]
         if stale:
@@ -54,6 +54,9 @@ async def test_review_save_preserves_seven_of_ten_score(monkeypatch, edit):
     patch = {"review_status": "confirmed"}
     if edit == "answer":
         patch = {"reference_answer": "Compute x multiplied by itself and return that integer."}
+        from backend.tests.test_question_stem_save import Provider, worker
+        reviewer = Provider(['{"answer":false,"rubric":false,"execution":false}'])
+        worker(monkeypatch, reviewer)
     elif edit == "roundtrip":
         patch.update(before.model_dump(mode="json", include={
             "number", "type", "stem", "criterion", "max_score", "reference_answer", "test_cases"}))
@@ -61,6 +64,8 @@ async def test_review_save_preserves_seven_of_ten_score(monkeypatch, edit):
         patch = {"number": "2"}
     response = client.put(url, json=patch)
     assert response.status_code == 200, response.text
+    if edit == "answer":
+        assert len(reviewer.calls) == 1
     after = saved_problem(owner, task)
     new_draft = saved_draft(after)
     assert new_draft is not None
@@ -74,12 +79,12 @@ async def test_review_save_preserves_seven_of_ten_score(monkeypatch, edit):
 
 
 @pytest.mark.asyncio
-async def test_stem_change_requires_reaffirming_the_saved_test_allocation():
+async def test_stem_change_cannot_publish_with_old_code_when_preparation_is_unavailable():
     owner, task, client, url = await setup_question()
+    before = saved_problem(owner, task)
     response = client.put(url, json={"stem": "Implement square(x): x is an integer. Return x*x*x."})
-    assert response.status_code == 200, response.text
-    assert saved_draft(saved_problem(owner, task)) is None
-    assert client.put(url, json={"review_status": "confirmed"}).status_code == 422
+    assert response.status_code == 422 and response.json()["error"]["code"] == "no_provider_configured"
+    assert saved_problem(owner, task) == before
 
 
 @pytest.mark.asyncio
@@ -96,7 +101,8 @@ async def test_type_change_still_requires_its_own_rubric_compilation():
 async def test_reference_edit_does_not_revalidate_an_already_stale_draft():
     owner, task, client, url = await setup_question(stale=True)
     assert saved_draft(saved_problem(owner, task)) is None
-    response = client.put(url, json={"reference_answer": "Return x*x."})
+    before = saved_problem(owner, task)
+    response = client.put(url, json={"reference_answer": before.reference_answer.rstrip(".")})
     assert response.status_code == 200, response.text
     assert saved_draft(saved_problem(owner, task)) is None
 
@@ -118,7 +124,7 @@ async def test_structured_test_budget_requires_samples_and_keeps_quality_out_of_
     from backend.skills.programming import ProgrammingSkill
     from backend.tests.test_question_material_format_repair import Provider
 
-    owner, task, client, url = await setup_question(funded=funded)
+    owner, task, client, url = await setup_question(funded=funded, empty_tests=True)
     before = saved_problem(owner, task)
     code_points = 10 - points
     policy = {"test_points": points, "input_rules": ""}
@@ -157,8 +163,8 @@ async def test_structured_test_budget_requires_samples_and_keeps_quality_out_of_
                           content="def square(x): return x*x if x < 7 else -1"))
     assert vote.error_kind is None, vote.comment
     assert len(provider.calls) == 1
-    assert vote.programming_evidence.generated_tests.passed == 7
-    assert vote.programming_evidence.generated_tests.total == 10
+    assert vote.programming_evidence.teacher_tests.passed == 7
+    assert vote.programming_evidence.teacher_tests.total == 10
     assert vote.steps[0].score == pytest.approx(points * .7)
     assert vote.score == pytest.approx(code_points + points * .7)
 
