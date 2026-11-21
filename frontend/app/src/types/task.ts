@@ -74,6 +74,15 @@ export interface ProgrammingScoringPolicy {
   input_rules: string;
 }
 
+export interface QuestionStemSave {
+  id: string;
+  q_id: string;
+  status: "pending" | "running" | "done" | "error";
+  workflow_revision: number | null;
+  error_code: string | null;
+  stem?: string;
+}
+
 export interface ProblemInfo {
   q_id: string;
   number: string;

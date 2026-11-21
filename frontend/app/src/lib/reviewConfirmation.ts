@@ -55,6 +55,9 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string, view: "overview" | "detail" = "overview"): string | null {
+  if (issue.details?.reason === "tests_need_review_after_stem_edit") return locale === "zh-CN"
+    ? "题干已修改，请核对现有测试样例。"
+    : "The question changed. Review the existing test cases.";
   if (issue.details?.reason === "required_programming_tests_missing") return locale === "zh-CN"
     ? "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。"
     : "The rubric awards test points, but the test cases are missing. Retry or complete them before grading.";

@@ -53,7 +53,7 @@ from backend.llm.registry import (
 )
 from backend.models import TaskGradingSetup, User
 from backend.services import source_files as source_file_service
-from backend.services import task_facade
+from backend.services import question_stem_save, task_facade
 from backend.services.roster_import import parse_roster as _parse_roster
 from backend.services.stage_provider_routing import (
     baidu_ocr_credential_id,
@@ -149,6 +149,13 @@ class UpdateProblemRequest(BaseModel):
     test_cases: list[dict] | None = None
     review_status: Literal["needs_review", "edited", "confirmed"] | None = None
     review_fields: list[Literal["stem", "answer", "rubric", "programming_tests", "source", "max_score"]] | None = None
+
+
+class SaveQuestionStemRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    stem: str = Field(min_length=1, max_length=200_000)
+    expected_workflow_revision: int = Field(ge=0)
+    retry_of: str | None = Field(default=None, max_length=64)
 
 
 class UpdateStudentAnswerRequest(BaseModel):
@@ -795,6 +802,19 @@ def update_problem(task_id: str, q_id: str, request: UpdateProblemRequest,
         patch=request.model_dump(exclude_unset=True, exclude={"expected_workflow_revision"}),
         expected_revision=request.expected_workflow_revision, run_async=run,
     ))
+
+
+@router.post("/{task_id}/problems/{q_id}/stem-save", status_code=202)
+def save_question_stem(task_id: str, q_id: str, request: SaveQuestionStemRequest,
+                       current: User = Depends(require_teacher)):
+    return _domain(lambda: question_stem_save.start(
+        task_id=task_id, owner_id=current.id, q_id=q_id, **request.model_dump(),
+    ))
+
+
+@router.get("/{task_id}/question-stem-saves")
+def get_question_stem_saves(task_id: str, current: User = Depends(require_teacher)):
+    return _domain(lambda: question_stem_save.list_latest(task_id=task_id, owner_id=current.id))
 
 
 @router.put("/{task_id}/students/{student_id}/answers/{q_id}")
