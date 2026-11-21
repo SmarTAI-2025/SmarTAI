@@ -165,6 +165,29 @@ async def test_short_unlabelled_fragment_cannot_claim_a_verified_siblings_reply(
 
 
 @pytest.mark.asyncio
+async def test_repaired_programming_stem_keeps_teacher_examples_and_code_omitted_on_reread(monkeypatch):
+    code = "print(int(input()) * 2)"
+    text = 'Double the integer from standard input.\n{"input":"2","expected_output":"4"}\n' + code
+    _, _, _, pipeline = await setup(monkeypatch, text=text)
+    fragment = {**row(1, stem="Double the integer"), "type": "编程题", "source_incomplete": True,
+                "solution_code": code, "test_cases": [
+                    {"input": "2", "expected_output": "4", "source": "teacher"},
+                    {"input": "3", "expected_output": "7", "source": "teacher"},
+                    {"input": "5", "expected_output": "10", "source": "llm_generated"},
+                ]}
+    completed = {**row(1, stem=text.splitlines()[0]), "type": "编程题"}
+    extract = AsyncMock(side_effect=[inc._rows([fragment]), inc._rows([completed])])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    draft = pipeline.sources[0][0]
+    key = pipeline._chunk_key(draft, text, 0, "")
+    rows = await pipeline._extract_chunk(key, draft, text, None, "", (), ())
+    assert extract.await_count == 2
+    assert rows["q1"].get("solution_code") == code
+    assert [(c["input"], c["expected_output"], c["source"]) for c in rows["q1"]["test_cases"]] == [
+        ("2", "4", "teacher")]
+
+
+@pytest.mark.asyncio
 async def test_full_reread_replaces_anonymous_fragments_without_reverting_a_verified_sibling(monkeypatch):
     _, _, _, pipeline = await setup(monkeypatch)
     def supplied(number, stem):

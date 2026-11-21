@@ -31,7 +31,9 @@ from backend.agents.question_preparation_agent import (
 from backend.config import settings
 from backend.domain.errors import ValidationError, LeaseLost, RecognitionError
 from backend.models import TestCase, is_programming_question_type
-from backend.services.programming_test_contract import literal_programming_case_groups
+from backend.services.programming_test_contract import (
+    ProgrammingCaseError, adapt_programming_cases, literal_programming_case_groups,
+)
 from backend.services.background_errors import classify_background_error
 from backend.services.question_preparation_artifacts import (
     QUESTIONS_EXTRACTED_STAGE, read_base_preparation_artifact, save_base_preparation_artifact,
@@ -138,7 +140,7 @@ def _incomplete_stem(row):
 _INCOMPLETE_STEM_FEEDBACK = "The previous extraction left a question incomplete. Check its opening, conditions and ending."
 
 
-def _merge_extraction_retry(previous, fresh, *, full_response):
+def _merge_extraction_retry(previous, fresh, *, full_response, source_text):
     """Replace repaired fragments, keeping verified siblings and omitted evidence."""
     if not previous:
         return fresh
@@ -147,8 +149,23 @@ def _merge_extraction_retry(previous, fresh, *, full_response):
         return normalize_question_number(row.get("number"))
 
     def repaired(old, new):
-        return {**new, **{field: old[field] for field in ("criterion", "reference_answer")
-                          if old.get(field) and not new.get(field)}}
+        row = {**new, **{field: old[field] for field in ("criterion", "reference_answer")
+                         if old.get(field) and not new.get(field)}}
+        if not (is_programming_question_type(old.get("type")) and is_programming_question_type(row.get("type"))):
+            return row
+        code = old.get("solution_code")
+        if not row.get("solution_code") and code and code in source_text:
+            row["solution_code"] = code
+        if not row.get("test_cases") and old.get("test_cases"):
+            cases = [case for case in old["test_cases"] if case.get("source") == "teacher"
+                     and _saved_test_case_supported(case, "", source_text, question_number=row.get("number"))]
+            if cases:
+                try:
+                    verified = adapt_programming_cases(row["stem"], cases)
+                except ProgrammingCaseError:
+                    return row  # The recovered stem can specify a different execution interface.
+                row["test_cases"] = [case.model_dump(exclude_unset=True) for case in verified]
+        return row
 
     result = list(previous.values())
     incoming = list(fresh.values())
@@ -1087,7 +1104,7 @@ class IncrementalQuestionPreparation:
                         issue["details"] = {"reason": "conflicting_printed_formula", "confidence_scope": "question"}
                         row.setdefault("preparation_issues", []).append(issue)
                     items.append(row)
-                saved = _merge_extraction_retry(saved, _rows(items), full_response=error is None)
+                saved = _merge_extraction_retry(saved, _rows(items), full_response=error is None, source_text=text)
                 actual = {normalize_question_number(row.get(field))
                           for row in saved.values() if str(row.get("stem") or "").strip()
                           for field in ("number", "source_display_number")}
