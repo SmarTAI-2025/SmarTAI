@@ -73,6 +73,39 @@ def test_retry_preserves_complete_answer_awaiting_question_number_review(review_
     assert task_facade._submission_result_incomplete(SimpleNamespace(student=student)) is expected
 
 
+@pytest.mark.parametrize("incoming_flags,reviews,matched", [
+    ([], [], 2), (["recognition_manual_pending", "question_identifier_conflict"], ["q2"], 2),
+    (["recognition_manual_pending"], ["q2"], 1),
+    (["recognition_manual_pending"], [], 1),
+    (["recognition_manual_pending", "recognition_invalid_fields:content"], ["q2"], 1),
+])
+def test_partial_retry_keeps_advisory_sibling_and_counts_only_real_failures(incoming_flags, reviews, matched):
+    from dataclasses import replace
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+
+    def answer(qid, content, flags):
+        return {"q_id": qid, "type": "推理题", "content": content, "flag": flags}
+
+    kept = answer("q1", "Previously recognized", ["recognition_manual_pending", "question_identifier_conflict"])
+    failed = answer("q2", "Earlier fragment", ["recognition_manual_pending", "recognition_invalid_fields:content"])
+    original = {"stu_id": "s", "identity_status": "matched", "stu_ans": [kept, failed],
+                "recognition": {"model_review_question_ids": ["q1"]}}
+    saved = SubmissionSourceParseResult("src", "file", "input.pdf", "parse_failed", original,
+                                        "s", 1, (), "submission_parse_invalid", "recognition", True)
+    new = answer("q2", "New transcription", incoming_flags)
+    parsed = replace(saved, status="parsed", stable_error_code=None, failure_phase=None, retryable=False,
+                     student={**original, "stu_ans": [new], "recognition": {"model_review_question_ids": reviews}})
+    merged = task_facade._merge_submission_retry_answers(parsed, saved, {"q2"},
+        [SimpleNamespace(q_id=qid) for qid in ("q1", "q2")])
+    assert merged.student["stu_ans"][0] == kept
+    assert merged.student["recognition"]["model_review_question_ids"] == ["q1", *reviews]
+    assert merged.matched_answer_count == matched
+    assert merged.status == ("parsed" if matched == 2 else "parse_failed")
+    assert task_facade._submission_result_incomplete(merged) is (matched == 1)
+    if matched == 2:
+        assert merged.student["stu_ans"][1]["content"] == "New transcription"
+
+
 def _saved_signal(monkeypatch):
     saved, loop = asyncio.Event(), asyncio.get_running_loop()
     original = workflow_repository.save_operation_checkpoint

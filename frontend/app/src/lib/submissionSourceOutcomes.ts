@@ -63,6 +63,24 @@ export function getSubmissionSourceReasonCopy(
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
+export function invalidSubmissionCopy(locale: Locale, source?: SubmissionSourceOutcome): SubmissionSourceReasonCopy {
+  const incomplete = source?.answer_diagnostics?.filter(answer => answer.flag?.includes("recognition_incomplete")
+    && answer.flag.some(flag => flag.startsWith("recognition_invalid_fields:") && flag.split(":")[1].split(",").includes("content")));
+  if (incomplete?.length) {
+    const numbers = incomplete.slice(0, 3).map(answer => answer.number || answer.q_id).join(", ");
+    return {
+      title: tx(locale, "部分题目的作答内容未完整识别", "Some answers were not fully recognized"),
+      description: tx(locale, `请对照原件核对第 ${numbers} 题。已识别的内容已保留。`, `Check the original for question(s) ${numbers}. Recognized text has been retained.`),
+      nextStep: tx(locale, "可重试失败项，或人工补齐。", "Retry the failed items or complete them manually."),
+    };
+  }
+  return {
+    title: tx(locale, "作答识别结果未通过校验", "Submission recognition results failed validation"),
+    description: tx(locale, "请查看失败文件的提示，重试未通过的部分。", "Check the failed file details and retry the affected items."),
+    nextStep: tx(locale, "若再次失败，可更换模型或人工处理。", "If it fails again, switch models or continue manually."),
+  };
+}
+
 export function truncatedSubmissionPageCopy(locale: Locale) {
   return {
     title: tx(locale, "作答页面识别输出被截断", "Submission page transcription was cut off"),
@@ -419,15 +437,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_endpoint_redirect_blocked: (locale, source) => providerCopy(locale, source, "中转站返回了重定向", "The relay returned a redirect", "请将 Base URL 改为最终的 HTTPS 服务地址。", "Set the Base URL to the final HTTPS service address."),
   provider_endpoint_protocol_mismatch: (locale, source) => providerCopy(locale, source, "中转站响应与所选 API 协议不一致", "The relay response does not match the selected API protocol", "在 BYOK 的高级设置中核对 OpenAI、Anthropic 或 Gemini 协议。", "Check the OpenAI, Anthropic, or Gemini protocol in BYOK Advanced settings."),
   provider_endpoint_response_too_large: (locale, source) => providerCopy(locale, source, "中转站响应超过安全大小上限", "The relay response exceeded the safety limit", "缩小输入或输出范围后重试；若持续出现，请联系管理员评估限制。", "Reduce the input or requested output and retry. If it persists, ask an administrator to review the limit."),
-  submission_parse_invalid: (locale) => ({
-    title: tx(locale, "模型返回格式无法解析", "The model returned an invalid structure"),
-    description: tx(
-      locale,
-      "未能完整识别学生信息与作答，请重试或更换模型。",
-      "Could not recognize all student details and answers. Retry or choose another model.",
-    ),
-    nextStep: tx(locale, "可直接重试；若持续出现，换用结构化输出更稳定的模型。", "Retry once; if it persists, choose a model with more reliable structured output."),
-  }),
+  submission_parse_invalid: invalidSubmissionCopy,
   submission_parse_failed: (locale) => ({
     title: tx(locale, "作答识别没有完成", "Submission recognition did not complete"),
     description: tx(
