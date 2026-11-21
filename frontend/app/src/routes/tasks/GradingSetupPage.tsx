@@ -1,3 +1,5 @@
+import { useByokConnections } from "@/api/hooks/byok";
+import { ByokModelSelect } from "@/components/models/ByokModelSelect";
 import { KNOWLEDGE_SOURCE_EXTENSIONS, knowledgeUploadFormatHint, knowledgeUploadMaxBytes, sourceUploadValidationError } from "@/lib/sourceUploadPolicy";
 import { userFacingError } from "@/lib/taskActionGuards";
 import { ManualReviewLoader } from "@/components/tasks/ManualReviewButton";
@@ -67,6 +69,8 @@ function GradingSetupPageForm() {
   const [searchParams] = useSearchParams();
   const { locale } = useI18n();
   const setupQuery = useGradingSetup(taskId);
+  const byok = useByokConnections();
+  const connections = byok.data?.filter((connection) => connection.enabled !== false);
   const saveSetup = useSaveGradingSetup();
   const appliedServerKeyRef = useRef<string | null>(null);
   const conflictServerKeyRef = useRef<string | null>(null);
@@ -190,6 +194,39 @@ function GradingSetupPageForm() {
     });
   }
 
+  async function addByokModel(providerId: string) {
+    const next = await setupQuery.refetch({ throwOnError: true });
+    const fresh = next.data;
+    const freshExperts = new Map(fresh?.available_experts.map((expert) => [expert.provider_id, expert]));
+    const expert = freshExperts.get(providerId);
+    if (!expert?.enabled) throw new Error("byok_model_unavailable");
+
+    setActionError(null);
+    if (initialSetupRef.current === null && fresh?.suggested_setup) {
+      initialSetupRef.current = serializeSetup(fresh.suggested_setup);
+    }
+    setSetup((current) => {
+      const nextSetup = current ?? fresh?.suggested_setup;
+      if (!nextSetup) return current;
+      const selected = nextSetup.selected_provider_ids.filter((id) => {
+        const candidate = freshExperts.get(id);
+        return candidate?.enabled && !candidate.is_shared;
+      });
+      const sameModel = selected.find((id) => {
+        const candidate = freshExperts.get(id);
+        return candidate?.byok_connection_id === expert.byok_connection_id && candidate?.model === expert.model;
+      });
+      if (!sameModel) return applyProviderSelection(nextSetup, [...selected, providerId], freshExperts);
+      const nextIds = selected.map((id) => id === sameModel ? providerId : id);
+      const weights = nextSetup.expert_weights;
+      return applyProviderSelection({
+        ...nextSetup,
+        primary_provider_id: nextSetup.primary_provider_id === sameModel ? providerId : nextSetup.primary_provider_id,
+        expert_weights: Object.fromEntries(Object.entries(weights ?? {}).map(([id, weight]) => [id === sameModel ? providerId : id, weight])),
+      }, nextIds, freshExperts);
+    });
+  }
+
   function removeMissingProvider(providerId: string) {
     setSelectionNoticeKey("invalidModelRemoved");
     updateSetup((current) => applyProviderSelection(
@@ -267,7 +304,11 @@ function GradingSetupPageForm() {
         ) : setupQuery.isError ? (
           <RecoverableActionState info={classifyRecoverableError(setupQuery.error, { locale, taskId })} locale={locale} workflowRecovery={{ retry: { onClick: () => void setupQuery.refetch() }, configurationHref: backHref }} />
         ) : response && !setup ? (
-          <ModelRequiredState
+          connections?.length ? <ByokModelSelect
+            id="grading-initial-byok" locale={locale} connections={connections}
+            actionLabel={locale === "zh-CN" ? "使用所选模型" : "Use selected model"}
+            onChange={addByokModel}
+          /> : <ModelRequiredState
             locale={locale}
             setupHref={setupHref ?? `/tasks/${taskId}/grading-setup`}
             backHref={backHref}
@@ -293,9 +334,18 @@ function GradingSetupPageForm() {
                   <Link to={`/settings/byok?returnTo=${encodeURIComponent(setupHref ?? `/tasks/${taskId}/grading-setup`)}`} className="mb-2 inline-flex text-sm font-semibold text-primary underline underline-offset-2">
                     {gradingSetupText(locale, "configureModels")}
                   </Link>
+                  {connections?.length ? <div className="mb-3">
+                    <ByokModelSelect
+                      id="grading-byok" locale={locale} connections={connections}
+                      actionLabel={locale === "zh-CN" ? "添加或更新专家" : "Add or update expert"}
+                      onChange={addByokModel}
+                    />
+                  </div> : null}
                   <ModelSection
                     locale={locale}
-                    experts={response.available_experts}
+                    experts={response.available_experts.filter((expert) =>
+                      !connections?.length || !expert.byok_connection_id || setup.selected_provider_ids.includes(expert.provider_id),
+                    )}
                     setup={setup}
                     onToggleProvider={toggleProvider}
                     onRemoveMissingProvider={removeMissingProvider}

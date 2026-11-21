@@ -1,3 +1,4 @@
+import type { ReasoningEffort } from "./experts";
 import type { TaskStatus } from "./task";
 
 export type GradingAggregationMethod = "single" | "weighted_average" | "judge_agent";
@@ -25,6 +26,8 @@ export interface GradingSetupExpert {
   provider_id: string;
   provider_type: string;
   model: string;
+  byok_connection_id?: string | null;
+  reasoning_effort?: ReasoningEffort | null;
   display_name?: string | null;
   enabled: boolean;
   scope: "owner" | "shared" | string;

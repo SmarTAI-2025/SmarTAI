@@ -32,6 +32,7 @@ const retryingUsage: KnowledgeStorageUsage = {
   reserved_count: 1,
 };
 
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
 vi.mock("@/api/hooks", () => ({
   useCourseMaterials: () => ({
     isSuccess: true,
