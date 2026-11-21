@@ -1009,7 +1009,8 @@ async def parse_student_answer_sources(
                 "Some source pages were not read. Flag recognition_incomplete only when an unread page cuts off this answer."
                 if coverage.get("failed_pages") or coverage.get("unprocessed_pages")
                 else "No unread page was reported for this text. Do not flag recognition_incomplete for omitted proof steps "
-                     "or illegible words. Keep an unfinished student answer as written; use unclear_text for illegible writing."
+                     "or isolated illegible words. Keep an unfinished student answer as written; use unclear_text for illegible words. "
+                     "If no reliable answer text can be transcribed, flag recognition_failed and preserve visible fragments."
             )
             messages = [
                 SystemMessage(content=HW_SYSTEM_PROMPT +
