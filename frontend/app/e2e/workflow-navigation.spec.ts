@@ -131,6 +131,35 @@ async function fixture(page: Page, stage: Stage) {
   } };
 }
 
+for (const missing of ["name", "id"] as const) test(`original filename for missing ${missing} requires red identity review before grading`, async ({ page }, testInfo) => {
+  const run = await fixture(page, "grading");
+  const file = "work.txt";
+  const id = missing === "id" ? file : "001-A";
+  const name = missing === "name" ? file : "Li Si";
+  Object.assign(run.student, { stu_id: id, stu_name: name, source_id: "source-1", source_filename: file, identity_status: "needs_review" });
+  Object.assign(run.task, { student_data: { [id]: run.student } });
+  await page.goto("/tasks/navigation-task/submissions");
+  const issue = page.getByRole("region", { name: "待复核队列" }).getByText("请核对姓名与学号", { exact: true });
+  await expect(issue).toHaveClass(/text-red-700/);
+  await page.getByRole("button", { name: "进入批改设置", exact: true }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await expect(page).toHaveURL(/\/submissions$/);
+  expect(run.calls).toEqual([]);
+  await page.screenshot({ path: testInfo.outputPath("identity-blocks-grading.png") });
+  await page.keyboard.press("Escape");
+  await issue.click();
+  await expect(page.getByRole("textbox", { name: "学号", exact: true })).toHaveValue(id);
+  await expect(page.getByRole("textbox", { name: "姓名", exact: true })).toHaveValue(name);
+  await page.screenshot({ path: testInfo.outputPath("identity-fields.png") });
+  await page.getByRole("button", { name: "确认身份", exact: true }).click();
+  await expect(page.getByText("请核对姓名与学号", { exact: true })).toHaveCount(0);
+  await page.getByRole("link", { name: "返回作答总览", exact: true }).click();
+  await page.getByRole("button", { name: "进入批改设置", exact: true }).click();
+  await expect(page).toHaveURL(/\/grading-setup$/);
+  expect(run.errors).toEqual([]);
+});
+
 test("failed PDF uses the same required identity message in progress, queue and detail", async ({ page }) => {
   const run = await fixture(page, "submissions");
   const filename = "全体_2026001234_测试学生_3093.pdf";

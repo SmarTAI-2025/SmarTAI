@@ -8,6 +8,7 @@ from bisect import bisect_right
 from collections import Counter
 from dataclasses import replace
 
+from backend.services import submission_identity
 from backend.services.programming_submission_mapping import native_source
 from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
 from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
@@ -408,11 +409,24 @@ def merge_source_answer_units(results, source, problems):
     # One file is one identity. Inconsistent model identities across its units
     # require review, never separate student rows or silent relabelling.
     conflict = any(result.student_candidate != first.student_candidate for result in students)
+    if student.get("identity_match_method") == "filename":
+        evidence = {"stu_id": set(), "stu_name": set()}
+        for unit in students:
+            missing = submission_identity.filename_identity_fallbacks(unit.student, source.filename)
+            invalid = (unit.student.get("recognition") or {}).get("identity_invalid_fields", [])
+            for field in evidence.keys() - missing - set(invalid):
+                evidence[field].add(unit.student[field])
+        disagreement = any(len(values) > 1 for values in evidence.values())
+        if not disagreement:
+            for field, values in evidence.items():
+                if values:
+                    student[field] = next(iter(values))
+        conflict = disagreement or any(unit.student.get("identity_status") != "matched" for unit in students)
     if conflict:
         student["identity_status"] = "needs_review"
     failure = next((result for result in failures if result.stable_error_code == "provider_submit_uncertain"),
                    failures[0] if failures else None)
-    return replace(first, student=student, matched_answer_count=len(answers),
+    return replace(first, student=student, student_candidate=student["stu_id"], matched_answer_count=len(answers),
         status="parse_failed" if incomplete else "identity_conflict" if conflict else first.status,
         stable_error_code=(failure.stable_error_code if failure else "submission_parse_failed") if incomplete
             else "identity_needs_review" if conflict else first.stable_error_code,

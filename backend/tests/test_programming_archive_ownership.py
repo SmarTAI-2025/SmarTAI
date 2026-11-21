@@ -176,7 +176,7 @@ async def test_anonymous_project_does_not_implicate_an_identified_student(monkey
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("paths,labels", [
-    (["class/Ada.py", "class/Bo.py"], {"Ada", "Bo"}),
+    (["class/Ada.py", "class/Bo.py"], {"Ada.py", "Bo.py"}),
     (["class/Ada/main.py", "class/Bo/main.py"], {"Ada", "Bo"}),
 ])
 async def test_distinct_unverified_file_or_folder_labels_keep_separate_candidates(monkeypatch, paths, labels):
