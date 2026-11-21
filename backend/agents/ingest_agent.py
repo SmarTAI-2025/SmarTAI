@@ -45,7 +45,9 @@ from backend.services.programming_test_contract import (
 from backend.services.question_sources import recognition_has_failure
 from backend.services.question_structure import annotate_major_question_structures
 from backend.services.programming_submission_mapping import SOURCE_LANGUAGE_FLAGS, NATIVE_SOURCE_MAPPING_VERSION, may_contain_source, source_answers
-from backend.services.submission_incremental import SOURCE_OPENING_QUOTE_LIMIT, content_failure_flags, matches_source_opening
+from backend.services.submission_incremental import (
+    SOURCE_OPENING_QUOTE_LIMIT, content_failure_flags, filename_identity_fallbacks, matches_source_opening,
+)
 from backend.services.submission_source_pipeline import has_partial_page_failure
 from backend.tools.problem_dedup import dedupe_extracted_problems
 from backend.tools.structured_llm import (
@@ -1107,14 +1109,7 @@ async def parse_student_answer_sources(
             elif identity_mode == "manual_review":
                 payload["identity_status"] = "needs_review"
             else:
-                unknown_name = str(payload.get("stu_name") or "").strip() in {
-                    "", "[Unknown Student]"
-                }
-                candidate_id = str(payload.get("stu_id") or "").strip()
-                fallback_id = candidate_id in {"", source.filename}
-                payload["identity_status"] = (
-                    "needs_review" if unknown_name or fallback_id else "matched"
-                )
+                payload["identity_status"] = "needs_review" if filename_identity_fallbacks(payload, source.filename) else "matched"
             if (payload.get("recognition") or {}).get("identity_invalid_fields"):
                 payload["identity_status"] = "needs_review"
 
@@ -1690,9 +1685,7 @@ async def parse_student_answers(
                 elif identity_mode == "manual_review":
                     payload["identity_status"] = "needs_review"
                 else:
-                    unknown_name = payload.get("stu_name") in {"", "[Unknown Student]"}
-                    fallback_id = str(payload.get("stu_id") or "").strip() in {"", filename}
-                    payload["identity_status"] = "needs_review" if unknown_name or fallback_id else "matched"
+                    payload["identity_status"] = "needs_review" if filename_identity_fallbacks(payload, filename) else "matched"
                 if reporter:
                     identity_metric = (
                         "identities_matched"

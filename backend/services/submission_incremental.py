@@ -14,20 +14,44 @@ from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE,
 from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
 
 
+def filename_identity_fallbacks(student, filename):
+    """Fields for which the filename-mode parser returned its missing-value sentinel."""
+    missing = set()
+    if str(student.get("stu_id") or "").strip() in {"", filename}:
+        missing.add("stu_id")
+    if str(student.get("stu_name") or "").strip() in {"", "[Unknown Student]"}:
+        missing.add("stu_name")
+    return missing
+
+
 def repair_submission_identity(previous, current):
-    """Keep verified identity fields and accept repairs only for invalid ones."""
-    invalid = set((previous.get("recognition") or {}).get("identity_invalid_fields", []))
-    invalid.intersection_update({"stu_id", "stu_name"})
-    incoming_invalid = (current.get("recognition") or {}).get("identity_invalid_fields", [])
+    """Keep verified fields and classify the identity that will actually be saved."""
+    fields = {"stu_id", "stu_name"}
+    invalid = fields.intersection((previous.get("recognition") or {}).get("identity_invalid_fields", []))
+    incoming_invalid = set((current.get("recognition") or {}).get("identity_invalid_fields", []))
     remaining = {field for field in invalid if field in incoming_invalid or field not in current}
     identity = {field: previous[field] for field in ("stu_id", "stu_name", "identity_status", "identity_match_method")
                 if field in previous}
-    for field in invalid - remaining:
-        identity[field] = current[field]
-    if invalid:
-        matched = not remaining and current.get("identity_status") == "matched"
-        if current.get("identity_match_method") == "roster":
-            matched = matched and all(identity.get(field) == current.get(field) for field in ("stu_id", "stu_name"))
+    method = previous.get("identity_match_method") or current.get("identity_match_method")
+    repaired_fields = invalid - remaining
+    if method == "filename":
+        filename = previous.get("source_filename") or current.get("source_filename")
+        placeholders = filename_identity_fallbacks(previous, filename)
+        incoming_placeholders = filename_identity_fallbacks(current, filename)
+        repaired_fields |= placeholders - incoming_invalid - incoming_placeholders
+        identity.update({field: current[field] for field in repaired_fields})
+        if invalid or placeholders:
+            # A retry may return a fallback for an already verified sibling.
+            # An unexplained source-level conflict must still go to the teacher.
+            fields_explain_review = bool(incoming_placeholders or incoming_invalid)
+            matched = (not remaining and not filename_identity_fallbacks(identity, filename)
+                       and (current.get("identity_status") == "matched" or fields_explain_review))
+            identity["identity_status"] = "matched" if matched else "needs_review"
+    elif invalid:
+        identity.update({field: current[field] for field in repaired_fields})
+        matched = not remaining and current.get("identity_status") == "matched" and method != "manual_review"
+        if method == "roster":
+            matched = matched and all(identity.get(field) == current.get(field) for field in fields)
         identity["identity_status"] = "matched" if matched else "needs_review"
     return identity, sorted(remaining)
 

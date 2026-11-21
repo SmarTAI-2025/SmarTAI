@@ -542,3 +542,61 @@ async def test_interrupted_units_keep_review_provenance_through_retry(monkeypatc
     assert 'submission_recognition_blocked' not in readiness['blocking_issues']
     assert ('submission_recognition_needs_review' in readiness['warnings']) is expected_review
     assert restored['recognition']['model_review_question_ids'] == (['q2'] if expected_review else [])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failures", [1, 3], ids=["automatic", "manual_retry"])
+@pytest.mark.parametrize("old_id,old_name,new_id,new_name,expected_id,expected_name,matched", [
+    (None, "[Unknown Student]", "001-A", "Li Si", "001-A", "Li Si", True),
+    ("work.txt", None, "001-A", "Li Si", "001-A", "Li Si", True),
+    ("001-A", None, "work.txt", "Li Si", "001-A", "Li Si", True),
+    ("work.txt", "[Unknown Student]", "work.txt", "Li Si", "work.txt", "Li Si", False),
+])
+async def test_retry_checks_the_identity_actually_saved(
+    monkeypatch, failures, old_id, old_name, new_id, new_name, expected_id, expected_name, matched,
+):
+    owner, task = _setup()
+    calls = []
+
+    def reply(messages):
+        targets = [q["q_id"] for q in _questions(messages)]
+        calls.append(targets)
+        failed = len(calls) <= failures
+        return _response(
+            [_answer(qid, {} if failed and qid == "q2" else "Recognized answer") for qid in targets],
+            stu_id=old_id if failed else new_id, stu_name=old_name if failed else new_name,
+        )
+
+    registry = _registry(monkeypatch, reply)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="work.txt",
+        content=b"Work without numbered headings.", content_type="text/plain", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    if failures == 3:
+        before = task_facade.get_task(task_id=task, owner_id=owner)
+        queued = await tasks.retry_submission_recognition_endpoint(task_id=task, job_id=queued["job_id"],
+            request=tasks.RetrySubmissionRecognitionRequest(expected_workflow_revision=before["workflow_revision"]),
+            background_tasks=_BackgroundTasks(), current=SimpleNamespace(id=owner), registry=registry)
+        await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    result = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    student, = result["student_data"].values()
+    assert (student["stu_id"], student["stu_name"]) == (expected_id, expected_name)
+    assert student["identity_status"] == ("matched" if matched else "needs_review")
+    assert calls == [["q1", "q2"]] + [["q2"]] * failures
+
+
+@pytest.mark.parametrize("mode,old_name,new_status", [
+    ("roster", "Original name", "matched"),
+    ("manual_review", "Li Si", "needs_review"),
+    ("filename", "Li Si", "needs_review"),
+])
+def test_identity_repair_preserves_independent_review(mode, old_name, new_status):
+    from backend.services.submission_incremental import repair_submission_identity
+
+    previous = dict(stu_id="work.txt", stu_name=old_name, identity_match_method=mode,
+                    source_filename="work.txt", identity_status="needs_review",
+                    recognition={"identity_invalid_fields": ["stu_id"]})
+    incoming = dict(previous, stu_id="001-A", stu_name="Li Si", identity_status=new_status, recognition={})
+    merged, remaining = repair_submission_identity(previous, incoming)
+    assert not remaining
+    assert merged["stu_name"] == old_name
+    assert merged["identity_status"] == "needs_review"
