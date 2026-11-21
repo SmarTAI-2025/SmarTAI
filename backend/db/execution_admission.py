@@ -2,13 +2,14 @@
 import hashlib
 import time
 
-from sqlalchemy import exists, func, select, text, union_all, update
+from sqlalchemy import exists, func, or_, select, text, union_all, update
 from sqlalchemy.orm import aliased
 
 from backend.domain.errors import LeaseLost
 
+QUESTION_STEM_SAVE_OPERATION = "question_stem_save"
 WORKLOAD_TYPES = ("problem_extraction", "submission_recognition", "material_import",
-                  "ai_completion", "question_preparation")
+                  "ai_completion", "question_preparation", QUESTION_STEM_SAVE_OPERATION)
 
 
 def owner_running_predicate(owner_id, *, exclude_id: str = "", now: float | None = None):
@@ -40,7 +41,8 @@ def _earlier_workload_is_waiting(session, workload_id: str, now: float) -> bool:
     operations = (
         select(Op.id, Op.owner_id, Op.updated_at.label("queued_at"))
         .join(Workflow, (Workflow.assignment_id == Op.assignment_id)
-              & (Workflow.owner_id == Op.owner_id) & (Workflow.active_job_id == Op.id))
+              & (Workflow.owner_id == Op.owner_id)
+              & or_(Workflow.active_job_id == Op.id, Op.operation_type == QUESTION_STEM_SAVE_OPERATION))
         .join(Task, (Task.id == Op.assignment_id) & (Task.teacher_id == Op.owner_id))
         .where(Task.deletion_requested_at.is_(None), Op.operation_type.in_(WORKLOAD_TYPES),
                Op.status.in_(("pending", "running")),
