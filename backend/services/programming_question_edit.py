@@ -22,6 +22,7 @@ from backend.services.programming_test_contract import (
     ProgrammingCaseError, adapt_programming_cases, case_input_key, literal_programming_case_pair,
     required_function_name,
 )
+from backend.services.question_structure import scoring_stem
 from backend.tools.code_interpreter import HostCodeExecutionDisabled, _values_match, compare_stdout
 from backend.tools.oci_grading_runner import IsolatedRunnerUnavailable
 
@@ -391,6 +392,12 @@ async def _prepare(before, candidate, edited_fields, get_provider, reporter):
         targets = (["solution_code"] if missing_code else []) + (["test_cases"] if missing_tests else [])
         teacher = [c for c in cases if c.source == "teacher"] + examples
         source = {**row, "test_cases": [c.model_dump(mode="json", exclude_unset=True) for c in teacher]}
+        if missing_code and "stem" in semantic and (
+            scoring_stem(before.get("reference_answer") or "") == scoring_stem(row.get("reference_answer") or "")
+        ):
+            # Preserve the teacher's original in storage. A conclusion carried
+            # over from the previous specification cannot guide the new program.
+            source["reference_answer"] = ""
         generated = await _generate(source, targets, get_provider, reporter)
         if missing_code:
             code = generated["solution_code"].text_value
