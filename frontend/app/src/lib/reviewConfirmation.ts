@@ -55,9 +55,6 @@ function onlyUnverifiedTargets(issue: PreparationIssue): boolean {
 }
 
 export function recognitionIssueLabel(issue: PreparationIssue, locale: string, view: "overview" | "detail" = "overview"): string | null {
-  if (issue.details?.review_display_reason === "confirm_rubric") return locale === "zh-CN"
-    ? "评分标准文字已保存，请确认本题以生成评分规则。"
-    : "The rubric text is saved. Confirm this question to prepare its grading rules.";
   if (issue.details?.reason === "required_programming_tests_missing") return locale === "zh-CN"
     ? "评分标准包含测试得分，但测试样例尚未准备完成。请重试或补齐后再批改。"
     : "The rubric awards test points, but the test cases are missing. Retry or complete them before grading.";
@@ -73,6 +70,9 @@ export function recognitionIssueLabel(issue: PreparationIssue, locale: string, v
   if (issue.field === "rubric" && (issue.details?.rubric_review_draft || issue.details?.invalid_fields
     || issue.details?.reason === "invalid_structured_rubric")) return view === "detail"
     ? rubricReviewDetail(issue, locale) : locale === "zh-CN" ? "评分标准待补全。" : "Complete the rubric.";
+  if (issue.details?.review_display_reason === "confirm_rubric") return locale === "zh-CN"
+    ? "评分标准文字已保存，请确认本题以生成评分规则。"
+    : "The rubric text is saved. Confirm this question to prepare its grading rules.";
   if (issue.details?.review_display_reason === "missing_type") return locale === "zh-CN"
     ? "请选择题型。" : "Select the question type.";
   if (issue.details?.review_display_reason === "missing_number") return locale === "zh-CN"
