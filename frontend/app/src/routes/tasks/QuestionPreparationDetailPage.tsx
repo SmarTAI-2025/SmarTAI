@@ -804,6 +804,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
   useEffect(() => { if (manualEditing && !readOnly) setEditing(true); }, [manualEditing, readOnly]);
   const [draft, setDraft] = useState(value);
   const savedType = useRef<string | null>(null);
+  const submittedStem = useRef<string | null>(null);
   if (field === "type" && savedType.current === value) savedType.current = null;
   const [error, setError] = useState<string | null>(null);
   const dirty = editing && draft !== value;
@@ -818,10 +819,14 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
     lastValue.current = value;
   }, [draft, field, localDraft.savedAt, value]);
   useEffect(() => {
-    if (!editing || stemSave?.status !== "done" || value !== draft) return;
-    setError(null);
-    setEditing(false);
-  }, [editing, stemSave?.status, value, draft]);
+    // A previous receipt can remain visible while the teacher starts a new edit.
+    if (stemSave?.status !== "done" || value !== submittedStem.current) return;
+    submittedStem.current = null;
+    if (value === draft) {
+      setError(null);
+      setEditing(false);
+    }
+  }, [stemSave?.status, value, draft]);
 
   // Adjust a clean type editor before effects compare its new server version.
   // Pending saves and actual local edits/drafts retain their existing protection.
@@ -834,6 +839,7 @@ function EditableTextField({ fieldKey, label, value, problem, field, readOnly, s
 
   async function save() {
     if (localDraft.conflict) return;
+    if (field === "stem") submittedStem.current = draft;
     setError(null);
     try {
       if (!await localDraft.runFormal(() => onSave(problem, field, draft), { draft })) return;

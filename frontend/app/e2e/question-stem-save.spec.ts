@@ -98,6 +98,10 @@ for (const width of [1280, 390]) {
     await expect(card.getByText("正确得出 48 可得 10 分。")).toBeVisible();
     await expect(updating).toHaveCount(0);
     await expect(card.getByText(newStem)).toBeVisible();
+    await card.getByRole("button", { name: "题目 · 修改", exact: true }).click();
+    await expect(stem).toHaveValue(newStem);
+    await card.getByRole("button", { name: "题目 · 取消修改", exact: true }).click();
+    await expect(stem).toHaveCount(0);
     await card.getByRole("button", { name: "修改第 1 题满分与评分标准" }).click();
     await expect(card.getByRole("textbox", { name: "第 1 题评分标准" })).toHaveValue("答案 48 得 10 分。");
     await expect(page.locator("vite-error-overlay")).toHaveCount(0);
