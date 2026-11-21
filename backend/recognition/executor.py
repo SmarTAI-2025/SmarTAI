@@ -288,7 +288,8 @@ checks here do not replace the caller's storage ACL and operation lease.
                 raise RecognitionError("recognition_budget_exhausted")
             if engine.capabilities != plan.engine_capabilities:
                 raise RecognitionError("recognition_route_changed")
-            token_limit = budget.output_limit(4096)
+            token_limit = budget.output_limit(8192 if plan.purpose == "submissions"
+                                              and plan.policy.version == "submission-truncated-page-v1" else 4096)
             if mode == "document":
                 rendered = await pdf_read(PdfPagesRequest(operation="export_pages", pages=numbers))
                 if not isinstance(rendered, PdfExportResult):

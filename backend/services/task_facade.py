@@ -3306,11 +3306,19 @@ def _submission_result_incomplete(result):
     # A native file can be fully read while its question association still
     # awaits the teacher. Replaying the file cannot resolve that review.
     native = recognition.get("native_source_mapping_version") in (1, 2, NATIVE_SOURCE_MAPPING_VERSION)
-    mapped = {"recognition_manual_pending"} if native else set()
+    review_ids = set(recognition.get("model_review_question_ids") or [])
+    def needs_retry(answer):
+        flags = answer.get("flag") or []
+        failures = _answer_recognition_failures(flags)
+        if native or (answer.get("q_id") in review_ids and _answer_matching_review_is_advisory(
+                flags, answer.get("content"), answer_type=answer.get("type"))):
+            failures.discard("recognition_manual_pending")
+        return bool(failures)
+
     return bool(any(coverage.get(key) for key in ("failed_pages", "unprocessed_pages", "missing_targets"))
                 or recognition.get("error_code")
                 or recognition.get("missing_question_ids")
-                or any(_answer_recognition_failures(answer.get("flag")) - mapped for answer in student.get("stu_ans", [])))
+                or any(needs_retry(answer) for answer in student.get("stu_ans", [])))
 
 
 def _merge_submission_retry_answers(result, saved, target_ids, questions):
@@ -4003,7 +4011,7 @@ async def run_task_submission_parsing(
                 (
                     result.stable_error_code
                     for result in results
-                    if result.stable_error_code
+                    if result.status in {"parse_failed", "no_matching_answer"} and result.stable_error_code
                 ),
                 "submission_parse_failed",
             )

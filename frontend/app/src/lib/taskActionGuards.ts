@@ -1,4 +1,4 @@
-import { programmingArchiveGuidance, truncatedLocatorCopy } from "@/lib/submissionSourceOutcomes";
+import { programmingArchiveGuidance, truncatedLocatorCopy, truncatedSubmissionPageCopy } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
@@ -921,6 +921,12 @@ export function classifyRecoverableError(
       actionLabel: tx(locale, "重试失败项", "Retry failed files"),
       actionKind: "retry", tone: "warning", technicalDetails,
     };
+  }
+
+  if (code === "submission_page_output_truncated") {
+    const copy = truncatedSubmissionPageCopy(locale);
+    return { title: copy.title, description: [copy.description, copy.nextStep].join(locale === "zh-CN" ? "" : " "),
+      actionLabel: tx(locale, "重试失败项", "Retry failed files"), actionKind: "retry", tone: "warning", technicalDetails };
   }
 
   if (code === "scan_response_truncated") {

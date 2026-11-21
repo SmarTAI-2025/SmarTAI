@@ -63,6 +63,16 @@ def test_running_archive_counts_discovered_members_before_registration(monkeypat
     assert task_facade._submission_source_projection(workflow, owner)[0]["pending"] == 0
 
 
+@pytest.mark.parametrize("review_ids, extra_flags, expected", [
+    (["q7"], [], False), ([], [], True), (["q7"], ["recognition_failed_pages:2"], True),
+])
+def test_retry_preserves_complete_answer_awaiting_question_number_review(review_ids, extra_flags, expected):
+    student = {"recognition": {"model_review_question_ids": review_ids}, "stu_ans": [{
+        "q_id": "q7", "type": "推理题", "content": "A complete transcription.",
+        "flag": ["question_identifier_conflict", "recognition_manual_pending", *extra_flags]}]}
+    assert task_facade._submission_result_incomplete(SimpleNamespace(student=student)) is expected
+
+
 def _saved_signal(monkeypatch):
     saved, loop = asyncio.Event(), asyncio.get_running_loop()
     original = workflow_repository.save_operation_checkpoint

@@ -63,6 +63,14 @@ export function getSubmissionSourceReasonCopy(
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
+export function truncatedSubmissionPageCopy(locale: Locale) {
+  return {
+    title: tx(locale, "作答页面识别输出被截断", "Submission page transcription was cut off"),
+    description: tx(locale, "模型达到输出上限，未能完整返回页面文字。", "The model reached its output limit before returning the full page."),
+    nextStep: tx(locale, "可重试失败文件、更换识别模型，或对照原页人工补齐。", "Retry failed files, switch recognition models, or complete the transcription from the original page."),
+  };
+}
+
 export function truncatedLocatorCopy(locale: Locale) {
   return {
     title: tx(locale, "查找题号所在页时，模型输出被截断", "Model output was cut off while locating questions"),
@@ -326,6 +334,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   }),
   target_location_needs_hint: recognitionScopeCopy,
   scan_response_truncated: truncatedLocatorCopy,
+  submission_page_output_truncated: truncatedSubmissionPageCopy,
   target_selection_limit_exceeded: recognitionScopeCopy,
   visual_capability_unavailable: recognitionProviderCopy,
   workflow_failed: (locale) => ({
