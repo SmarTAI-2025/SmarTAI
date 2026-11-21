@@ -84,6 +84,17 @@ async def test_changed_pair_and_new_hidden_case_run_only_the_touched_rows(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("display", "expected", "args"), [
+    ("[4]", "12", [4]), ("[[4]]", "[4, 4, 4]", [[4]]),
+])
+async def test_new_editor_row_uses_displayed_argument_vector_even_without_prior_cases(display, expected, args):
+    before = question(solution_code=TRIPLE, stem="Implement scale(x). Return x * 3.")
+    saved = await save(before, test_cases=[case(display, expected, io_mode="stdin")], test_case_origins=[None])
+    assert saved["test_cases"][0]["function_args"] == args
+    assert saved["test_cases"][0]["expected_return"] == expected
+
+
+@pytest.mark.asyncio
 async def test_label_visibility_and_reorder_preserve_authorship_with_no_io(monkeypatch):
     before = question(test_cases=[case("2", "4", source="llm_generated"), case("4", "8")])
     run = AsyncMock()

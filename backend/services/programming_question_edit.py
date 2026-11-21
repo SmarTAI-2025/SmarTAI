@@ -52,7 +52,7 @@ def _comparison(case):
     return case.comparison, case.abs_tol, case.rel_tol, case.function_name, case.sandbox_feasible
 
 
-def _edited_case(stem, row, previous):
+def _edited_case(stem, row, previous, *, new_editor_row=False):
     if not isinstance(row, dict):
         raise ProgrammingCaseError("Expected a test case object.")
     if not any(row.get(k) is not None for k in ("input", "function_args", "function_kwargs")):
@@ -63,7 +63,9 @@ def _edited_case(stem, row, previous):
     # Structured API clients may change the vector instead. Resolve conflicts
     # only if the other representation matches its stored original.
     try:
-        return adapt_programming_cases(stem, [row])[0]
+        # New editor rows use the same argument-array notation displayed for
+        # existing function calls. Historical free-text inputs keep their parser.
+        return adapt_programming_cases(stem, [row], argument_vector=new_editor_row)[0]
     except ProgrammingCaseError as exc:
         if not any(row.get(k) is not None for k in ("function_args", "function_kwargs", "expected_return")):
             raise
@@ -101,7 +103,8 @@ def _case_edits(before, candidate):
                 if origins is not None:
                     j = origins[index - 1]
                     prior = [old[j]] if j is not None else []
-                cases.append(_edited_case(candidate["stem"], row, prior))
+                cases.append(_edited_case(candidate["stem"], row, prior,
+                                          new_editor_row=origins is not None and origins[index - 1] is None))
         except ProgrammingCaseError as exc:
             raise _invalid(str(exc), index, exc.issue) from exc
 

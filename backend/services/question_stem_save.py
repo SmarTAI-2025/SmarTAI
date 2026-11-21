@@ -251,7 +251,11 @@ async def prepare(question, workflow, patch, *, owner_id, reporter):
             and (impact is None or impact.rubric or not before.get("criterion"))
             and not teacher_policy):
         fields.append("criterion")
-    if fields and teacher_policy and (impact is None or impact.rubric or not prior) and (uses_math_grading(candidate_type) or programming):
+    # The programming editor already froze the teacher's code rules and test
+    # allocation. Publication compiles that policy against the revised question.
+    saved_programming_policy = programming and prior and prior.programming_scoring is not None
+    if (fields and teacher_policy and not saved_programming_policy and
+            (impact is None or impact.rubric or not prior) and (uses_math_grading(candidate_type) or programming)):
         fields.append("criterion")
     if fields:
         q_id = question.q_id

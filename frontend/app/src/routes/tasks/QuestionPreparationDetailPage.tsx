@@ -1027,7 +1027,9 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
               <div className="mt-3"><CaseTextarea label={tx(locale, "解释（可选）", "Explanation (optional)")} value={testCase.description} rows={2} onChange={(value) => setCases(updateCase(cases, index, { description: value }))} /></div>
             </article>
           ))}
-          <button type="button" onClick={() => { setCases([...cases, emptyTestCase(cases.length + 1)]); setOrigins(origins && [...origins, null]); }} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
+          {origins?.includes(null) && (!original.length || original.some(row => row.io_mode === "function" || row.function_name)) &&
+            <p className="text-xs text-muted-foreground">{tx(locale, "新增函数样例时，输入可写成参数数组。单个整数写 [4]，单个列表写 [[4]]。", "For a new function case, enter arguments as an array. Use [4] for one integer or [[4]] for one list.")}</p>}
+          <button type="button" onClick={() => { setCases([...cases, emptyTestCase(cases.length + 1, original)]); setOrigins(origins && [...origins, null]); }} className="inline-flex h-9 items-center gap-2 rounded-[7px] border px-3 text-xs font-semibold hover:bg-muted"><Plus aria-hidden="true" className="h-3.5 w-3.5" />{tx(locale, "添加测试样例", "Add Test Case")}</button>
           <div className="flex items-center justify-between gap-3 border-t pt-3">
             <p className={cn("text-xs", error ? "text-danger" : "text-muted-foreground")}>{error ?? tx(locale, "隐藏测试只对教师可见。", "Hidden tests are visible only to teachers.")}</p>
             <button type="button" disabled={saving || localDraft.formalPending || !dirty} onClick={() => void save()} className="inline-flex h-9 items-center gap-2 rounded-[7px] bg-primary px-4 text-xs font-semibold text-primary-foreground disabled:opacity-45">{saving ? <Loader2 aria-hidden="true" className="h-3.5 w-3.5 animate-spin" /> : <Save aria-hidden="true" className="h-3.5 w-3.5" />}{tx(locale, "保存测试样例", "Save Test Cases")}</button>
@@ -1094,8 +1096,9 @@ function updateCase(cases: TestCase[], index: number, patch: Partial<TestCase>) 
   return cases.map((testCase, itemIndex) => itemIndex === index ? { ...testCase, ...patch } : testCase);
 }
 
-function emptyTestCase(index: number): TestCase {
-  return { title: `样例 ${index}`, visibility: "example", purpose: "normal", io_mode: "stdin", input: "", expected_output: "", description: "", source: "teacher", sandbox_feasible: true };
+function emptyTestCase(index: number, original: TestCase[]): TestCase {
+  const functionCases = original.length > 0 && original.every(row => row.io_mode === "function" || row.function_name);
+  return { title: `样例 ${index}`, visibility: "example", purpose: "normal", io_mode: functionCases ? "function" : "stdin", input: "", expected_output: "", description: "", source: "teacher", sandbox_feasible: true };
 }
 
 function sortProblems(problems: ProblemInfo[], locale: string) {

@@ -112,7 +112,7 @@ async def test_triple_edit_is_atomic_and_full_task_uses_the_new_reference_with_n
     assert saved.status_code == 200, saved.text
     edit = owner, task, saved.json()["workflow_revision"], client
     policy = current(edit).criterion
-    replies = [response(answer, "Returns the correct value.", 0), *provider_for({"solution_code": TRIPLE}).responses]
+    replies = provider_for({"reference_answer": answer}, {"solution_code": TRIPLE}).responses
     provider = Provider(replies)
     submit(edit, stem=stem.replace("* 2", "* 3"))
     await run_once(worker(monkeypatch, provider))
