@@ -6063,7 +6063,9 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         if fixed_fields:
             presentation["preparation_issues"] = [
                 {**issue, "status": "resolved"} if issue.get("status") == "open"
-                and issue.get("field") in fixed_fields
+                and (issue.get("field") in fixed_fields or (
+                    linked_edit and issue.get("code") == "generation_failed"
+                    and issue.get("field") in {"answer", "rubric"}))
                 and (not (issue.get("details") or {}).get("target")
                      or patch.get(issue["details"]["target"]))
                 and (issue.get("details") or {}).get("reason") != "invalid_structured_rubric"
