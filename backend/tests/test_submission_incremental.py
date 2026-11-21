@@ -19,6 +19,27 @@ from backend.services.workflow_worker import LeasedOperation
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
+@pytest.mark.parametrize(("text", "reasons", "confidence", "blocked"), [
+    ("[unclear] [unclear] in handwritten equations", ["low_confidence_content"], None, True),
+    ("A legible different answer", [], None, False),
+    ("1.1.6. Proof: from x = 0, its inverse does not exist.", [], .98, True),
+    ("1.1.6. Proof:", [], .98, False),
+    ("1.2.6. Answer: 7", [], .98, False),
+    ("1.1.7. Answer: 3", [], .98, False),
+])
+def test_an_empty_answer_requires_confirmation_only_when_the_source_contradicts_it(text, reasons, confidence, blocked):
+    from backend.agents.ingest_agent import _IndependentStudentSubmission, _independent_submission_payload
+    problems = {"q1": {"number": "1.1.5"}, "q2": {"number": "1.1.7"}}
+    source = SimpleNamespace(text=text, filename="work.pdf", recognition={"confidence_reasons": reasons})
+    answers = [dict(q_id="q1", number="1.1.5", type="推理题", content="", recognition_confidence=confidence),
+               dict(q_id="q2", number="1.1.7", type="推理题", content="student work")]
+    raw = _IndependentStudentSubmission(stu_id="s1", stu_name="Sample", stu_ans=answers)
+    result, _ = _independent_submission_payload(raw, source, problems, set(problems))
+    assert result["recognition"]["repair_question_ids"] == (["q1"] if blocked else [])
+    assert ("recognition_manual_pending" in result["stu_ans"][0]["flag"]) is blocked
+    assert result["stu_ans"][1]["content"] == "student work" and not result["stu_ans"][1]["flag"]
+
+
 def _registry(monkeypatch, invoke):
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False,

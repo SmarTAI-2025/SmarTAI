@@ -45,6 +45,26 @@ def question_number_candidates(number, problems):
     return [q_id for q_id, problem in problems.items() if parts and _parts(problem.get("number")) == parts]
 
 
+def blank_questions_with_nearby_source_labels(text, problems, blank_ids):
+    """A written, unassigned qualified label may explain a blank; never map it by edit distance."""
+    expected = {q_id: _parts(problem.get("number")) for q_id, problem in problems.items()}
+    known = set(expected.values())
+    unexpected = set()
+    headings = question_headings(text, qualified=True)
+    for i, heading in enumerate(headings):
+        parts = _parts(heading.group("number"))
+        if len(parts) < 3 or parts in known:
+            continue
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        body = heading.group("title") + " " + text[heading.end():end]
+        if re.search(r"\w", re.sub(r"^\s*(?:proof|answer|solution|证明|解答)\s*[:：.]*", "", body, flags=re.I)):
+            unexpected.add(parts)
+    return {q_id for q_id in blank_ids if (parts := expected.get(q_id)) and any(
+        parts[:-1] == seen[:-1] and len(parts[-1]) == len(seen[-1])
+        and sum(a != b for a, b in zip(parts[-1], seen[-1])) == 1 for seen in unexpected
+    )}
+
+
 def question_number_aliases(problems):
     # Parse once, rather than rescanning the assignment for every alias.
     entries = {q_id: (_label(problem.get("number")), _parts(problem.get("number")))

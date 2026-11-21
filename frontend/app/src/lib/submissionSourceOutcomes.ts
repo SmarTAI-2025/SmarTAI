@@ -68,6 +68,17 @@ export function invalidSubmissionCopy(locale: Locale, source?: SubmissionSourceO
     && answer.flag.some(flag => flag.startsWith("recognition_invalid_fields:") && flag.split(":")[1].split(",").includes("content")));
   if (incomplete?.length) {
     const numbers = incomplete.slice(0, 3).map(answer => answer.number || answer.q_id).join(", ");
+    const blanks = incomplete.filter(answer => answer.has_content === false);
+    if (blanks.length) {
+      const blankNumbers = blanks.slice(0, 3).map(answer => answer.number || answer.q_id).join(", ");
+      const otherCount = incomplete.length - blanks.length;
+      const other = otherCount ? tx(locale, `另有 ${otherCount} 题只识别到部分作答。`, `Another ${otherCount} answer(s) were only partially recognized.`) : "";
+      return {
+        title: tx(locale, "有题目暂未确认是否空白", "Some answers could not be verified as blank"),
+        description: tx(locale, `请对照原件核对第 ${blankNumbers} 题是否有作答。${other}`, `Check the original for written work on question(s) ${blankNumbers}. ${other}`.trim()),
+        nextStep: tx(locale, "可重试失败项，或逐题核对后补录作答、确认空白。", "Retry the failed items, or check each original and enter the answer or confirm it is blank."),
+      };
+    }
     return {
       title: tx(locale, "部分题目的作答内容未完整识别", "Some answers were not fully recognized"),
       description: tx(locale, `请对照原件核对第 ${numbers} 题。已识别的内容已保留。`, `Check the original for question(s) ${numbers}. Recognized text has been retained.`),

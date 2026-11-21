@@ -90,6 +90,10 @@ export function incompleteSubmissionLabel(answer: StudentAnswerInfo, locale: str
     return [`${description} ${pages.length === 1 ? "page" : "pages"} ${pages.join(", ")}`];
   });
   const failure = pageReasons.join(zh ? "，" : ". ");
+  if (!failure && !answer.content?.trim() && answer.flag?.includes("recognition_incomplete")
+      && answer.flag.some(flag => flag.startsWith("recognition_invalid_fields:") && flag.split(":")[1].split(",").includes("content"))) {
+    return zh ? "暂未确认是否空白，请对照原件补录作答或确认空白。" : "Check the original and enter the answer or confirm it is blank.";
+  }
   const issue = answer.content?.trim()
     ? (zh ? "作答识别不完整" : "Answer transcription is incomplete")
     : (zh ? "作答内容缺失" : "Answer content is missing");

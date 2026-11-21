@@ -407,3 +407,14 @@ it("uses the saved question diagnostics for incomplete content without reclassif
   expect(classifyRecoverableError("submission_parse_invalid", { jobId: "other", submissionSources: [item] }).description)
     .not.toContain("1.1.20");
 });
+
+
+it("asks the teacher to verify a doubtful blank against the original", () => {
+  const record = source({ reason_code: "submission_parse_invalid", answer_diagnostics: [{
+    q_id: "q1", number: "1.1.5", has_content: false, recognition_confidence: .98,
+    flag: ["recognition_incomplete", "recognition_manual_pending", "recognition_invalid_fields:content"],
+  }] });
+  const copy = getSubmissionSourceReasonCopy(record, "zh-CN");
+  expect(copy.title).toContain("暂未确认是否空白");
+  expect(copy.description).toContain("1.1.5");
+});
