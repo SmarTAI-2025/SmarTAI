@@ -633,7 +633,7 @@ def scoring_stem(stem):
     # Ignore a prose edit beside a code block while retaining every byte of
     # the block, its indentation and quoted data. Unclosed delimiters abstain.
     literals = re.compile(r'(```[^\n]*\n[\s\S]*?^```(?=\s|$)|~~~[^\n]*\n[\s\S]*?^~~~(?=\s|$)|'
-                          r'`[^`\n]+`|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’)', re.M)
+                          r"""`[^`\n]+`|"[^"\n]*"|'[^'\n]*'|“[^”\n]*”|‘[^’\n]*’)""", re.M)
     segments = literals.split(stem)
     if any(re.search(r'[`"“”‘’]|~~~', value) for value in segments[::2]):
         return stem

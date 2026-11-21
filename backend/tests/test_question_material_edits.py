@@ -81,7 +81,7 @@ def test_missing_parts_preserve_existing_teacher_solution():
 
 
 @pytest.mark.parametrize("old,new", [("n", "n!"), ("3.5", "35"), ("x < 2", "x ≤ 2"),
-    ('Print "a." exactly.', 'Print "a" exactly.'), ("`n!`", "`n`")])
+    ('Print "a." exactly.', 'Print "a" exactly.'), ("Print 'a  b'", "Print 'a b'"), ("`n!`", "`n`")])
 def test_semantic_tokens_survive_display_comparison(old, new):
     assert semantic_text_edits({"stem": old}, {"stem": new}) == {"stem"}
 
@@ -143,6 +143,17 @@ def test_changed_prose_in_whole_form_updates_echoed_ai_materials(edit, monkeypat
     assert len(provider.calls) == 1
 
 
+def test_clients_cannot_choose_the_reference_or_the_semantic_impact(edit):
+    _, task, revision, client = edit
+    before = current(edit)
+    for key, value in (("programming_reference_binding", {"field": "solution_code"}),
+                       ("reuse_scoring_rules", True), ("programming_semantic_fields", [])):
+        rejected = client.put(f"/tasks/{task}/problems/q1", json={
+            "expected_workflow_revision": revision, "reference_answer": "4", key: value})
+        assert rejected.status_code == 422
+    assert current(edit) == before
+
+
 def test_ordinary_given_program_and_input_are_rebound_to_edited_text():
     from backend.domain.code_output import bind_code_output, rebind_edited_code_output
     from backend.tests.test_code_output_grading import source_question
@@ -170,4 +181,3 @@ async def test_teacher_result_receives_only_the_requested_missing_derivation(edi
     assert after.source["presentation"]["teacher_material_supplements"]["reference_answer"]["original"] == "42"
     assert "reference_answer" not in after.source["presentation"]["ai_completion_provenance"]
     assert "only the missing derivation" in provider.calls[-1][1].content
-

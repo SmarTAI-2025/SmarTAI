@@ -23,7 +23,7 @@ class MaterialImpact(BaseModel):
 
 
 _TECHNICAL = re.compile(r"```[\s\S]*?(?:```|\Z)|`[^`\n]*`|\$[^$]*\$|\\[A-Za-z]+|"
-                        r'"[^"\n]*"|“[^”\n]*”|\b[A-Za-z_]\w*\([^()\n]*\)|'
+                        r"""'[^'\n]*'|"[^"\n]*"|“[^”\n]*”|‘[^’\n]*’|\b[A-Za-z_]\w*\([^()\n]*\)|"""
                         r'\b[A-Za-z_0-9]+(?:\s*[=+*<>^/≤≥≠×÷±−%-]+\s*[A-Za-z_0-9]+)+|'
                         r'\d+(?:\.\d+)?|[=+*<>^/!≤≥≠×÷±−%-]')
 
@@ -94,4 +94,3 @@ def missing_derivation(original, stem):
                               stem, re.I)
     scalar = r"(?:[-+−]?\d+(?:\.\d+)?(?:/\d+)?|[A-D]|是|否|正确|错误|true|false)"
     return bool(requests_work and re.fullmatch(rf"(?:答案(?:是|为)?[：:]?\s*)?\$?{scalar}\$?[。.]?", original.strip(), re.I))
-
