@@ -192,6 +192,11 @@ async def prepare(question, workflow, patch, *, owner_id, reporter):
     if not edited.intersection({"stem", "reference_answer", "solution_code", "test_cases"}):
         return {key: value for key, value in patch.items() if key != "test_case_origins"}, None
     semantic = semantic_text_edits(before, patch)
+    manual_missing = {
+        field for issue in presentation.get("preparation_issues", [])
+        if issue.get("code") == "manual_completion_required" and issue.get("status") == "open"
+        for field in (issue.get("details") or {}).get("required_fields", ()) if not before.get(field)
+    }
     result = dict(patch)
     provenance = dict(before.get("ai_completion_provenance") or {})
     supplements = dict(before.get("teacher_material_supplements") or {})
@@ -209,11 +214,19 @@ async def prepare(question, workflow, patch, *, owner_id, reporter):
     language = workflow.initial_content_language or "zh"
     candidate_type = source["type"]
     programming = is_programming_question_type(candidate_type)
+    case_edits = None
+    if programming and "test_cases" in edited:
+        from backend.services.programming_question_edit import validate_case_edits
+        case_edits = validate_case_edits(before, {**before, **patch})
     original_answer = source["reference_answer"]
     missing = missing_answer_parts(original_answer, source["question_structure"])
     derivation = not source["question_structure"].get("subparts") and missing_derivation(original_answer, source["stem"])
     impact = None
-    if before.get("stem") and (programming or not teacher_policy or not original_answer or missing or derivation):
+    # A type conversion or an explicit replacement implementation already
+    # requires execution validation; a wording review cannot substitute for it.
+    review_prose = "type" not in edited and not (programming and "solution_code" in edited)
+    if review_prose and before.get("stem") and (programming or not teacher_policy and "criterion" not in manual_missing
+            or not original_answer and "reference_answer" not in manual_missing or missing or derivation):
         impact = await review_wording(before, patch, semantic, get_provider, reporter)
     previous_supplement = supplements.get("reference_answer")
     new_gap = (missing or derivation) and (
@@ -230,11 +243,11 @@ async def prepare(question, workflow, patch, *, owner_id, reporter):
             source["solution_code"] = ""
     compiled = None
     fields = []
-    if ("stem" in semantic and before.get("stem") and "reference_answer" not in edited
+    if ("stem" in semantic and before.get("stem") and "reference_answer" not in edited | manual_missing
             and (impact is None or impact.answer or not before.get("reference_answer") or new_gap)
             and not source.get("code_output") and (not original_answer or missing or derivation)):
         fields.append("reference_answer")
-    if (semantic and before.get("stem") and source["stem"] and "criterion" not in edited
+    if (semantic and before.get("stem") and source["stem"] and "criterion" not in edited | manual_missing
             and (impact is None or impact.rubric or not before.get("criterion"))
             and not teacher_policy):
         fields.append("criterion")
@@ -306,13 +319,16 @@ async def prepare(question, workflow, patch, *, owner_id, reporter):
             result["programming_reference_binding"] = rebound
         else:
             execution_edits = semantic
-    if programming and (execution_edits or edited.intersection({"solution_code", "test_cases"})):
+    first_manual_entry = manual_missing and not any(before.get(key) for key in (
+        "solution_code", "test_cases", "reference_answer", "programming_reference_binding"))
+    if programming and (execution_edits and not first_manual_entry or edited.intersection({"solution_code", "test_cases"})):
         from backend.services.programming_question_edit import prepare_programming_edit
         candidate = {**before, **result, "programming_semantic_fields": sorted(execution_edits)}
         if compiled and (points := verified_test_points(compiled.plan)) is not None:
             candidate["programming_scoring"] = {**(candidate.get("programming_scoring") or {}), "test_points": points}
         verified = await prepare_programming_edit(
             before=before, candidate=candidate, edited_fields=edited, get_provider=get_provider, reporter=reporter,
+            case_edits=case_edits,
         )
         result.update(verified)
         if "test_cases" in verified and "test_cases" not in edited:

@@ -137,6 +137,16 @@ def _case_edits(before, candidate):
     return cases, validate | authored, authored
 
 
+def validate_case_edits(before, candidate):
+    """Resolve row identity and reject invalid batches before any model call."""
+    try:
+        cases, verify, authored = _case_edits(before, candidate)
+        adapt_programming_cases(candidate["stem"], cases)
+    except ProgrammingCaseError as exc:
+        raise _invalid(str(exc), exc.case_number, exc.issue) from exc
+    return cases, verify, authored
+
+
 def _same_implementation(left, right):
     if left == right:
         return True
@@ -321,7 +331,7 @@ async def _recheck_generated_inputs(row, cases, get_provider, reporter):
     return removed
 
 
-async def _prepare(before, candidate, edited_fields, get_provider, reporter):
+async def _prepare(before, candidate, edited_fields, get_provider, reporter, case_edits):
     fields = set(edited_fields)
     semantic = {f for f in candidate.get("programming_semantic_fields", fields) if f in fields
                 and f in ("stem", "reference_answer") and candidate.get(f) != before.get(f)}
@@ -333,7 +343,7 @@ async def _prepare(before, candidate, edited_fields, get_provider, reporter):
     if code_edit:
         _set_origin(row, "solution_code", generated=False)
     if tests_edit:
-        cases, validate, authored = _case_edits(before, row)
+        cases, validate, authored = case_edits if case_edits is not None else validate_case_edits(before, row)
     else:
         cases = adapt_programming_cases(before["stem"], before.get("test_cases") or [])
         validate, authored = set(), set()
@@ -475,12 +485,12 @@ def _patch(candidate, row):
                                 "ai_completion_provenance") if k in row and row[k] != candidate.get(k)}
 
 
-async def prepare_programming_edit(*, before, candidate, edited_fields, get_provider, reporter=None) -> dict:
+async def prepare_programming_edit(*, before, candidate, edited_fields, get_provider, reporter=None, case_edits=None) -> dict:
     """Return only the server-derived patch. All execution precedes atomic publication."""
     if not is_programming_question_type(candidate.get("type")):
         return {}
     try:
-        return await _prepare(before, candidate, edited_fields, get_provider, reporter)
+        return await _prepare(before, candidate, edited_fields, get_provider, reporter, case_edits)
     except DomainError:
         raise
     except ProgrammingCaseError as exc:

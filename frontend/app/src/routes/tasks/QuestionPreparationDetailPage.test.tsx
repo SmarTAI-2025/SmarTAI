@@ -887,6 +887,29 @@ it.each([
 });
 
 
+it("restores added test rows and sends their original positions with the reviewed revision", async () => {
+  const path = "/tasks/task-1/questions/Q3/answer";
+  const user = userEvent.setup();
+  const panel = () => within(within(document.querySelector<HTMLElement>('[data-question-id="Q3"]')!)
+    .getByText("测试样例", { selector: "h4" }).closest("section")!);
+  await renderPage(path);
+  await user.click(panel().getByRole("button", { name: "修改" }));
+  await user.click(panel().getByRole("button", { name: "添加测试样例" }));
+  const fields = panel().getAllByRole("textbox").filter(el => el.tagName === "TEXTAREA");
+  fireEvent.change(fields[3], { target: { value: "7" } });
+  fireEvent.change(fields[4], { target: { value: "13" } });
+  await user.click(screen.getByRole("button", { name: "暂存" }));
+  await screen.findByText(/已暂存 ·/);
+  cleanup();
+  await renderPage(path);
+  expect(await panel().findByDisplayValue("13")).toBeVisible();
+  await user.click(panel().getByRole("button", { name: "保存测试样例" }));
+  expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+    test_case_origins: [0, null], expectedWorkflowRevision: 7,
+    test_cases: [expect.anything(), expect.objectContaining({ input: "7", expected_output: "13" })],
+  }));
+});
+
 it("saves test points, code criteria and the input domain separately", async () => {
   await renderPage();
   await userEvent.click(await screen.findByRole("button", { name: "修改第 3 题满分与评分标准" }));

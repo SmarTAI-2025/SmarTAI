@@ -7,6 +7,7 @@ import { ReviewIssueNotes } from "@/components/tasks/ReviewQueue";
 import { questionReviewConfirmed, questionReviewIssues, questionReviewNotes, questionReviewBlocked, questionReviewNextBlocked, questionReviewBlockers, recognitionIssueLabel, type ReviewBlocker } from "@/lib/reviewConfirmation";
 import { ReviewConfirmButton, ReviewBlockDialog, ReviewStageActions } from "@/components/tasks/ReviewConfirmation";
 import { useDraftProtection } from "@/hooks/useDraftProtection";
+import { objectDraftCodec, type DraftCodec } from "@/lib/pageDraftStore";
 import { QUESTION_TYPES, hasQuestionType, questionTypeLabel, testCaseLabel } from "@/lib/reviewLabels";
 import { normalizeFilterType } from "@/lib/taskFilterIntent";
 import { useDraftLeave } from "@/hooks/useDraftLeave";
@@ -239,7 +240,10 @@ function QuestionPreparationDetailPageForm() {
 
   async function saveText(problem: ProblemInfo, field: TextFieldKey, value: string) {
     const expectedRevision = latestWorkflowRevisionRef.current;
-    if ((field === "stem" || field === "reference_answer" || field === "solution_code") && problem.stem.trim() && expectedRevision !== undefined) {
+    const manualEntry = !problem[field] && problem.preparation_issues?.some(issue =>
+      issue.code === "manual_completion_required" && issue.status === "open" &&
+      Array.isArray(issue.details?.required_fields) && issue.details.required_fields.includes(field));
+    if (!manualEntry && (field === "stem" || field === "reference_answer" || field === "solution_code") && problem.stem.trim() && expectedRevision !== undefined) {
       const dependentEditors = {
         stem: ["answer", "scoring", "code", "tests"],
         reference_answer: ["scoring", "code", "tests"],
@@ -942,6 +946,19 @@ function testCaseSaveError(error: unknown, locale: string) {
   return label + tx(locale, "请核对输入、预期结果和题目的调用要求。", "Check the input, expected result and how the question requires the code to be called.");
 }
 
+type CaseDraft = { cases: TestCase[]; origins?: (number | null)[] };
+const caseDraftShape = objectDraftCodec<CaseDraft>({ cases: [] });
+const caseDraftCodec: DraftCodec<CaseDraft> = {
+  encode: caseDraftShape.encode,
+  decode(value) {
+    const draft = caseDraftShape.decode(value);
+    if (!draft || !draft.cases.every(row => row && typeof row.input === "string" && typeof row.expected_output === "string")) return null;
+    if (draft.origins !== undefined && (!Array.isArray(draft.origins) || draft.origins.length !== draft.cases.length
+      || draft.origins.some(id => id !== null && (!Number.isInteger(id) || id < 0)))) return null;
+    return draft;
+  },
+};
+
 function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyChange, onSave }: {
   fieldKey: string;
   problem: ProblemInfo;
@@ -962,7 +979,12 @@ function TestCasesPanel({ fieldKey, problem, readOnly, saving, locale, onDirtyCh
   const dirty = editing && JSON.stringify(cases) !== JSON.stringify(original);
   useEffect(() => { if (!editing && !localDraft.savedAt) { setCases(original); setOrigins(initialOrigins); } }, [editing, original, initialOrigins]);
   useEffect(() => { onDirtyChange(fieldKey, dirty); return () => onDirtyChange(fieldKey, false); }, [dirty, fieldKey, onDirtyChange]);
-  const localDraft = useDraftProtection({ scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`, value: { cases, origins }, baseline: { cases: original, origins: initialOrigins }, version: JSON.stringify(original), enabled: !readOnly, busy: saving, onRestore: (restored) => { setCases(restored.cases); setOrigins(restored.origins); setEditing(true); } });
+  const localDraft = useDraftProtection<CaseDraft>({
+    scope: `question:${useParams().taskId}:${encodeURIComponent(problem.q_id)}:tests`,
+    value: { cases, origins }, baseline: { cases: original, origins: initialOrigins }, codec: caseDraftCodec,
+    version: JSON.stringify(original), enabled: !readOnly, busy: saving,
+    onRestore: restored => { setCases(restored.cases); setOrigins(restored.origins); setEditing(true); },
+  });
   const leave = useDraftLeave();
   const exampleCount = original.filter((item) => (item.visibility ?? "example") === "example").length;
   const hiddenCount = original.length - exampleCount;
