@@ -171,6 +171,21 @@ def test_page_gap_excludes_only_a_matching_standalone_page_number_from_the_start
     ], aliases) == {}
 
 
+def test_short_answer_can_equal_a_verified_page_number():
+    from backend.services.submission_incremental import NEXT_PAGE_FAILED, PREVIOUS_PAGE_FAILED, page_gap_review_flags
+
+    def flags(text, failed_pages):
+        return page_gap_review_flags({2: text}, failed_pages, {}, [{"q_id": "q1", "content": "2"}])
+
+    assert flags("Page 2\n2", [1]) == {"q1": [PREVIOUS_PAGE_FAILED]}
+    assert flags("2\n第 2 页", [3]) == {"q1": [NEXT_PAGE_FAILED]}
+    assert flags("Page 2\n2\n第 2 页", [1, 3]) == {"q1": [NEXT_PAGE_FAILED, PREVIOUS_PAGE_FAILED]}
+    assert flags("Page 2\n2\n2", [1]) == {}
+    assert flags("2\n2\n第 2 页", [3]) == {}
+    assert flags("Page 2", [1, 3]) == {}
+    assert flags("Page 3\n2", [1]) == {}
+
+
 def test_page_number_header_preserves_explicit_first_heading_evidence():
     from backend.services.submission_incremental import answer_boundaries_on_read_pages, page_gap_review_flags
 

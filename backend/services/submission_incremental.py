@@ -324,10 +324,23 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
     def locate(content):
         if not content:
             return None
+        match = None
         start = source.find(content)
-        if start < 0 or source.find(content, start + 1) >= 0:
+        while start >= 0:
+            end = start + len(content)
+            page_index = bisect_right(offsets, start) - 1
+            # The page number itself cannot be an alternative answer location.
+            # Keep matches that include the marker plus actual answer text.
+            in_header = end <= body_starts[page_index]
+            in_footer = body_ends[page_index] <= start and end <= ends[page_index]
+            if not (in_header or in_footer):
+                if match is not None:
+                    return None
+                match = start, end
+            start = source.find(content, start + 1)
+        if match is None:
             return None
-        end = start + len(content)
+        start, end = match
         # Short answers must still match whole words, not pieces of another
         # answer, identifier or number.
         if ((start and content[0].isalnum() and source[start - 1].isalnum())

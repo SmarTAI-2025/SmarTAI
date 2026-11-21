@@ -515,17 +515,20 @@ async def test_pdf_page_gap_uses_the_positions_of_matched_answers(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("page_header", ["", "Page 2\n"])
-async def test_pdf_page_header_does_not_hide_the_first_answer_after_a_gap(monkeypatch, page_header):
+@pytest.mark.parametrize("page_header,first_answer,first_label", [
+    ("", "The proof continues here.", "2. "), ("Page 2\n", "The proof continues here.", "2. "),
+    ("Page 2\n", "2", ""),
+])
+async def test_pdf_page_header_does_not_hide_the_first_answer_after_a_gap(monkeypatch, page_header, first_answer, first_label):
     from backend.tests.test_recognition_agent import pdf
 
     owner, task = _seed_task()
-    contents = {"q2": "The proof continues here.", "q3": "A separate final answer."}
+    contents = {"q2": first_answer, "q3": "A separate final answer."}
     for order, q_id in enumerate(contents):
         number = q_id[1:]
         add_reviewed_question(task, teacher_id=owner, q_id=q_id, order_index=order,
             number=number, type="concept", stem=f"Question {number}", criterion="Award 10 points", max_score=10)
-    read_page = f"{page_header}2. {contents['q2']}\n3. {contents['q3']}"
+    read_page = f"{page_header}{first_label}{contents['q2']}\n3. {contents['q3']}"
 
     async def read(**kwargs):
         await kwargs["on_pages"]([{"page_number": 2, "text": read_page}])
