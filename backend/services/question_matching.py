@@ -6,6 +6,7 @@ import unicodedata
 from collections import Counter
 from typing import Literal
 
+from backend.recognition.quality import has_unreadable_marker
 from backend.services.source_question_units import question_headings
 
 
@@ -52,14 +53,14 @@ def blank_questions_needing_source_review(text, problems, blank_ids, *, low_conf
     unexpected = set()
     headings = question_headings(text, qualified=True)
     doubtful = set()
-    has_unclear = low_confidence_ocr and "[unclear" in text.casefold()
-    if has_unclear and "[unclear" in text[:headings[0].start() if headings else len(text)].casefold():
+    has_unclear = low_confidence_ocr and has_unreadable_marker(text)
+    if has_unclear and has_unreadable_marker(text[:headings[0].start() if headings else len(text)]):
         doubtful.update(blank_ids)
     for i, heading in enumerate(headings):
         parts = _parts(heading.group("number"))
         end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
         body = heading.group("title") + " " + text[heading.end():end]
-        if has_unclear and "[unclear" in body.casefold():
+        if has_unclear and has_unreadable_marker(body):
             matches = question_number_candidates(heading.group("number"), problems)
             doubtful.update(blank_ids.intersection(matches) if len(matches) == 1 else blank_ids)
         if len(parts) < 3 or parts in known:

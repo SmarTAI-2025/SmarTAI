@@ -38,6 +38,11 @@ def _validated(candidate, *, visual: bool) -> RecognitionCandidateV1 | None:
         raise RecognitionError("recognition_request_invalid") from None
 
 
+def has_unreadable_marker(text: str) -> bool:
+    folded = text.lower()
+    return any(marker in folded for marker in ("[unclear]", "[unreadable]", "[illegible]"))
+
+
 def _text_issues(text: str) -> tuple[str, ...]:
     """Bounded lexical observations only; source mathematical syntax is untouched."""
     issues = []
@@ -45,8 +50,7 @@ def _text_issues(text: str) -> tuple[str, ...]:
         issues.append("replacement_character")
     if any((ord(char) < 32 and char not in "\t\r\n") or 127 <= ord(char) <= 159 for char in text):
         issues.append("control_character")
-    folded = text.lower()
-    if any(marker in folded for marker in ("[unclear]", "[unreadable]", "[illegible]")):
+    if has_unreadable_marker(text):
         issues.append("source_form_uncertain")
     # Markdown fence balance is packaging, not a test of the enclosed code/math.
     fence = None
