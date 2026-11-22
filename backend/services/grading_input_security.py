@@ -7,7 +7,7 @@ import json
 from sqlalchemy import select
 
 from backend.config import settings
-from backend.db.models import ProviderConfigRecord
+from backend.db.models import ByokConnectionRecord, ProviderConfigRecord
 from backend.db.session import session_scope
 from backend.domain.errors import ValidationError
 from backend.llm.provider_catalog import catalog_entry
@@ -28,19 +28,23 @@ def provider_configuration_fingerprint(
     from backend.state import get_user_store
     demo_owner = is_frontier_user(get_user_store().get(owner_id))
     with session_scope() as session:
-        records = session.scalars(
-            select(ProviderConfigRecord).where(
+        records = session.execute(
+            select(ProviderConfigRecord, ByokConnectionRecord).outerjoin(
+                ByokConnectionRecord, ByokConnectionRecord.id == ProviderConfigRecord.byok_connection_id,
+            ).where(
                 ProviderConfigRecord.owner_id == owner_id,
                 ProviderConfigRecord.id.in_(selected),
             )
         ).all() if selected else []
-    by_id = {record.id: record for record in records}
+    by_id = {record.id: (record, connection) for record, connection in records}
     rows: list[dict] = []
     for provider_id in selected:
-        record = by_id.get(provider_id)
-        if record is not None:
+        bound = by_id.get(provider_id)
+        if bound is not None:
+            record, connection = bound
+            credential = connection or record
             secret_digest = hashlib.sha256(
-                f"{record.encrypted_api_key}:{record.nonce}".encode("utf-8")
+                f"{credential.encrypted_api_key}:{credential.nonce}".encode("utf-8")
             ).hexdigest()
             rows.append({
                 "provider_id": provider_id,
@@ -52,10 +56,12 @@ def provider_configuration_fingerprint(
                 "enabled": record.enabled,
                 "max_concurrent": record.max_concurrent,
                 "rpm": record.rpm,
-                "key_version": record.key_version,
+                "key_version": credential.key_version,
                 "secret_digest": secret_digest,
                 "scope": "owner",
             })
+            if connection is not None:
+                rows[-1].update(connection_id=connection.id, reasoning_effort=record.reasoning_effort)
             continue
 
         shared = _shared_provider_row(provider_id, frontier_demo=demo_owner)

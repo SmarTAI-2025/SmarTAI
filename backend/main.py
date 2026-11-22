@@ -270,6 +270,7 @@ def create_app() -> FastAPI:
             run_source_reservation_cleanup,
         )
         from backend.services.task_deletion import run_task_deletion
+        from backend.services.question_stem_save import QUESTION_STEM_SAVE_OPERATION, run as run_question_stem_save
         from backend.services.task_facade import (
             run_durable_problem_extraction,
             run_durable_submission_recognition,
@@ -286,6 +287,7 @@ def create_app() -> FastAPI:
             "material_import": run_durable_material_import,
             "ai_completion": run_durable_ai_completion,
             "question_preparation": run_durable_question_preparation,
+            QUESTION_STEM_SAVE_OPERATION: run_question_stem_save,
             "source_cleanup": run_source_cleanup,
             "source_replacement_cleanup": run_source_replacement_cleanup,
             "source_reservation_cleanup": run_source_reservation_cleanup,

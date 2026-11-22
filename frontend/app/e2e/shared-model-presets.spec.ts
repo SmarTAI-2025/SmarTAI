@@ -36,7 +36,7 @@ for (const locale of ["zh-CN", "en-US"]) for (const width of [1440, 390]) {
       if (path === "/auth/me") return json({ id: "shared-test", username: "Synthetic teacher", role: "teacher", is_active: true, auth_scope: "user" });
       if (path === "/auth/activity") return json({ token: "synthetic-teacher-token" });
       if (path === "/experts/available" || path === "/experts/stage-options") return json(all);
-      if (path === "/experts/catalog") return json([]);
+      if (path === "/experts/catalog" || path === "/experts/connections") return json([]);
       if (path === "/experts/quota") return json({
         shared_quota_mode: "weekly_usd",
         shared_weekly: {limit_usd: 5, spent_usd: probes * 0.01, reserved_usd: 0, remaining_usd: 5 - probes * 0.01, unknown_requests: 0, resets_at: "2026-11-23T00:00:00+08:00"},

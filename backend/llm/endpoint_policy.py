@@ -544,6 +544,7 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
         revalidate: bool = False,
         max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
         allowed_target_url: str | None = None,
+        allowed_method: str = "POST",
     ) -> None:
         super().__init__(verify=True, trust_env=False, retries=0)
         self._pool = httpcore.ConnectionPool(
@@ -557,6 +558,7 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
                 revalidate=revalidate,
             ),
         )
+        self._allowed_method = allowed_method
         self._max_response_bytes = max(1024, int(max_response_bytes))
         self._allowed_target_url = _validated_allowed_target(
             endpoint,
@@ -564,7 +566,7 @@ class _PinnedHTTPTransport(httpx.HTTPTransport):
         )
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        _validate_outbound_request(request, self._allowed_target_url)
+        _validate_outbound_request(request, self._allowed_target_url, method=self._allowed_method)
         request.headers["accept-encoding"] = "identity"
         response = super().handle_request(request)
         if 300 <= response.status_code < 400:
@@ -675,8 +677,10 @@ def _validated_allowed_target(
 def _validate_outbound_request(
     request: httpx.Request,
     allowed_target_url: httpx.URL | None,
+    *,
+    method: str = "POST",
 ) -> None:
-    if request.method != "POST":
+    if request.method != method:
         raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
     if request.url.query or request.url.fragment:
         raise ProviderEndpointError("provider_endpoint_protocol_mismatch")
@@ -776,4 +780,18 @@ def build_safe_provider_clients_for_endpoint(
             timeout=timeout,
             trust_env=False,
         ),
+    )
+
+
+
+def build_safe_provider_catalog_client(base_url: str, target_url: str, *, timeout_seconds: float) -> httpx.Client:
+    """Allow one fixed GET on the existing public, pinned endpoint transport."""
+    return httpx.Client(
+        transport=_PinnedHTTPTransport(
+            resolve_public_endpoint(base_url), revalidate=True,
+            allowed_target_url=target_url, allowed_method="GET", max_response_bytes=2 * 1024 * 1024,
+        ),
+        follow_redirects=False,
+        trust_env=False,
+        timeout=timeout_seconds,
     )

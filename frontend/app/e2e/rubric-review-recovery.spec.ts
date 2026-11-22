@@ -2,6 +2,51 @@ import { expect, test } from "@playwright/test";
 
 const backend = process.env.SMARTAI_E2E_BACKEND_URL ?? "http://127.0.0.1:8000";
 
+for (const width of [1280, 390]) test(`saved rubric text needs confirmation before upload (${width}px)`, async ({ page }, info) => {
+  await page.setViewportSize({ width, height: 900 });
+  await page.addInitScript(() => {
+    localStorage.setItem("smartai_token", "synthetic-review-token");
+    localStorage.setItem("smartai_locale", "zh-CN");
+  });
+  const errors: string[] = [];
+  page.on("pageerror", e => errors.push(e.message));
+  page.on("console", m => { if (m.type() === "error") errors.push(m.text()); });
+  const question = { q_id: "q1", number: "1", type: "计算题", stem: "求 2 + 2。", max_score: 10,
+    criterion: "结果正确得 10 分。", reference_answer: "4", rubric_confirmation_required: true,
+    review_status: "edited", max_score_review_status: "confirmed", preparation_issues: [] };
+  const task = { task_id: "rubric-confirm", name: "评分规则确认", status: "problems_ready", workflow_revision: 1,
+    problem_data: { q1: question }, student_data: {}, problem_count: 1, student_count: 0, created_at: 1, updated_at: 1, kb_docs: {} };
+  const path = "/tasks/rubric-confirm";
+  await page.route(`${backend}/**`, async route => {
+    const request = route.request(), url = new URL(request.url()).pathname;
+    const json = (value: unknown) => route.fulfill({ json: value });
+    if (request.method() === "OPTIONS") return route.fulfill({ status: 204 });
+    if (url === "/auth/me") return json({ id: "teacher", username: "Teacher", role: "teacher", is_active: true });
+    if (url === "/auth/activity") return json({ token: "synthetic-review-token" });
+    if (url === path) return json(task);
+    if (url === path + "/problems/q1" && request.method() === "PUT") {
+      expect(request.postDataJSON()).toMatchObject({ expected_workflow_revision: 1, review_status: "confirmed" });
+      question.rubric_confirmation_required = false;
+      question.review_status = "confirmed";
+      return json({ status: "ok", q_id: "q1", problem: question, workflow_revision: ++task.workflow_revision });
+    }
+    return json([]);
+  });
+  await page.goto(path + "/questions");
+  await expect(page).toHaveTitle("SmarTAI");
+  await page.getByRole("button", { name: "进入上传作答", exact: true }).click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toContainText("评分标准文字已保存，请确认本题以生成评分规则。");
+  await page.screenshot({ path: info.outputPath("rubric-confirmation.png") });
+  await dialog.getByRole("button", { name: "前往问题位置" }).click();
+  await page.getByRole("button", { name: "第 1 题 · 待确认", exact: true }).click();
+  await expect(page.getByRole("button", { name: "第 1 题 · 已确认", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "进入上传作答", exact: true }).click();
+  await expect(page).toHaveURL(/submissions\/upload$/);
+  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 for (const locale of ["zh-CN", "en-US"]) for (const width of [1280, 390]) for (const recovered of [false, true]) {
   test(`rubric review preserves edits and explains model recovery (${locale}, ${width}px, recovered=${recovered})`, async ({ page }, testInfo) => {
     const zh = locale === "zh-CN";

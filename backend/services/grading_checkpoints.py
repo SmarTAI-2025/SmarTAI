@@ -33,6 +33,11 @@ def checkpoint_key(item):
     return (item["student_id"], item["q_id"], item["provider_id"], item["sample_index"])
 
 
+def _successful_snapshot(item):
+    from backend.agents.multi_expert import _is_successful_expert
+    return _is_successful_expert(ExpertResult.model_validate(item["result"]))
+
+
 def saved_experts(run_id, *, events=None):
     """Include inherited successes so repeated stops retain the same paid work."""
     from backend.db import workflow_repository
@@ -51,7 +56,7 @@ def saved_experts(run_id, *, events=None):
         plans = matching_math_plans(
             [QuestionDTO.model_validate(q) for q in manifest["questions"]], plans,
         )
-    return [item for item in saved.values() if expert_matches_plan(item, math_qids, plans)]
+    return [item for item in saved.values() if expert_matches_plan(item, math_qids, plans) and _successful_snapshot(item)]
 
 
 def saved_math_plans(run_id, *, questions=None):
@@ -293,7 +298,7 @@ def persist_paused_results(session, run):
         return
     manifest = setup.input_manifest or {}
     config = TaskGradingSetup.model_validate(setup.setup)
-    saved = {checkpoint_key(item): item for item in manifest.get("reused_experts", [])}
+    saved = {checkpoint_key(item): item for item in manifest.get("reused_experts", []) if _successful_snapshot(item)}
     events = list(session.scalars(select(GradingRunEventRecord).where(
         GradingRunEventRecord.grading_run_id == run.id,
         GradingRunEventRecord.message.in_((EVENT, ENGINE_EVENT, PLAN_EVENT, AUXILIARY)),

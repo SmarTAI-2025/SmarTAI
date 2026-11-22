@@ -33,6 +33,7 @@ from backend.config import settings
 from backend.llm.concurrency import (
     HARD_LIMIT, get_scheduler, initial_concurrency, quota_key, request_memory,
 )
+from backend.llm.model_discovery import relay_reasoning_fields
 from backend.llm.endpoint_policy import (
     build_safe_provider_clients,
     effective_provider_base_url,
@@ -797,9 +798,12 @@ class GeminiProvider(BaseProvider):
 
     def _generation_kwargs(self, max_output_tokens: int | None) -> dict[str, Any]:
         _validate_output_limit(max_output_tokens)
-        return {} if max_output_tokens is None else {
-            "generation_config": {"max_output_tokens": max_output_tokens}
-        }
+        config = {}
+        if max_output_tokens is not None:
+            config["max_output_tokens"] = max_output_tokens
+        if self.config.reasoning_effort is not None:
+            config["thinking_config"] = {"thinking_level": self.config.reasoning_effort.upper()}
+        return {"generation_config": config} if config else {}
 
     async def ainvoke(self, messages: List[BaseMessage], *, max_output_tokens: int | None = None) -> LLMResponse:
         generation_kwargs = self._generation_kwargs(max_output_tokens)
@@ -888,6 +892,7 @@ class OpenAIProvider(BaseProvider):
             # Reasoning models reject temperature; retain their reasoning default.
             temperature=None,
             use_responses_api=False,
+            reasoning_effort=self.config.reasoning_effort,
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -949,10 +954,12 @@ class AnthropicProvider(BaseProvider):
 
     def _build_client_sync(self) -> Any:
         from langchain_anthropic import ChatAnthropic
+        effort = self.config.reasoning_effort
         client = ChatAnthropic(
             model=self.model,
             # Recent Claude models reject non-default sampling parameters.
             temperature=None,
+            model_kwargs={"output_config": {"effort": effort}} if effort is not None else {},
             timeout=settings.llm_timeout,
             max_retries=0,
             api_key=self.config.api_key,
@@ -1343,6 +1350,7 @@ class SafeRelayProvider(BaseProvider):
                 payload["max_completion_tokens"] = max_output_tokens
             else:
                 payload["max_tokens"] = max_output_tokens
+        payload.update(relay_reasoning_fields(self.config))
         return headers, payload
 
     def _parse_response(self, payload: Any, duration_ms: float) -> LLMResponse:
