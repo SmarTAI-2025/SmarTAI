@@ -5879,8 +5879,17 @@ def update_problem(
                               compiled=draft, question_version=result.question_version)
 
 
+def publish_linked_question_edit(operation, question_version, patch, compiled):
+    _save_problem_edit(
+        task_id=operation.assignment_id, owner_id=operation.owner_id,
+        q_id=operation.payload["q_id"], patch=patch,
+        expected_revision=operation.payload["expected_workflow_revision"],
+        compiled=compiled, question_version=question_version, linked_edit=operation,
+    )
+
+
 def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
-                       compiled=None, question_version=None):
+                       compiled=None, question_version=None, linked_edit=None):
     workflow = workflow_repository.get_live_workflow(
         task_id, owner_id=owner_id
     )
@@ -5895,6 +5904,16 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         "solution_code", "test_cases", "alternative_rule_edits", "programming_scoring",
     }.intersection(patch))
     with session_scope() as session:
+        if linked_edit:
+            op = workflow_repository.WorkflowOperationRecord
+            receipt = session.scalar(select(op).where(
+                op.id == linked_edit.operation_id, op.owner_id == owner_id,
+                op.attempt == linked_edit.attempt, op.status == "running",
+            ).with_for_update())
+            if receipt is None or not workflow_repository._lease_allows_write(
+                receipt, linked_edit.lease_token, time.time()
+            ):
+                raise LeaseLost("The question save lease expired.", code="lease_lost")
         workflow_row = workflow_repository.lock_workflow_revision(
             session, assignment_id=task_id, owner_id=owner_id, expected_revision=expected_revision,
         )
@@ -5914,7 +5933,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             _raise_stale_revision()
         from backend.services.math_grading_context import problem_from_question, uses_math_grading
         from backend.services.rubric_drafts import (
-            draft_fingerprint, rebind_review_edit, retarget_draft, saved_draft,
+            RubricDraft, draft_fingerprint, rebind_review_edit, retarget_draft, saved_draft,
         )
         stored_draft = ((question.source or {}).get("presentation") or {}).get("rubric_draft") or {}
         prior_rules = (stored_draft.get("plan") or {}).get("part_rubric")
@@ -5950,7 +5969,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
 
         programming = is_programming_question_type(candidate_type)
         prior_programming_draft = saved_draft(problem_from_question(question)) if programming else None
-        programming_draft = None
+        programming_draft = compiled if linked_edit and programming else None
         programming_policy = None
         if "programming_scoring" in patch:
             if not programming:
@@ -5961,7 +5980,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             except ValueError as exc:
                 raise ValidationError("Select the test points and provide the separate input rules.",
                                       code="invalid_programming_test_award") from exc
-        elif programming and (
+        elif programming and not linked_edit and (
             ("criterion" in patch and (patch["criterion"] != question.criterion or prior_programming_draft is None))
             or patch.get("max_score", question.max_score) != question.max_score
         ):
@@ -6002,6 +6021,8 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             provenance = dict(presentation.get("ai_completion_provenance") or {})
             provenance.pop("criterion", None)
             presentation["ai_completion_provenance"] = provenance
+            if not linked_edit:
+                presentation.pop("stem_save_teacher_criterion", None)
         original_problem = _serialize_problem(question)
         if test_cases_edited and is_programming_question_type(patch.get("type", question.type)):
             patch["test_cases"] = _attribute_edited_test_cases(
@@ -6013,7 +6034,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                             if question_issue_blocks_progress(issue, presentation)]
         for key in (
             "review_status", "solution_code", "material_provenance",
-            "ai_completion_provenance", "preparation_issues",
+            "ai_completion_provenance", "preparation_issues", "stem_save_teacher_criterion",
         ):
             if key in patch:
                 presentation[key] = patch[key]
@@ -6131,7 +6152,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             # An edited structured rubric is validated from its compiled JSON
             # below. A partial text scanner must not veto it before compilation.
             rubric_summary = (RubricPointSummaryV1(major_max_score=str(patch.get("max_score", question.max_score)))
-                              if changed_rule and uses_math_grading(patch.get("type", question.type)) else validate_rubric_points(
+                              if compiled or (changed_rule and uses_math_grading(patch.get("type", question.type))) else validate_rubric_points(
                 str(patch.get("criterion", question.criterion) or ""),
                 patch.get("max_score", question.max_score),
                 structure, rubric_draft=presentation.get("rubric_draft"),
@@ -6153,7 +6174,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         if check_alternatives:
             try:
                 edit_alternatives(problem_from_question(question), presentation, patch.get("alternative_rule_edits"),
-                                  previous=previous_problem, allow_pending=changed_rule)
+                                  previous=previous_problem, allow_pending=changed_rule or linked_edit is not None)
             except (ValueError, TypeError) as exc:
                 raise ValidationError(str(exc), code="invalid_alternative_rule") from exc
         if programming_policy is not None:
@@ -6168,9 +6189,30 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                     code="invalid_programming_test_award",
                 ) from exc
         if programming_draft is not None:
+            if linked_edit:
+                from backend.services.programming_rubric import verified_test_points
+
+                policy = prior_programming_draft.programming_scoring if prior_programming_draft else None
+                if policy:
+                    if policy.test_points != (verified_test_points(programming_draft.plan) or 0):
+                        raise ValidationError("The revised rubric must preserve the selected test allocation.",
+                                              code="invalid_programming_test_award")
+                    programming_draft = RubricDraft.model_validate({
+                        **programming_draft.model_dump(), "programming_scoring": policy,
+                    })
+                presentation.pop("programming_scoring_required", None)
             presentation["rubric_draft"] = retarget_draft(
                 programming_draft, problem_from_question(question),
             ).model_dump(mode="json")
+            question.source = {**source, "presentation": presentation}
+        if linked_edit and programming and question.test_cases:
+            issue_id = f"stem-edited-tests:{q_id}"
+            issues = [issue for issue in presentation["preparation_issues"] if issue.get("issue_id") != issue_id]
+            presentation["preparation_issues"] = [*issues, {
+                "issue_id": issue_id, "q_id": q_id, "field": "programming_tests",
+                "code": "source_conflict", "status": "open", "severity": "warning",
+                "source_tokens": [], "details": {"reason": "tests_need_review_after_stem_edit"},
+            }]
             question.source = {**source, "presentation": presentation}
         if programming_policy is not None:
             if saved_draft(problem_from_question(question)) is None:
@@ -6181,9 +6223,10 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
         if (patch.get("review_status") == "confirmed" and programming
                 and test_award_review_issue(question, programming_draft)):
             raise ValidationError("Fix the failed recognition or required material before confirming.", code="question_review_blocked")
-        if changed_rule and question.stem.strip() and question.criterion.strip() and uses_math_grading(question.type):
+        if ((changed_rule and uses_math_grading(question.type)) or (linked_edit and compiled and not programming)
+                ) and question.stem.strip() and question.criterion.strip():
             candidate = problem_from_question(question)
-            prior = saved_draft(prior_problem, allow_incomplete_alternative=True)
+            prior = saved_draft(prior_problem, allow_incomplete_alternative=True) if prior_problem else None
             if prior is None and compiled is None and prior_rules:
                 # Historical rows could store new text next to an old plan. Only
                 # reuse that plan if its complete original input still verifies.
@@ -6218,7 +6261,7 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
                 rubric_draft=presentation["rubric_draft"],
             ).model_dump()
             question.source = {**source, "presentation": presentation}
-        if patch.get("review_status") == "confirmed" or "rubric" in fixed_fields or patch.get("alternative_rule_edits"):
+        if patch.get("review_status") == "confirmed" or ("rubric" in fixed_fields and not linked_edit) or patch.get("alternative_rule_edits"):
             # Acknowledge only this saved rubric; new inputs get a new fingerprint.
             fingerprint = ((presentation.get("rubric_draft") or {}).get("plan") or {}).get("input_fingerprint")
             if fingerprint:
@@ -6251,8 +6294,23 @@ def _save_problem_edit(*, task_id, owner_id, q_id, patch, expected_revision,
             assignment.updated_at = now
         workflow_row.workflow_revision += 1
         workflow_row.updated_at = now
+        if linked_edit:
+            if compiled and not saved_draft(problem_from_question(question)):
+                raise ValidationError("The revised scoring rules do not match the saved materials.",
+                                      code="invalid_structured_rubric")
+            if not workflow_repository._lease_allows_write(receipt, linked_edit.lease_token, time.time()):
+                raise LeaseLost("The question save lease expired.", code="lease_lost")
+            receipt.status = "done"
+            receipt.completed_at = receipt.updated_at = time.time()
+            receipt.terminal_summary = {"workflow_revision": workflow_row.workflow_revision}
+            receipt.payload = {"q_id": q_id}
+            receipt.checkpoint = {}
+            receipt.lease_owner = receipt.lease_token = None
+            receipt.lease_expires_at = receipt.lease_heartbeat_at = None
         session.flush()
         workflow_revision = workflow_row.workflow_revision
+    if linked_edit:
+        return
     updated = next(
         item for item in assignment_repository.list_questions(
             task_id, teacher_id=owner_id

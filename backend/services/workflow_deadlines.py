@@ -10,6 +10,7 @@ import logging
 import time
 
 from backend.config import settings
+from backend.db.execution_admission import QUESTION_STEM_SAVE_OPERATION
 from backend.domain.errors import DomainError, RecognitionError
 from backend.services import submission_work_budget as clocks
 
@@ -60,7 +61,8 @@ QUESTION_WALL_SECONDS = settings.question_preparation_timeout_minutes * 60
 SUBMISSION_WALL_SECONDS = settings.submission_recognition_timeout_minutes * 60
 GRADING_WALL_SECONDS = settings.grading_timeout_minutes * 60
 KNOWLEDGE_WALL_SECONDS = settings.knowledge_ingestion_timeout_minutes * 60
-QUESTION_TYPES = frozenset({"question_preparation", "problem_extraction", "material_import", "ai_completion"})
+QUESTION_TYPES = frozenset({"question_preparation", "problem_extraction", "material_import", "ai_completion",
+                            QUESTION_STEM_SAVE_OPERATION})
 BUDGET_TYPES = QUESTION_TYPES | {"submission_recognition"}
 CHECKPOINT_KEY = "execution_deadline"
 LIMIT_CODES = frozenset(f"{kind}_wall_time_limit_reached"
