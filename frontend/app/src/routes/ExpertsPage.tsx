@@ -21,7 +21,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { getAPIErrorCode, normalizeAPIError } from "@/api/client";
 import {
-  useAddExpertKey,
   useBaiduOCRConfiguration,
   useDeleteBaiduOCRCredentials,
   useExperts,
@@ -35,6 +34,11 @@ import {
   useVerifyExpert,
   useVerifyExpertImage,
 } from "@/api/hooks";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { refreshByokConnection, removeByokConnection } from "@/api/experts";
+import { expertKeys } from "@/api/hooks/keys";
+import { useByokConnections, useSaveByokConnection } from "@/api/hooks/byok";
+import { ByokModelSelect, byokCatalogLabel, byokConnectionLabel, byokError } from "@/components/models/ByokModelSelect";
 import { LibraryDialog } from "@/components/knowledge-base/LibraryDialog";
 import { StageProviderSelect } from "@/components/models/StageProviderSelect";
 import { ProviderIcon } from "@/components/models/ProviderIcon";
@@ -50,7 +54,7 @@ import {
   sortByProvider,
 } from "@/lib/modelPresentation";
 import type {
-  AddExpertKeyRequest,
+  ByokConnection,
   ExpertConfig,
   ProviderCatalogItem,
   ProviderType,
@@ -73,7 +77,8 @@ const providerOptions: Array<{ value: ProviderType; label: string; defaultModel:
 
 type EditorTarget =
   | { mode: "add" }
-  | { mode: "edit"; expert: ExpertConfig };
+  | { mode: "edit"; expert: ExpertConfig }
+  | { mode: "connection"; connection: ByokConnection };
 
 type Confirmation =
   | { kind: "verify" | "verifyImage"; expert: ExpertConfig }
@@ -96,7 +101,20 @@ export function ExpertsPage() {
   const zh = locale === "zh-CN";
   const expertsQuery = useExperts();
   const catalogQuery = useProviderCatalog();
-  const addExpert = useAddExpertKey();
+  const connectionsQuery = useByokConnections();
+  const saveConnection = useSaveByokConnection();
+  const [newConnectionId, setNewConnectionId] = useState<string>();
+  const queryClient = useQueryClient();
+  const refreshConnection = useMutation({
+    mutationFn: refreshByokConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: expertKeys.connections() }),
+  });
+  const removeConnection = useMutation({
+    mutationFn: removeByokConnection,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: expertKeys.all }),
+  });
+  const [confirmConnection, setConfirmConnection] = useState<ByokConnection | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const updateExpert = useUpdateExpert();
   const selectExpert = useSelectExpert();
   const setDefaultExpert = useSetDefaultExpert();
@@ -131,7 +149,9 @@ export function ExpertsPage() {
   ).length;
   const returnTo = safeExpertsReturnTo(new URLSearchParams(location.search).get("returnTo"));
   const controlsPending =
-    addExpert.isPending ||
+    saveConnection.isPending ||
+    refreshConnection.isPending ||
+    removeConnection.isPending ||
     updateExpert.isPending ||
     selectExpert.isPending ||
     setDefaultExpert.isPending ||
@@ -141,20 +161,18 @@ export function ExpertsPage() {
   async function handleSave(value: ExpertFormValue) {
     if (!editor) return;
     try {
-      if (editor.mode === "add") {
-        const request: AddExpertKeyRequest = {
-          provider_type: value.provider,
-          api_key: value.apiKey,
-          model: value.model,
-          base_url: value.baseUrl || null,
-          ...(value.wireProtocol ? { wire_protocol: value.wireProtocol } : {}),
-          display_name: value.displayName || null,
-          rpm: value.rpm,
-        };
-        const added = await addExpert.mutateAsync(request);
-        if (recovery && added.provider_id) chooseReturnModel(added.provider_id);
-        toast.success(zh ? "模型配置已添加" : "Model configuration added", {
-          description: value.displayName || value.model,
+      if (editor.mode !== "edit") {
+        const saved = await saveConnection.mutateAsync({
+          id: editor.mode === "connection" ? editor.connection.id : undefined,
+          request: {
+            provider_type: value.provider, api_key: value.apiKey,
+            base_url: value.baseUrl || null, wire_protocol: value.wireProtocol,
+            display_name: value.displayName || null, rpm: value.rpm,
+          },
+        });
+        setNewConnectionId(saved.id);
+        toast.success(zh ? "BYOK 连接已保存" : "BYOK connection saved", {
+          description: byokCatalogLabel(saved.catalog_status, locale),
         });
       } else {
         const request: UpdateExpertRequest = {
@@ -175,7 +193,7 @@ export function ExpertsPage() {
       }
       setEditor(null);
     } catch (error) {
-      const message = safeExpertError(error, locale);
+      const message = getAPIErrorCode(error)?.startsWith("byok_") ? byokError(error, locale) : safeExpertError(error, locale);
       toast.error(
         editor.mode === "add"
           ? zh
@@ -334,6 +352,62 @@ export function ExpertsPage() {
         />
       </section>
 
+      {connectionsQuery.isError ? <InlineError message={zh ? "暂时无法读取 BYOK 连接。" : "BYOK connections could not be loaded."} /> : null}
+      {connectionsQuery.data?.length ? (
+        <section className="grid gap-3 rounded-[10px] border bg-card p-4">
+          <h2 className="text-[15px] font-semibold">{zh ? "BYOK 连接" : "BYOK connections"}</h2>
+          {connectionsQuery.data.map((connection) => <div key={connection.id} className="flex min-w-0 flex-wrap items-center justify-between gap-2 border-b pb-2">
+            <div className="min-w-0">
+              <p className="break-all text-sm font-medium">{byokConnectionLabel(connection)}</p>
+              <p className="break-all text-xs text-muted-foreground">{connection.endpoint_identity} · {byokCatalogLabel(connection.catalog_status, locale)}{connection.models.length ? ` · ${connection.models.length}` : ""}</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" disabled={controlsPending} onClick={async () => {
+                setConnectionError(null);
+                try { await refreshConnection.mutateAsync(connection.id); }
+                catch (error) { setConnectionError(byokError(error, locale)); }
+              }}>{zh ? "刷新模型" : "Refresh models"}</Button>
+              <Button type="button" variant="secondary" disabled={controlsPending} onClick={() => setEditor({ mode: "connection", connection })}>{zh ? "编辑连接" : "Edit connection"}</Button>
+              <Button type="button" variant="secondary" disabled={controlsPending} onClick={() => setConfirmConnection(connection)}>{zh ? "删除连接" : "Delete connection"}</Button>
+            </div>
+          </div>)}
+          {connectionError ? <InlineError message={connectionError} /> : null}
+          <ByokModelSelect
+            key={newConnectionId}
+            id="byok-default-model"
+            locale={locale}
+            initialConnection={newConnectionId}
+            connections={connectionsQuery.data}
+            experts={experts.filter((expert) => Boolean(expert.byok_connection_id))}
+            value={newConnectionId ? "" : experts.find((expert) => expert.is_default && expert.byok_connection_id)?.provider_id}
+            disabled={controlsPending}
+            actionLabel={zh ? "设为默认模型" : "Set as default model"}
+            onChange={async (providerId) => {
+              await setDefaultExpert.mutateAsync(providerId);
+              setNewConnectionId(undefined);
+              if (recovery) chooseReturnModel(providerId);
+              toast.success(zh ? "默认模型已更新" : "Default model updated");
+            }}
+          />
+        </section>
+      ) : null}
+
+      {confirmConnection ? <LibraryDialog
+        title={zh ? "删除 BYOK 连接" : "Delete BYOK connection"}
+        description={byokConnectionLabel(confirmConnection)}
+        closeLabel={zh ? "关闭" : "Close"}
+        onClose={() => setConfirmConnection(null)}
+        footer={<>
+          <Button type="button" variant="secondary" disabled={removeConnection.isPending} onClick={() => setConfirmConnection(null)}>{zh ? "取消" : "Cancel"}</Button>
+          <Button type="button" disabled={removeConnection.isPending} onClick={async () => {
+            setConnectionError(null);
+            try { await removeConnection.mutateAsync(confirmConnection.id); }
+            catch (error) { setConnectionError(byokError(error, locale)); }
+            setConfirmConnection(null);
+          }}>{zh ? "确认删除" : "Delete connection"}</Button>
+        </>}
+      ><p className="text-sm">{zh ? "此连接下的模型将无法继续调用。" : "Models from this connection will no longer be available."}</p></LibraryDialog> : null}
+
       <BaiduOCRSettings locale={locale} />
 
       <section className="overflow-hidden rounded-[10px] border bg-card">
@@ -379,7 +453,9 @@ export function ExpertsPage() {
             <EmptyState
               title={zh ? "还没有模型配置" : "No model configurations yet"}
               description={
-                zh
+                connectionsQuery.data?.length
+                  ? zh ? "选择一个模型设为默认后，可以在此运行文本和图像测试。" : "Set a default model to run text and image tests here."
+                  : zh
                   ? "添加自己的 API key 后，模型才会出现在任务配置中。"
                   : "Add your own API key to make a model available in task setup."
               }
@@ -471,10 +547,10 @@ export function ExpertsPage() {
 
       {editor ? (
         <ExpertEditorDialog
-          key={editor.mode === "add" ? "add" : editor.expert.provider_id}
+          key={editor.mode === "edit" ? editor.expert.provider_id : editor.mode === "connection" ? editor.connection.id : "add"}
           target={editor}
           locale={locale}
-          pending={addExpert.isPending || updateExpert.isPending}
+          pending={saveConnection.isPending || updateExpert.isPending}
           catalog={catalogQuery.data ?? []}
           onClose={() => setEditor(null)}
           onSave={handleSave}
@@ -834,6 +910,9 @@ function ExpertActions({
   onDelete,
 }: ExpertRowProps) {
   const zh = locale === "zh-CN";
+  if (expert.byok_connection_id) {
+    return <span className="block text-center text-xs text-muted-foreground">{zh ? "通过 BYOK 连接管理" : "Managed by BYOK connection"}</span>;
+  }
   if (expert.editable === false) {
     return (
       <div className="flex min-w-0 flex-col items-center gap-1 text-center">
@@ -1095,7 +1174,7 @@ function ExpertEditorDialog({
   const initialProvider =
     target.mode === "edit" && isProviderType(target.expert.provider_type)
       ? target.expert.provider_type
-      : "deepseek";
+      : target.mode === "connection" ? target.connection.provider_type : "deepseek";
   const initialCatalogEntry = catalog.find(
     (item) => item.provider_type === initialProvider,
   );
@@ -1108,12 +1187,12 @@ function ExpertEditorDialog({
   const [provider, setProvider] = useState<ProviderType>(initialProvider);
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(
-    target.mode === "edit" ? target.expert.model : providerDefault(initialProvider, catalog),
+    target.mode === "edit" ? target.expert.model : "",
   );
   const [baseUrl, setBaseUrl] = useState(
     target.mode === "edit"
       ? target.expert.base_url ?? providerDefaultBaseUrl(initialProvider, catalog)
-      : providerDefaultBaseUrl(initialProvider, catalog),
+      : target.mode === "connection" ? target.connection.endpoint_identity : providerDefaultBaseUrl(initialProvider, catalog),
   );
   const [wireProtocol, setWireProtocol] = useState<WireProtocol | "">(
     initialWireProtocol,
@@ -1122,10 +1201,11 @@ function ExpertEditorDialog({
   const [displayName, setDisplayName] = useState(
     target.mode === "edit"
       ? target.expert.configured_display_name?.trim() ?? ""
-      : "",
+      : target.mode === "connection" ? target.connection.display_name ?? "" : "",
   );
   const [rpm, setRpm] = useState(
-    target.mode === "edit" && target.expert.rpm > 0 ? String(target.expert.rpm) : "",
+    target.mode === "edit" && target.expert.rpm > 0 ? String(target.expert.rpm)
+      : target.mode === "connection" && target.connection.rpm > 0 ? String(target.connection.rpm) : "",
   );
   const [formError, setFormError] = useState<string | null>(null);
   const credentialProtection = useDraftProtection({ scope: "credential:expert", value: { provider, apiKey, model, baseUrl, wireProtocol, displayName, rpm }, secret: true, busy: pending, onRestore: (draft) => { setProvider(draft.provider); setApiKey(draft.apiKey); setModel(draft.model); setBaseUrl(draft.baseUrl); setWireProtocol(draft.wireProtocol); setDisplayName(draft.displayName); setRpm(draft.rpm); } });
@@ -1148,9 +1228,9 @@ function ExpertEditorDialog({
     const nextModel = model.trim();
     const nextKey = apiKey.trim();
     const nextRpm = Number(rpm);
-    if (!nextModel || (target.mode === "add" && !nextKey)) {
+    if ((target.mode === "edit" && !nextModel) || (target.mode === "add" && !nextKey)) {
       setFormError(
-        zh ? "请填写模型名称和 API key。" : "Enter a model name and API key.",
+        zh ? "请填写必填字段。" : "Complete the required fields.",
       );
       return;
     }
@@ -1192,7 +1272,7 @@ function ExpertEditorDialog({
       });
     } catch (error) {
       setApiKey("");
-      setFormError(safeExpertError(error, locale));
+      setFormError(getAPIErrorCode(error)?.startsWith("byok_") ? byokError(error, locale) : safeExpertError(error, locale));
     }
   }
 
@@ -1210,8 +1290,8 @@ function ExpertEditorDialog({
       description={
         target.mode === "add"
           ? zh
-            ? "保存不会调用模型。"
-            : "Saving does not call the model."
+            ? "保存时自动获取模型目录。"
+            : "Saving automatically fetches the model catalog."
           : zh
             ? "API key 留空保留原密钥，可按需重新测试。"
             : "Leave the API key blank to keep it. Test again if needed."
@@ -1235,12 +1315,11 @@ function ExpertEditorDialog({
           <Field label={zh ? "服务商" : "Provider"}>
             <select
               value={provider}
-              disabled={pending || target.mode === "edit"}
+              disabled={pending || target.mode !== "add"}
               className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60"
               onChange={(event) => {
                 const next = event.target.value as ProviderType;
                 setProvider(next);
-                setModel(providerDefault(next, catalog));
                 setBaseUrl(providerDefaultBaseUrl(next, catalog));
                 setWireProtocol("");
               }}
@@ -1255,9 +1334,9 @@ function ExpertEditorDialog({
           <Field
             label={zh ? "配置名称（可选）" : "Configuration name (optional)"}
             hint={
-              zh
-                ? "可留空；系统会按厂商、模型、URL 和协议自动生成不重复名称。"
-                : "Optional. A unique name is generated from provider, model, URL, and protocol."
+              target.mode === "edit"
+                ? zh ? "留空时显示服务商和模型。" : "Defaults to the provider and model."
+                : zh ? "留空时显示接口地址。" : "Defaults to the API address."
             }
           >
             <Input
@@ -1269,14 +1348,14 @@ function ExpertEditorDialog({
             />
           </Field>
         </div>
-        <Field label={zh ? "模型名称" : "Model name"}>
+        {target.mode === "edit" ? <Field label={zh ? "模型名称" : "Model name"}>
           <Input
             value={model}
             disabled={pending}
             maxLength={200}
             onChange={(event) => setModel(event.target.value)}
           />
-        </Field>
+        </Field> : null}
         <Field
           label={target.mode === "add" ? "API key" : zh ? "替换 API key（可选）" : "Replace API key (optional)"}
           hint={
@@ -1314,7 +1393,7 @@ function ExpertEditorDialog({
           >
             <Input
               value={baseUrl}
-              disabled={pending || !baseUrlEditable}
+              disabled={pending || !baseUrlEditable || target.mode === "connection"}
               type="url"
               placeholder={providerCatalog?.default_base_url ?? "https://relay.example.com/v1"}
               onChange={(event) => setBaseUrl(event.target.value)}
@@ -1348,7 +1427,7 @@ function ExpertEditorDialog({
               >
                 <select
                   value={wireProtocol}
-                  disabled={pending || !baseUrlEditable}
+                  disabled={pending || !baseUrlEditable || target.mode === "connection"}
                   className="h-9 rounded-md border bg-background px-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/15 disabled:opacity-60"
                   onChange={(event) =>
                     setWireProtocol(event.target.value as WireProtocol | "")
@@ -1481,11 +1560,6 @@ function InlineError({ message }: { message: string }) {
       <p className="min-w-0 break-words">{message}</p>
     </div>
   );
-}
-
-function providerDefault(providerType: ProviderType, catalog: ProviderCatalogItem[]) {
-  return catalog.find((item) => item.provider_type === providerType)?.default_model
-    ?? providerOptions.find((option) => option.value === providerType)?.defaultModel ?? "";
 }
 
 function providerDefaultBaseUrl(

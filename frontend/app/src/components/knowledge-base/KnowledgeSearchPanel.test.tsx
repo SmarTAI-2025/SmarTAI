@@ -4,8 +4,11 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { KnowledgeSearchPanel } from "./KnowledgeSearchPanel";
 
 const api = vi.hoisted(() => ({ postJSON: vi.fn() }));
+vi.mock("@/api/hooks/byok", () => ({ useByokConnections: () => ({ data: [] }) }));
 vi.mock("@/api/client", () => api);
-vi.mock("@/api/experts", () => ({ listExperts: async () => [{ provider_id: "owner-model", provider_type:"zhipu", model:"test-model", enabled:true, scope:"owner" }] }));
+vi.mock("@/api/hooks/experts", () => ({
+  useExperts: () => ({ data: [{ provider_id: "owner-model", provider_type: "zhipu", model: "test-model", enabled: true, scope: "owner" }] }),
+}));
 vi.mock("@/i18n/I18nProvider", () => ({ useI18n: () => ({ locale: "en-US" }) }));
 vi.mock("./KnowledgeCitationPreview", () => ({ KnowledgeCitationPreview: () => <span>Citation</span> }));
 beforeEach(() => api.postJSON.mockReset());

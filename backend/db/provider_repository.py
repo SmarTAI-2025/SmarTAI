@@ -4,10 +4,10 @@ import time
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, literal, select, update
 from sqlalchemy.exc import IntegrityError
 
-from backend.db.models import ProviderConfigRecord, ProviderPreferenceRecord, SharedProviderAdmissionRecord
+from backend.db.models import ByokConnectionRecord, ProviderConfigRecord, ProviderPreferenceRecord, SharedProviderAdmissionRecord
 from backend.db.session import session_scope
 from backend.llm.endpoint_policy import (
     normalize_provider_endpoint,
@@ -26,6 +26,7 @@ class StoredProviderConfig:
     verification_error_code: str | None = None
     updated_at: float | None = None
     adaptive_limits: dict | None = None
+    connection_updated_at: float | None = None
 
 
 class DefaultProviderReplacementRequired(RuntimeError):
@@ -150,12 +151,19 @@ def _prepare_default_for_removal(
     preference.updated_at = time.time()
 
 
-def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
-    api_key = decrypt_secret(
-        EncryptedSecret(record.encrypted_api_key, record.nonce, record.key_version),
-        master_key=master_key,
-        associated_data=_associated_data(record.owner_id, record.id),
-    )
+def _to_config(record: ProviderConfigRecord, master_key: str, connection: ByokConnectionRecord | None) -> ProviderConfig:
+    if record.byok_connection_id is not None:
+        from backend.db.byok_repository import connection_key
+
+        if connection is None or connection.owner_id != record.owner_id:
+            raise ValueError("BYOK connection is unavailable")
+        api_key = connection_key(connection, master_key)
+    else:
+        api_key = decrypt_secret(
+            EncryptedSecret(record.encrypted_api_key, record.nonce, record.key_version),
+            master_key=master_key,
+            associated_data=_associated_data(record.owner_id, record.id),
+        )
     return ProviderConfig(
         provider_type=record.provider_type,
         api_key=api_key,
@@ -168,6 +176,8 @@ def _to_config(record: ProviderConfigRecord, master_key: str) -> ProviderConfig:
         image_checked_at=record.image_checked_at,
         image_reason=record.image_reason,
         display_name=record.display_name,
+        byok_connection_id=record.byok_connection_id,
+        reasoning_effort=record.reasoning_effort,
         max_concurrent=max(1, record.max_concurrent),
         rpm=max(0, record.rpm),
     )
@@ -188,6 +198,7 @@ def upsert_provider_config(
             ProviderConfigRecord.wire_protocol == wire_protocol,
             ProviderConfigRecord.endpoint_identity == endpoint_identity,
             ProviderConfigRecord.model == config.model,
+            ProviderConfigRecord.byok_connection_id.is_(None),
         ))
         if record is None:
             record = ProviderConfigRecord(
@@ -228,22 +239,29 @@ def upsert_provider_config(
         return record
 
 
+def _with_connection(owner_id: str):
+    return select(ProviderConfigRecord, ByokConnectionRecord).outerjoin(
+        ByokConnectionRecord, ByokConnectionRecord.id == ProviderConfigRecord.byok_connection_id,
+    ).where(ProviderConfigRecord.owner_id == owner_id)
+
+
+def _stored(record: ProviderConfigRecord, connection: ByokConnectionRecord | None, master_key: str) -> StoredProviderConfig:
+    return StoredProviderConfig(
+        id=record.id,
+        config=_to_config(record, master_key, connection),
+        verification_status=record.verification_status,
+        last_checked_at=record.last_checked_at,
+        verification_error_code=record.verification_error_code,
+        updated_at=record.updated_at,
+        adaptive_limits=connection.adaptive_limits if connection else record.adaptive_limits,
+        connection_updated_at=connection.updated_at if connection else None,
+    )
+
+
 def list_provider_configs(owner_id: str, *, master_key: str) -> list[StoredProviderConfig]:
     with session_scope() as session:
-        records = list(session.scalars(select(ProviderConfigRecord).where(
-            ProviderConfigRecord.owner_id == owner_id).order_by(ProviderConfigRecord.created_at)))
-    return [
-        StoredProviderConfig(
-            id=record.id,
-            config=_to_config(record, master_key),
-            verification_status=record.verification_status,
-            last_checked_at=record.last_checked_at,
-            verification_error_code=record.verification_error_code,
-            updated_at=record.updated_at,
-            adaptive_limits=record.adaptive_limits,
-        )
-        for record in records
-    ]
+        rows = session.execute(_with_connection(owner_id).order_by(ProviderConfigRecord.created_at)).all()
+    return [_stored(record, connection, master_key) for record, connection in rows]
 
 
 def has_provider_configs(owner_id: str) -> bool:
@@ -259,21 +277,8 @@ def has_provider_configs(owner_id: str) -> bool:
 
 def get_provider_config(owner_id: str, provider_id: str, *, master_key: str) -> StoredProviderConfig | None:
     with session_scope() as session:
-        record = session.scalar(select(ProviderConfigRecord).where(
-            ProviderConfigRecord.id == provider_id,
-            ProviderConfigRecord.owner_id == owner_id,
-        ))
-    if record is None:
-        return None
-    return StoredProviderConfig(
-        id=record.id,
-        config=_to_config(record, master_key),
-        verification_status=record.verification_status,
-        last_checked_at=record.last_checked_at,
-        verification_error_code=record.verification_error_code,
-        updated_at=record.updated_at,
-        adaptive_limits=record.adaptive_limits,
-    )
+        row = session.execute(_with_connection(owner_id).where(ProviderConfigRecord.id == provider_id)).one_or_none()
+    return _stored(*row, master_key) if row else None
 
 
 def update_provider_config(
@@ -295,6 +300,7 @@ def update_provider_config(
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
             ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.byok_connection_id.is_(None),
         ))
         if record is None:
             return None
@@ -377,6 +383,7 @@ def set_provider_enabled(owner_id: str, provider_id: str, enabled: bool) -> bool
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
             ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.byok_connection_id.is_(None),
         ))
         if record is None:
             return False
@@ -399,6 +406,7 @@ def delete_provider_config(owner_id: str, provider_id: str) -> bool:
         record = session.scalar(select(ProviderConfigRecord).where(
             ProviderConfigRecord.id == provider_id,
             ProviderConfigRecord.owner_id == owner_id,
+            ProviderConfigRecord.byok_connection_id.is_(None),
         ))
         if record is None:
             return False
@@ -417,7 +425,7 @@ def record_image_rejection(owner_id: str, provider_id: str, *, expected_updated_
 
 
 def record_adaptive_limits(owner_id: str, provider_id: str, profile: dict, *,
-                           expected_updated_at: float) -> bool:
+                           expected_updated_at: float, connection: bool = False) -> bool:
     """Owner/configuration CAS: old work cannot overwrite an edited BYOK.
 
     A learning update is not a user configuration edit and must not invalidate
@@ -427,16 +435,17 @@ def record_adaptive_limits(owner_id: str, provider_id: str, profile: dict, *,
     profile = valid_profile(profile)
     if profile is None or profile["config_version"] != expected_updated_at or profile["generation"] < 1:
         return False
+    table = ByokConnectionRecord if connection else ProviderConfigRecord
     with session_scope() as session:
-        result = session.execute(update(ProviderConfigRecord).where(
-            ProviderConfigRecord.id == provider_id,
-            ProviderConfigRecord.owner_id == owner_id,
-            ProviderConfigRecord.updated_at == expected_updated_at,
+        result = session.execute(update(table).where(
+            table.id == provider_id,
+            table.owner_id == owner_id,
+            table.updated_at == expected_updated_at,
             # Both faster and slower validated estimates may be saved, but
             # an old worker cannot overwrite a newer learning generation.
-            func.coalesce(ProviderConfigRecord.adaptive_limits["generation"].as_integer(), 0)
+            func.coalesce(table.adaptive_limits["generation"].as_integer(), 0)
                 == profile["generation"] - 1,
-        ).values(adaptive_limits=profile, updated_at=ProviderConfigRecord.updated_at))
+        ).values(adaptive_limits=profile, updated_at=table.updated_at))
         return result.rowcount == 1
 
 
@@ -484,7 +493,14 @@ def load_adaptive_states(sources: dict[str, tuple[str | None, str]]) -> dict[str
                 ProviderConfigRecord.id, ProviderConfigRecord.owner_id,
                 ProviderConfigRecord.updated_at, ProviderConfigRecord.enabled, ProviderConfigRecord.adaptive_limits,
             ).where(ProviderConfigRecord.id.in_({key for _, key in owned.values()}))).all()
+            connection_ids = {key.removeprefix("connection:") for _, key in owned.values() if key.startswith("connection:")}
+            connections = session.execute(select(
+                ByokConnectionRecord.id, ByokConnectionRecord.owner_id,
+                ByokConnectionRecord.updated_at, literal(True).label("enabled"),
+                ByokConnectionRecord.adaptive_limits,
+            ).where(ByokConnectionRecord.id.in_(connection_ids))).all() if connection_ids else []
             records = {(row.owner_id, row.id): row for row in rows}
+            records.update({(row.owner_id, f"connection:{row.id}"): row for row in connections})
             states.update({identity: {"revision": row.updated_at, "enabled": row.enabled, "profile": row.adaptive_limits}
                            for identity, source in owned.items() if (row := records.get(source)) is not None})
     return states
