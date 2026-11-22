@@ -63,6 +63,28 @@ export function getSubmissionSourceReasonCopy(
 
 type ReasonFactory = (locale: Locale, source: SubmissionSourceOutcome) => SubmissionSourceReasonCopy;
 
+export function failedSubmissionCopy(locale: Locale, source?: SubmissionSourceOutcome): SubmissionSourceReasonCopy {
+  const pages = source?.page_diagnostics;
+  const affected = source?.answer_diagnostics?.filter(answer => answer.has_content && answer.flag?.includes("unclear_text")
+    && (answer.flag.includes("recognition_matching_advisory") || answer.flag.includes("recognition_incomplete")));
+  if (pages && pages.total_pages > 0 && pages.processed_pages.length === pages.total_pages
+      && !pages.failed_pages.length && !pages.unprocessed_pages.length && !pages.page_errors.length && affected?.length) {
+    const numbers = affected.map(answer => answer.number || answer.q_id).join(", ");
+    return {
+      title: tx(locale, "页面已读完，部分作答仍需核对", "All pages were read, but some answers still need review"),
+      description: tx(locale, `第 ${numbers} 题的转写仍有未辨清的文字。已识别的内容已保留。`,
+        `The transcription for question(s) ${numbers} still contains unreadable text. The recognized text is saved.`),
+      nextStep: tx(locale, "可更换识别模型后重试失败项，或对照原卷核对题号并补齐作答。",
+        "Retry the failed items with another recognition model, or check the question numbers and complete the answers from the original."),
+    };
+  }
+  return {
+    title: tx(locale, "作答识别没有完成", "Submission recognition did not complete"),
+    description: tx(locale, "请重试失败项。再次失败时，可更换识别模型或对照原卷人工处理。",
+      "Retry the failed items. If recognition fails again, switch models or review the original manually."),
+  };
+}
+
 export function invalidSubmissionCopy(locale: Locale, source?: SubmissionSourceOutcome): SubmissionSourceReasonCopy {
   const incomplete = source?.answer_diagnostics?.filter(answer => answer.flag?.includes("recognition_incomplete")
     && answer.flag.some(flag => flag.startsWith("recognition_invalid_fields:") && flag.split(":")[1].split(",").includes("content")));
@@ -449,15 +471,7 @@ const REASON_COPY: Record<string, ReasonFactory> = {
   provider_endpoint_protocol_mismatch: (locale, source) => providerCopy(locale, source, "中转站响应与所选 API 协议不一致", "The relay response does not match the selected API protocol", "在 BYOK 的高级设置中核对 OpenAI、Anthropic 或 Gemini 协议。", "Check the OpenAI, Anthropic, or Gemini protocol in BYOK Advanced settings."),
   provider_endpoint_response_too_large: (locale, source) => providerCopy(locale, source, "中转站响应超过安全大小上限", "The relay response exceeded the safety limit", "缩小输入或输出范围后重试；若持续出现，请联系管理员评估限制。", "Reduce the input or requested output and retry. If it persists, ask an administrator to review the limit."),
   submission_parse_invalid: invalidSubmissionCopy,
-  submission_parse_failed: (locale) => ({
-    title: tx(locale, "作答识别没有完成", "Submission recognition did not complete"),
-    description: tx(
-      locale,
-      "未能识别作答，请重试；若仍失败，请联系管理员。",
-      "Unable to recognize the submission. Retry or contact your administrator if it continues.",
-    ),
-    nextStep: tx(locale, "先重试一次；若仍失败，请携带下方任务编号排查服务端日志。", "Retry once; if it fails again, use the job ID below to inspect server logs."),
-  }),
+  submission_parse_failed: failedSubmissionCopy,
   submission_model_field_too_long: (locale) => ({
     title: tx(locale, "识别结果格式有误", "The recognition result has an invalid format"),
     description: tx(

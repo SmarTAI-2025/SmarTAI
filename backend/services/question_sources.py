@@ -218,13 +218,17 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # Broad page hints are read in full; the structure extractor still applies
     # the teacher's target IDs. Never silently truncate an explicit page range.
     locate_targets = bool(scope.targets) and len(scope.pages) <= 24
+    policy = RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope)
+    if purpose == "submissions" and media_type == "application/pdf":
+        policy.version = "submission-pdf-native-raster-v1"
+    elif formula_panel_scan and (locate_targets or total_pages == 1):
+        policy.version = "printed-formula-panels-v2"
     request = RecognitionReadRequestV1(
         source=source, purpose=purpose, scope="targets" if locate_targets else "pages" if scope.pages else "document",
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
-        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope,
-            **({"version": "printed-formula-panels-v2"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
+        policy=policy,
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry,
                                   programming_questions=programming_questions) as engine:

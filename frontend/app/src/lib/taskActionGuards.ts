@@ -1,4 +1,4 @@
-import { invalidSubmissionCopy, programmingArchiveGuidance, truncatedLocatorCopy, truncatedSubmissionPageCopy } from "@/lib/submissionSourceOutcomes";
+import { failedSubmissionCopy, invalidSubmissionCopy, programmingArchiveGuidance, truncatedLocatorCopy, truncatedSubmissionPageCopy } from "@/lib/submissionSourceOutcomes";
 import { isTaskAwaitingGrading } from "@/lib/taskFlow";
 import { pdfLocalLimitCopy } from "@/lib/submissionSourceOutcomes";
 import { getAPIErrorCode, getAPIErrorDetail, normalizeAPIError } from "@/api/client";
@@ -1132,11 +1132,11 @@ export function classifyRecoverableError(
     };
   }
 
-  if (code === "submission_parse_invalid") {
+  if (code === "submission_parse_invalid" || code === "submission_parse_failed") {
     const failed = context.submissionSources?.filter(source => source.status === "failed"
       && (!context.jobId || source.job_id === context.jobId));
     const source = failed?.length === 1 && failed[0].reason_code === code ? failed[0] : undefined;
-    const { title, description } = invalidSubmissionCopy(locale, source);
+    const { title, description } = code === "submission_parse_invalid" ? invalidSubmissionCopy(locale, source) : failedSubmissionCopy(locale, source);
     return {
       title, description,
       actionLabel: tx(locale, "重新尝试", "Try again"),

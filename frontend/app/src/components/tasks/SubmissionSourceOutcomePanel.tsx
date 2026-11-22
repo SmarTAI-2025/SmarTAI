@@ -62,11 +62,10 @@ export function SubmissionSourceOutcomePanel({
   const visibleSources = requiredOnly ? ordered.slice(0, 20).map(source => {
     const requiredAnswers = (source.answer_diagnostics ?? []).filter(answer => answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale)
       .some(note => note.severity === "blocking"));
-    const answers = requiredAnswers.slice(0, remainingAnswers);
-    remainingAnswers -= answers.length;
-    return { ...source, answer_diagnostics: answers,
-      answer_required_diagnostic_count: source.answer_required_diagnostic_count ?? requiredAnswers.length };
-  }) : ordered;
+    const answerLimit = Math.min(requiredAnswers.length, remainingAnswers);
+    remainingAnswers -= answerLimit;
+    return { source, answerLimit };
+  }) : ordered.map(source => ({ source, answerLimit: undefined }));
 
   return (
     <section
@@ -121,8 +120,8 @@ export function SubmissionSourceOutcomePanel({
             <ChevronDown aria-hidden="true" className="h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
           </summary>
           <ol className={cn("mt-2 space-y-2 overflow-y-auto pr-1", requiredOnly ? "max-h-[260px]" : "max-h-[520px]")}>
-            {visibleSources.map((source) => (
-              <SourceOutcomeRow key={source.source_id} source={source} locale={locale} requiredOnly={requiredOnly} />
+            {visibleSources.map(({ source, answerLimit }) => (
+              <SourceOutcomeRow key={source.source_id} source={source} locale={locale} requiredOnly={requiredOnly} answerLimit={answerLimit} />
             ))}
           </ol>
           {requiredOnly && ordered.length > visibleSources.length ? <p className="mt-2 text-xs text-muted-foreground">{tx(locale,
@@ -133,11 +132,11 @@ export function SubmissionSourceOutcomePanel({
   );
 }
 
-function SourceOutcomeRow({ source, locale, requiredOnly }: { source: SubmissionSourceOutcome; locale: Locale; requiredOnly: boolean }) {
+function SourceOutcomeRow({ source, locale, requiredOnly, answerLimit }: { source: SubmissionSourceOutcome; locale: Locale; requiredOnly: boolean; answerLimit?: number }) {
   const diagnostics = (source.answer_diagnostics ?? []).map(answer => ({ answer,
     notes: answerReviewNotes({ ...answer, type: "", content: answer.has_content ? "[present]" : "" }, locale, true)
       .filter(note => !requiredOnly || note.severity === "blocking") })).filter(item => item.notes.length > 0);
-  const shown = requiredOnly ? diagnostics.slice(0, 20) : diagnostics;
+  const shown = answerLimit === undefined ? diagnostics : diagnostics.slice(0, answerLimit);
   const diagnosticCount = requiredOnly ? source.answer_required_diagnostic_count ?? diagnostics.length
     : source.answer_diagnostic_count ?? diagnostics.length;
   const limits = useWorkflowTimeouts(source.status !== "manual_review" && source.resolution_status !== "manual_resolved"

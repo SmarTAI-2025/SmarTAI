@@ -12,10 +12,10 @@ import pymupdf as fitz
 
 if __package__:
     from . import image_evidence_worker
-    from .pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE
+    from .pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE, fit_full_page_scale
 else:
     import image_evidence_worker
-    from pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE
+    from pdf_render_limits import MAX_RENDER_PIXELS, MAX_RENDER_SIDE, fit_full_page_scale
 
 CONTRACT = "smartai.pdf.evidence"
 MAX_INPUT_BYTES = 100 * 1024 * 1024
@@ -302,6 +302,18 @@ def _page_evidence(page, targets: list[str], *, detail: bool) -> dict:
     result["target_matches"] = [target for target in targets if _target_pattern(target).search(native_text)]
     if detail:
         result.update(page_index=page.number, native_text=native_text, blocks=blocks)
+        # Some tablet exports use one PDF point per source pixel. Verify every
+        # painted layer before treating the original pixel grid as sufficient.
+        if (images and not (page.rotation or raw_blocks or drawings or annotation_refs)
+                and fit_full_page_scale(visual.width, visual.height, 2) < 2
+                and all(image["width"] == visual.width and image["height"] == visual.height
+                        and tuple(image["transform"]) == (visual.width, 0, 0, visual.height, 0, 0)
+                        for image in images)
+                and all(kind == "fill-image" for kind, _ in page.get_bboxlog())
+                and all(not mask or (page.parent.xref_get_key(mask, "Width") == ("int", str(width))
+                                     and page.parent.xref_get_key(mask, "Height") == ("int", str(height)))
+                        for _, mask, width, height, *_ in page.get_images())):
+            result["native_size_raster"] = True
     return result
 
 

@@ -38,6 +38,41 @@ def assert_error(value, code):
     assert set(value) <= {"contract", "schema_version", "status", "operation", "code"}
 
 
+@pytest.mark.parametrize("overlay", ["none", "image", "ink", "text", "line", "inset", "rotation", "mask", "small", "wide"])
+def test_large_pixel_for_point_submission_keeps_native_grid_only_for_full_raster_layers(overlay):
+    from backend.tools.pdf_evidence import PdfDetailPage, recognition_page_render
+    from backend.tools.pdf_render_limits import fit_full_page_scale
+
+    width, height = (300, 200) if overlay == "small" else (5000, 300) if overlay == "wide" else (2560, 1600)
+    pix = fitz.Pixmap(fitz.csRGB, (0, 0, width, height), False)
+    pix.clear_with(250)
+    with fitz.open() as doc:
+        page = doc.new_page(width=width, height=height)
+        box = page.rect if overlay != "inset" else fitz.Rect(10, 10, 2010, 1260)
+        xref = page.insert_image(box, stream=pix.tobytes("png"))
+        if overlay == "image":
+            page.insert_image(page.rect, xref=xref)
+        elif overlay == "ink":
+            page.add_ink_annot([[(10, 12), (141, 116)]])
+        elif overlay == "text":
+            page.insert_text((10, 30), "Q1")
+        elif overlay == "line":
+            page.draw_line((10, 10), (141, 116))
+        elif overlay == "rotation":
+            page.set_rotation(90)
+        elif overlay == "mask":
+            mask = fitz.Pixmap(fitz.csGRAY, (0, 0, width, height + 1), False)
+            mask.clear_with(128)
+            page.insert_image(page.rect, stream=pix.tobytes("png"), mask=mask.tobytes("png"))
+        detail = PdfDetailPage.model_validate(reply(doc.tobytes(), "detail", pages=[1])["pages"][0])
+    full = (0, 0, 1, 1)
+    natural = overlay in {"none", "image", "wide"}
+    assert detail.native_size_raster is natural
+    assert recognition_page_render(detail, full, "submissions").scale == (1 if natural else fit_full_page_scale(width, height, 2))
+    assert recognition_page_render(detail, full, "problems").scale == 2
+    assert recognition_page_render(detail, (0, 0, 0.5, 0.5), "submissions").scale == 2
+
+
 def cli(arguments, body, *, cwd):
     env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
     path = Path(worker.__file__).with_name("_pdf_worker.py")

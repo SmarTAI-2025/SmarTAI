@@ -157,6 +157,34 @@ def test_partial_retry_keeps_advisory_sibling_and_counts_only_real_failures(inco
         assert merged.student["stu_ans"][1]["content"] == "New transcription"
 
 
+@pytest.mark.parametrize("text,flags,blocking", [
+    ("[unclear] fragment", ["recognition_manual_pending"], True),
+    ("a legible answer with [unclear]", ["unclear_text"], False),
+    ("a complete answer", ["recognition_manual_pending", "question_identifier_conflict"], False),
+])
+def test_retry_of_doubtful_blank_preserves_unresolved_content_on_manual_handoff(text, flags, blocking):
+    from dataclasses import replace
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+    from backend.services.submission_manual_review import fill_manual_answers
+
+    question = SimpleNamespace(q_id="q1", number="1", type="推理题")
+    old = {"q_id": "q1", "type": question.type, "content": "",
+           "flag": ["recognition_manual_pending", "recognition_incomplete", "recognition_invalid_fields:content"]}
+    student = {"stu_id": "s", "identity_status": "matched", "stu_ans": [old]}
+    saved = SubmissionSourceParseResult("src", "file", "s.pdf", "parse_failed", student, "s", 0, (),
+                                        "submission_parse_invalid", "recognition", True)
+    answer = {**old, "content": text, "flag": flags}
+    current = replace(saved, status="parsed", stable_error_code=None, failure_phase=None, retryable=False,
+        student={**student, "stu_ans": [answer], "recognition": {"model_review_question_ids": ["q1"]}})
+    result = task_facade._merge_submission_retry_answers(current, saved, {"q1"}, [question])
+    fill_manual_answers(result.student, [question])
+    retained = result.student["stu_ans"][0]
+    public = task_facade._public_answer_flags(retained["flag"], content=text, answer_type=question.type)
+    assert retained["content"] == text
+    assert ("recognition_invalid_fields:content" in public) is blocking
+    assert (result.status == "parse_failed") is blocking
+
+
 def _saved_signal(monkeypatch):
     saved, loop = asyncio.Event(), asyncio.get_running_loop()
     original = workflow_repository.save_operation_checkpoint

@@ -69,6 +69,7 @@ from backend.domain.confidence_policy import confidence_needs_attention, confide
 from backend.domain.question_types import normalize_question_type
 from backend.services.question_preparation_diagnostics import current_programming_test_issues
 from backend.services.question_matching import QUESTION_IDENTIFIER_CONFLICT_FLAGS, transcribed_answer_match
+from backend.recognition.quality import has_unreadable_marker
 from backend.services.question_preparation_diagnostics import effective_question_issues as _effective_question_issues
 from backend.domain.errors import (
     DomainError,
@@ -3341,9 +3342,16 @@ def _merge_submission_retry_answers(result, saved, target_ids, questions):
             answer = old_answers[q_id]
         elif q_id in incoming:
             answer = incoming[q_id]
-            if _submission_answer_retry_failures(answer, new_recognition.get("model_review_question_ids")):
+            failures = _submission_answer_retry_failures(answer, new_recognition.get("model_review_question_ids"))
+            if failures:
                 old_text = str(old_answers.get(q_id, {}).get("content") or "")
                 new_text = str(answer.get("content") or "")
+                # A retry that still cannot place unreadable fragments does not
+                # establish the contents of a previously incomplete answer.
+                if (failures == {"recognition_manual_pending"} and has_unreadable_marker(new_text)
+                        and "recognition_incomplete" in old_answers.get(q_id, {}).get("flag", [])):
+                    answer = {**answer, "flag": list(dict.fromkeys([*answer["flag"], "unclear_text",
+                        "recognition_incomplete", "recognition_invalid_fields:content"]))}
                 # Failed attempts are evidence for manual review, not replacements.
                 # Keep distinct fragments in attempt order without inferring gaps;
                 # merging the same checkpoint again must not duplicate its text.

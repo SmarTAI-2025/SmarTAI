@@ -25,6 +25,21 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each(["zh-CN", "en-US"] as const)("explains saved partial transcriptions on both failure cards (%s)", locale => {
+    const pages = { total_pages: 2, processed_pages: [1, 2], failed_pages: [], unprocessed_pages: [], page_errors: [] };
+    const item = source({ page_diagnostics: pages, answer_diagnostics: [
+      { q_id: "q1", number: "1.1.5", has_content: true, flag: ["unclear_text", "recognition_matching_advisory"] },
+      { q_id: "q2", number: "1.1.7", has_content: true, flag: ["unclear_text"] },
+      { q_id: "q3", number: "1.1.9", has_content: true, flag: ["unclear_text", "recognition_incomplete"] },
+    ] });
+    const copy = getSubmissionSourceReasonCopy(item, locale);
+    expect(copy.description).toContain("1.1.5, 1.1.9");
+    expect(copy.description).not.toContain("1.1.7");
+    expect(classifyRecoverableError("submission_parse_failed", { locale, jobId: item.job_id, submissionSources: [item] }).description).toBe(copy.description);
+    expect(classifyRecoverableError("submission_parse_failed", { locale, jobId: "other", submissionSources: [item] }).description).not.toContain("1.1.5");
+    expect(getSubmissionSourceReasonCopy({ ...item, page_diagnostics: { ...pages, failed_pages: [2] } }, locale).description).not.toContain("1.1.5");
+  });
+
   it.each([
     ["pdf_render_limit_exceeded", "PDF 页面转图超出限制", "PDF page rendering exceeded its limit"],
     ["pdf_structure_limit_exceeded", "PDF 页面结构无法完整读取", "The PDF page structure could not be read"],
