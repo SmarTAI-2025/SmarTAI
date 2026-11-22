@@ -162,13 +162,14 @@ def test_progress_counts_complete_initial_sets_not_independent_model_totals(case
     assert task_facade._grading_progress(resumed, case[1])["pending_finalization_units"] == 0
 
 
-def test_restart_recovers_saved_expert_without_replaying_and_retry_reuses_it(case, monkeypatch):
+@pytest.mark.parametrize("all_votes_saved", [False, True])
+def test_restart_recovers_saved_expert_without_replaying_and_retry_reuses_it(case, monkeypatch, all_votes_saved):
     import time
 
     from backend.db.models import GradingRunRecord
     from backend.db.session import session_scope
     from backend.services import grading_adapter
-    from backend.tests.test_task_grading_retry import finish
+    from backend.agents import multi_expert
 
     run_id = start(case, "expert-saved-before-restart")["job_id"]
     checkpoints, _, revisions, setup = prepare(case, run_id, "dead-worker")
@@ -178,6 +179,11 @@ def test_restart_recovers_saved_expert_without_replaying_and_retry_reuses_it(cas
         provider="Saved model", provider_id=provider_id, score=0,
         max_score=10, confidence=.9, comment="Valid zero",
     ))
+    if all_votes_saved:
+        checkpoints.save_expert(student_id, "q2", provider_id, 0, ExpertResult(
+            provider="Saved model", provider_id=provider_id, score=8,
+            max_score=10, confidence=.9, comment="Awaiting finalization",
+        ))
     with session_scope() as session:
         session.get(GradingRunRecord, run_id).lease_expiry = time.time() - 1
 
@@ -199,17 +205,36 @@ def test_restart_recovers_saved_expert_without_replaying_and_retry_reuses_it(cas
     rows = {row.q_id: row for row in grades.list_results_for_run(run_id)}
     assert rows["q1"].effective_score == 0
     assert "grading_incomplete" in rows["q1"].initial_review_reasons
-    assert rows["q2"].effective_score is None
+    assert rows["q2"].effective_score == (8 if all_votes_saved else None)
     progress = task_facade._grading_progress(run_id, case[1])
-    assert progress["grading_review_summary"]["missing_scores"] == 1
-    assert progress["pending_finalization_units"] == 1
+    assert progress["grading_review_summary"]["missing_scores"] == (0 if all_votes_saved else 1)
+    assert progress["pending_finalization_units"] == (2 if all_votes_saved else 1)
 
     retry_id = retry(case, "explicit-retry-after-restart")
+    assert retry_id != run_id
     manifest = workflows.get_run_setup(retry_id).input_manifest
-    assert [item["q_id"] for item in manifest["reused_results"]] == ["q1"]
-    attempted = finish(case, retry_id, monkeypatch, failed=())
-    assert attempted["question_ids_by_student"] == {student_id: {"q2"}}
-    assert {row.q_id: row.effective_score for row in grades.list_results_for_run(retry_id)} == {"q1": 0, "q2": 8}
+    assert manifest["reused_results"] == []
+    assert {item["q_id"] for item in manifest["reused_experts"]} == ({"q1", "q2"} if all_votes_saved else {"q1"})
+    calls = []
+    class Skill:
+        name = "test-skill"
+        def __init__(self, *args, **kwargs):
+            pass
+        async def grade(self, problem, answer, student_id):
+            calls.append(problem.q_id)
+            return ExpertResult(provider="model", provider_id=provider_id, score=8,
+                max_score=10, confidence=.9, comment="Recovered")
+    provider = SimpleNamespace(provider_id=provider_id, model="model")
+    registry = grading_runs._registry_for(case[1])
+    registry.list_available = lambda: [provider]
+    registry.get = lambda _id: provider
+    monkeypatch.setattr(grading_runs, "_registry_for", lambda _owner: registry)
+    monkeypatch.setattr(multi_expert, "get_skill_for_type", lambda _type: Skill)
+    asyncio.run(grading_runs.process_run(run_id=retry_id, worker_id="retry-worker"))
+    assert calls == ([] if all_votes_saved else ["q2"])
+    rows = grades.list_results_for_run(retry_id)
+    assert {row.q_id: row.effective_score for row in rows} == {"q1": 0, "q2": 8}
+    assert all("grading_incomplete" not in row.initial_review_reasons for row in rows)
 
 
 def test_stop_and_switch_grading_model_keeps_finalized_scores(case, monkeypatch):
@@ -282,6 +307,8 @@ def test_stop_preserves_each_sample_and_resume_only_calls_missing_samples(case, 
     resumed_checkpoints, _, _, _ = prepare(case, resumed, "second-worker")
     # Stopping the new worker before any new model response must keep inherited work.
     stop(case, resumed)
+    paused = next(row for row in grades.list_results_for_run(resumed) if row.q_id == "q1")
+    assert [e["error_kind"] for e in paused.ai_expert_results] == [None, "operation_cancelled", "operation_cancelled"]
     third = retry(case, "sample-resume-again")
     third_checkpoints, _, _, _ = prepare(case, third, "third-worker")
     provider = SimpleNamespace(provider_id=provider_id, model="model")

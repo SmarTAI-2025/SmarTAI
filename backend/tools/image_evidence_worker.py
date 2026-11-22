@@ -21,6 +21,12 @@ class ImageFailure(Exception):
         super().__init__(code)
 
 
+class ImagePixelLimit(ImageFailure):
+    def __init__(self, limit_name: str):
+        super().__init__("image_pixel_limit_exceeded")
+        self.limit_name = limit_name
+
+
 class _BoundedBuffer(io.BytesIO):
     def __init__(self, limit: int, code: str):
         super().__init__()
@@ -65,8 +71,12 @@ def _clean_rgb(image):
 
 
 def _pixel_limit(width: int, height: int):
-    if min(width, height) < 1 or max(width, height) > MAX_SIDE or width * height > MAX_PIXELS:
+    if min(width, height) < 1:
         raise ImageFailure("image_pixel_limit_exceeded")
+    if width * height > MAX_PIXELS:
+        raise ImagePixelLimit("max_pixels")
+    if max(width, height) > MAX_SIDE:
+        raise ImagePixelLimit("max_side")
 
 
 def _orientation_matrix(orientation: int, width: int, height: int) -> list[list[int]]:
@@ -112,7 +122,7 @@ def _validated_image(body: bytes, content_type: str):
         except ImageFailure:
             raise
         except (Image.DecompressionBombError, Image.DecompressionBombWarning):
-            raise ImageFailure("image_pixel_limit_exceeded") from None
+            raise ImagePixelLimit("max_pixels") from None
         except (MemoryError, OverflowError, RecursionError):
             # Resource exhaustion does not establish an immutable input defect.
             raise

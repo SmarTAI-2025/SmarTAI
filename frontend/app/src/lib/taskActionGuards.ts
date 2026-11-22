@@ -530,10 +530,18 @@ export function classifyRecoverableError(
     };
   }
 
+  if (code === "question_review_blocked") {
+    return {
+      title: tx(locale, "题目资料待复核", "Question materials need review"),
+      description: tx(locale, "请处理题目资料总览中标红的问题，确认后继续。", "Resolve the blocking items in the question overview and confirm the questions to continue."),
+      actionLabel: tx(locale, "审核题目资料", "Review question materials"),
+      actionHref: taskHref("/questions"), actionKind: "reselect", tone: "danger", technicalDetails,
+    };
+  }
   if (code === "question_manual_completion_required") {
     return {
       title: tx(locale, "请先补全题目必填资料", "Complete required question materials first"),
-      description: tx(locale, "手动补全的题目仍有必填内容缺失，批改没有启动。请补齐并保存后继续。", "Some manually completed questions still have missing required materials. Grading has not started. Complete and save them before continuing."),
+      description: tx(locale, "手动补全的题目仍有必填内容缺失。请补齐并保存后继续。", "Some manually completed questions still have missing required materials. Complete and save them before continuing."),
       actionLabel: tx(locale, "补全题目资料", "Complete question materials"),
       actionHref: taskHref("/questions"), actionKind: "reselect", tone: "warning", technicalDetails,
     };
@@ -1696,7 +1704,16 @@ function fileErrorDescription(
     return tx(locale, "图片损坏、内容与扩展名不符，或使用了不支持的图片模式。请确认能在本地打开，重新导出为单张 JPG 或 PNG 后上传；不要只修改扩展名。", "The image is damaged, its contents do not match its extension, or its image mode is unsupported. Check that it opens locally and export it as a single JPG or PNG; do not just rename the extension.");
   }
   if (code === "image_pixel_limit_exceeded") {
-    return tx(locale, "图片像素尺寸超过处理上限。请缩小图片尺寸并保留文字清晰度，再上传。", "The image dimensions exceed the processing limit. Reduce its pixel dimensions while keeping the text readable, then upload again.");
+    const pixels = detail?.max_pixels;
+    if (typeof pixels === "number" && Number.isSafeInteger(pixels) && pixels > 0) {
+      const limit = pixels.toLocaleString("en-US");
+      return tx(locale, `图片总像素（宽 × 高）超过 ${limit}。请缩小图片尺寸后重新上传。`, `The image exceeds ${limit} total pixels (width × height). Resize it and upload it again.`);
+    }
+    const side = detail?.max_side;
+    if (typeof side === "number" && Number.isSafeInteger(side) && side > 0) {
+      return tx(locale, `图片最长边超过 ${side} 像素。请将最长边缩至 ${side} 像素以内后重新上传。`, `The longest image edge exceeds ${side} pixels. Resize it to ${side} pixels or less and upload again.`);
+    }
+    return tx(locale, "图片总像素（宽 × 高）或最长边超过处理上限。请缩小图片尺寸后重新上传。", "The total pixel count or longest image edge exceeds the processing limit. Resize the image and upload again.");
   }
   if (code === "source_too_large" || code === "submission_source_too_large") {
     const limit = formatByteLimit(detail?.max_bytes);

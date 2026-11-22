@@ -1157,8 +1157,8 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
         prompts.append([question["q_id"] for question in questions])
         if failure_mode == "exception" and len(prompts) == 1:
             raise RuntimeError("synthetic provider failure")
-        failed_answer = len(prompts) <= failed_attempts
-        text = ("Visible ending of q2" if len(prompts) < 3 else "Visible middle of q2") if failure_mode == "partial" else ""
+        failed_answer = attempt < failed_attempts
+        text = ("Visible ending of q2" if attempt < 2 else "Visible middle of q2") if failure_mode == "partial" else ""
         content = text if failed_answer else "Completed q2 answer"
         if failed_answer and text and text not in fragments:
             fragments.append(text)
@@ -1210,7 +1210,8 @@ async def test_explicit_retry_only_parses_unfinished_questions_and_keeps_saved_i
         current = task_facade.get_task(task_id=task, owner_id=owner)
         await continue_manually(task_id=task, owner_id=owner, job_id=retry_id,
             expected_revision=current["workflow_revision"])
-    assert prompts == [["q2"]] * attempts
+    expected_calls = attempts + (2 * failed_attempts if failure_mode in {"partial", "empty_failed_answer"} else 0)
+    assert prompts == [["q2"]] * expected_calls
     after = task_facade.get_task(task_id=task, owner_id=owner, full=True)
     assert after["status"] == "submissions_ready"
     saved = after["student_data"]["S1"]

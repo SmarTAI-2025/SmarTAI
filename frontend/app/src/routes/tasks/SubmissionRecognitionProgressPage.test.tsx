@@ -31,11 +31,13 @@ const source = (status: SubmissionSourceOutcome["status"]): SubmissionSourceOutc
   job_id: "new-job", attempt: 1, created_at: 1,
 });
 function show() {
-  render(<I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions/progress"]}><Routes>
+  const page = () => <I18nProvider><MemoryRouter initialEntries={["/tasks/T/submissions/progress"]}><Routes>
     <Route path="/tasks/:taskId/submissions/progress" element={<SubmissionRecognitionProgressPage />} />
     <Route path="/tasks/:taskId/submissions" element={<h1>作答校对页面</h1>} />
     <Route path="/tasks/:taskId/submissions/upload" element={<h1>作答上传页面</h1>} />
-  </Routes></MemoryRouter></I18nProvider>);
+  </Routes></MemoryRouter></I18nProvider>;
+  const view = render(page());
+  return () => view.rerender(page());
 }
 beforeEach(() => {
   window.localStorage.setItem("smartai_locale", "zh-CN");
@@ -199,7 +201,7 @@ describe("submission recognition completion", () => {
     retryRecognition.mockRejectedValueOnce(new APIError(409, "Repack and upload", {
       error: { code: "submission_retry_requires_reupload" },
     }));
-    show();
+    const pollAgain = show();
     const retryLabel = locale === "zh-CN" ? "重试失败项" : "Retry failed items";
     fireEvent.click(screen.getByRole("button", { name: retryLabel }));
     expect(await screen.findByText(locale === "zh-CN" ? /剩余失败项需要重新整理文件/ : /The remaining failures require corrected files/)).toBeVisible();
@@ -209,6 +211,10 @@ describe("submission recognition completion", () => {
     expect(screen.queryByRole("button", { name: retryLabel })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: locale === "zh-CN" ? "人工继续处理" : "Continue manually" })).toBeEnabled();
     expect(retryRecognition).toHaveBeenCalledOnce();
+    snapshot = { ...snapshot, last_failed_job_id: "another-job" };
+    pollAgain();
+    fireEvent.click(screen.getByRole("button", { name: retryLabel }));
+    expect(retryRecognition).toHaveBeenLastCalledWith(expect.objectContaining({ jobId: "another-job" }));
   });
   it("keeps pending sibling recovery available instead of inferring failure from the archive error alone", () => {
     snapshot = { ...detail, status: "submissions_paused", last_failed_job_id: "new-job", error: "operation_cancelled",

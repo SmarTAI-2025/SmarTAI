@@ -19,6 +19,7 @@ import { RecognitionActivity, RecognitionRequestStatus } from "@/components/task
 import { QuestionPreparationDiagnostics } from "@/components/tasks/QuestionPreparationDiagnostics";
 import { Button } from "@/components/ui/Button";
 import { RecoverableActionState } from "@/components/ui/RecoverableActionState";
+import { useJobRecoveryError } from "@/hooks/useJobRecoveryError";
 import { useTaskProgress } from "@/hooks/useTaskProgress";
 import { useI18n } from "@/i18n/I18nProvider";
 import type { Locale, MessageKey } from "@/i18n/messages";
@@ -57,13 +58,13 @@ export function ProblemRecognitionProgressPage() {
   const manualPreparation = useManuallyCompleteQuestionPreparation();
   const [openingManual, setOpeningManual] = useState(false);
   const progressQuery = useTaskProgress(taskId);
-  const [retryFailure, setRetryFailure] = useState<unknown>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [acknowledgedJobId, setAcknowledgedJobId] = useState<string | null>(null);
   const [providerChoice, setProviderChoice] = useState<{ taskId: string | undefined; id: string } | null>(null);
   const retrying = useRef(false);
   // The polled snapshot also owns recovery metadata; detail can predate the failure.
   const taskState = progressQuery.data ?? taskQuery.data;
+  const [retryFailure, setRetryFailure] = useJobRecoveryError(taskId, taskState?.last_failed_job_id);
   const status = taskState?.status as TaskStatus | undefined;
   const recognitionProviderId = providerChoice && providerChoice.taskId === taskId ? providerChoice.id : taskState?.question_recognition_provider_id ?? "";
   const enabledExperts = (expertsQuery.data ?? []).filter((expert) => expert.enabled);

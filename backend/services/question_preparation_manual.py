@@ -91,8 +91,9 @@ def _project_interrupted_save(operation):
     pipeline = IncrementalQuestionPreparation(operation=context, sources=sources, provider=None,
         provider_id=operation.payload["recognition_provider_id"], reporter=None, read_source=None,
         score_policy=QuestionScorePolicy.model_validate(operation.payload["score_policy"]), ocr_only=True)
-    pipeline.units, _, _ = read_incremental_preparation_units(checkpoint=operation.checkpoint,
+    restored = read_incremental_preparation_units(checkpoint=operation.checkpoint,
         artifact_refs=operation.artifact_refs, **pipeline.context)
+    pipeline.units, pipeline.incomplete_units = restored.units, restored.incomplete
     return pipeline.project()
 
 
