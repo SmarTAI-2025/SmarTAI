@@ -281,7 +281,7 @@ class ImagePreparedMetadata(EvidenceModel):
     def exact_transforms(self):
         NormalizedRegionV1(**dict(zip(("x0", "y0", "x1", "y1"), self.region)))
         raw_w, raw_h, orientation = self.source_width, self.source_height, self.exif_orientation
-        if raw_w * raw_h > 16_000_000:
+        if raw_w * raw_h > 30_000_000:
             raise ValueError("image source pixel budget exceeded")
         expected_size = (raw_h, raw_w) if orientation >= 5 else (raw_w, raw_h)
         if (self.oriented_width, self.oriented_height) != expected_size:
