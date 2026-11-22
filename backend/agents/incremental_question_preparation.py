@@ -147,16 +147,17 @@ def _stem_repair_request(text, saved):
     targets = {normalize_question_number(row.get("number")) for row in saved.values() if _incomplete_stem(row)}
     headings = question_headings(text, numbered=True)
     printed = [normalize_question_number(match.group("number")) for match in headings]
+    old_counts, printed_counts = Counter(labels), Counter(printed)
+    verified = {label for label in old_counts if label and label not in targets
+                and old_counts[label] == 1 and printed_counts[label] <= 1}
     reason = _INCOMPLETE_STEM_FEEDBACK
-    if not targets or "" in targets or any(labels.count(label) != 1 for label in targets):
-        return text, reason, set()
+    if not targets or "" in targets or any(old_counts[label] != 1 for label in targets):
+        if verified:
+            reason += " Omit completed question(s): " + ", ".join(sorted(verified))
+        return text, reason, verified
     reason += " Return only the unfinished question(s): " + ", ".join(sorted(targets))
-    # A completed number remains authoritative on this targeted reread unless
-    # it is shared by distinct exercises in the source or the saved results.
-    verified = {label for label in labels if label and label not in targets
-                and labels.count(label) == 1 and printed.count(label) <= 1}
     # Only slice the source if every question maps one-to-one to its printed heading.
-    if Counter(printed) != Counter(labels) or len(set(labels)) != len(labels) or _source_section_labels(text):
+    if printed_counts != old_counts or len(old_counts) != len(labels) or _source_section_labels(text):
         return text, reason, verified
     sections = [text[:headings[0].start()]]
     for index, heading in enumerate(headings):
@@ -170,7 +171,7 @@ def _stem_repair_request(text, saved):
     return "\n".join(sections).strip(), reason, verified
 
 
-def _merge_extraction_retry(previous, fresh, *, full_response, source_text):
+def _merge_extraction_retry(previous, fresh, *, full_response, source_text, verified_numbers=()):
     """Replace repaired fragments, keeping verified siblings and omitted evidence."""
     if not previous:
         return fresh
@@ -215,6 +216,8 @@ def _merge_extraction_retry(previous, fresh, *, full_response, source_text):
     for index in sorted(range(len(result)), key=lambda i: _incomplete_stem(result[i])):
         old = result[index]
         label = number(old)
+        if label in verified_numbers:
+            continue
         matches = [item for item in incoming if item.get("stem") == old.get("stem")
                    and compatible(label, number(item))]
         old_stem = str(old.get("stem") or "").strip()
@@ -1126,11 +1129,11 @@ class IncrementalQuestionPreparation:
                 except PartialQuestionExtractionError as exc:
                     fresh, error = exc.problems, exc
                 incoming_counts = Counter(normalize_question_number(item.get("number")) for item in fresh.values())
+                verified = {label for label in verified if scoped_labels is not None or incoming_counts[label] <= 1}
                 items = []
                 for item in fresh.values():
                     label = normalize_question_number(item.get("number"))
-                    if ((label in verified and incoming_counts[label] == 1)
-                            or (scoped_labels is not None and label not in scoped_labels)):
+                    if label in verified or (scoped_labels is not None and (label not in scoped_labels or incoming_counts[label] != 1)):
                         continue
                     row = deepcopy(item)
                     if row.pop("source_incomplete", False) or complete is False or not str(row.get("stem") or "").strip():
@@ -1144,7 +1147,8 @@ class IncrementalQuestionPreparation:
                         issue["details"] = {"reason": "conflicting_printed_formula", "confidence_scope": "question"}
                         row.setdefault("preparation_issues", []).append(issue)
                     items.append(row)
-                saved = _merge_extraction_retry(saved, _rows(items), full_response=error is None, source_text=text)
+                saved = _merge_extraction_retry(saved, _rows(items), full_response=error is None,
+                                               source_text=text, verified_numbers=verified)
                 actual = {normalize_question_number(row.get(field))
                           for row in saved.values() if str(row.get("stem") or "").strip()
                           for field in ("number", "source_display_number")}

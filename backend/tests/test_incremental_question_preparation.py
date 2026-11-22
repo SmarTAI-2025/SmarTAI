@@ -149,13 +149,15 @@ async def test_omitting_a_fragment_during_repair_keeps_it_and_the_verified_sibli
 
 
 @pytest.mark.asyncio
-async def test_short_unlabelled_fragment_cannot_claim_a_verified_siblings_reply(monkeypatch):
+@pytest.mark.parametrize("reworded", [False, True])
+async def test_short_unlabelled_fragment_cannot_claim_a_verified_siblings_reply(monkeypatch, reworded):
     _, _, _, pipeline = await setup(monkeypatch)
     fragment = {**row("", stem="x"), "source_incomplete": True}
     sibling = row(2, stem="Solve x + 1 = 0.", criterion="Teacher rule.", reference_answer="x = -1.")
     fixed = row(1, stem="Find the derivative of x.", criterion="Rule.", reference_answer="1.")
+    repeated = {**sibling, "stem": "Find x such that x plus one is zero."} if reworded else sibling
     extract = AsyncMock(side_effect=[
-        inc._rows([fragment, sibling]), inc._rows([sibling]), inc._rows([fixed, sibling]),
+        inc._rows([fragment, sibling]), inc._rows([repeated]), inc._rows([fixed, repeated]),
     ])
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
     rows = await pipeline.run()
@@ -647,13 +649,15 @@ async def test_source_gap_without_proven_boundaries_saves_text_but_cannot_genera
 
 
 @pytest.mark.asyncio
-async def test_partial_stem_reread_only_requests_the_unfinished_question(monkeypatch):
+@pytest.mark.parametrize("ambiguous_reply", [False, True])
+async def test_partial_stem_reread_only_requests_the_unfinished_question(monkeypatch, ambiguous_reply):
     text = "Shared conditions.\nQuestion 1: Compute the limit and explain why.\nQuestion 2: Solve x+1=0."
     _, _, _, pipeline = await setup(monkeypatch, text=text)
     sibling = row(2, stem="Solve x+1=0.", criterion="Original rule.")
     fixed = row(1, stem="Compute the limit and explain why.")
     extract = AsyncMock(side_effect=[
         inc._rows([{**row(1, stem="Compute the limit"), "source_incomplete": True}, sibling]),
+        *([inc._rows([fixed, row(1, stem="Different proposed completion.")])] if ambiguous_reply else []),
         inc._rows([fixed, row(2, stem="Find the x that makes x+1 equal zero.")]),
     ])
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
@@ -662,6 +666,7 @@ async def test_partial_stem_reread_only_requests_the_unfinished_question(monkeyp
     rows = await pipeline._extract_chunk(key, draft, text, None, "", ("1", "2"), ())
     assert [(r["number"], r["stem"]) for r in rows.values()] == [("1", fixed["stem"]), ("2", sibling["stem"])]
     assert rows["q2"]["criterion"] == "Original rule."
+    assert extract.await_count == (3 if ambiguous_reply else 2)
     prompt = extract.await_args_list[1]
     assert "Shared conditions." in prompt.args[0] and "Question 1:" in prompt.args[0]
     assert "Question 2:" not in prompt.args[0]
