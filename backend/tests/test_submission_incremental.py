@@ -534,7 +534,8 @@ async def test_pdf_page_header_does_not_hide_the_first_answer_after_a_gap(monkey
         await kwargs["on_pages"]([{"page_number": 2, "text": read_page}])
         coverage = {"processed_pages": [2], "failed_pages": [1], "unprocessed_pages": [], "total_pages": 2}
         return SimpleNamespace(text=read_page, recognition={
-            "error_code": "image_recognition_unconfirmed", "coverage": coverage, "page_diagnostics": coverage,
+            "error_code": "image_recognition_unconfirmed", "coverage": coverage,
+            "page_diagnostics": {**coverage, "page_errors": [{"page": 1, "error_code": "image_recognition_unconfirmed"}]},
         })
 
     async def invoke(messages):
