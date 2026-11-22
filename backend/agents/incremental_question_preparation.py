@@ -140,6 +140,36 @@ def _incomplete_stem(row):
 _INCOMPLETE_STEM_FEEDBACK = "The previous extraction left a question incomplete. Check its opening, conditions and ending."
 
 
+def _stem_repair_request(text, saved):
+    from backend.services.source_question_units import question_headings
+
+    labels = [normalize_question_number(row.get("number")) for row in saved.values()]
+    targets = {normalize_question_number(row.get("number")) for row in saved.values() if _incomplete_stem(row)}
+    headings = question_headings(text, numbered=True)
+    printed = [normalize_question_number(match.group("number")) for match in headings]
+    reason = _INCOMPLETE_STEM_FEEDBACK
+    if not targets or "" in targets or any(labels.count(label) != 1 for label in targets):
+        return text, reason, set()
+    reason += " Return only the unfinished question(s): " + ", ".join(sorted(targets))
+    # A completed number remains authoritative on this targeted reread unless
+    # it is shared by distinct exercises in the source or the saved results.
+    verified = {label for label in labels if label and label not in targets
+                and labels.count(label) == 1 and printed.count(label) <= 1}
+    # Only slice the source if every question maps one-to-one to its printed heading.
+    if Counter(printed) != Counter(labels) or len(set(labels)) != len(labels) or _source_section_labels(text):
+        return text, reason, verified
+    sections = [text[:headings[0].start()]]
+    for index, heading in enumerate(headings):
+        if printed[index] in targets:
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+            body = text[heading.start("title"):end]
+            if re.search(r"上[一道]*题|同上|第\s*\d+\s*题|\b(?:above|below|previous|preceding)\b"
+                         r"|\b(?:question|problem|exercise)\s+\d+", body, re.I):
+                return text, reason, verified
+            sections.append(text[heading.start():end])
+    return "\n".join(sections).strip(), reason, verified
+
+
 def _merge_extraction_retry(previous, fresh, *, full_response, source_text):
     """Replace repaired fragments, keeping verified siblings and omitted evidence."""
     if not previous:
@@ -1082,16 +1112,26 @@ class IncrementalQuestionPreparation:
             repair_reason = _INCOMPLETE_STEM_FEEDBACK
         with llm_attempt_budget():
             for attempt in range(3):
+                request_text, feedback, verified = text, repair_reason, set()
+                if repair_reason == _INCOMPLETE_STEM_FEEDBACK:
+                    request_text, feedback, verified = _stem_repair_request(text, saved)
+                scoped_labels = {normalize_question_number(row.get("number")) for row in saved.values()
+                                 if _incomplete_stem(row)} if request_text != text else None
                 error = None
                 try:
-                    fresh = await _extract_problems_call(text, self.provider, reporter=self.reporter,
+                    fresh = await _extract_problems_call(request_text, self.provider, reporter=self.reporter,
                         structure_mode=draft.structure_mode, extraction_hint=draft.extraction_hint,
                         manage_progress_lifecycle=False, allow_empty=True, partial_source=True,
-                        source_context=source_context, repair_reason=repair_reason)
+                        source_context=source_context, repair_reason=feedback)
                 except PartialQuestionExtractionError as exc:
                     fresh, error = exc.problems, exc
+                incoming_counts = Counter(normalize_question_number(item.get("number")) for item in fresh.values())
                 items = []
                 for item in fresh.values():
+                    label = normalize_question_number(item.get("number"))
+                    if ((label in verified and incoming_counts[label] == 1)
+                            or (scoped_labels is not None and label not in scoped_labels)):
+                        continue
                     row = deepcopy(item)
                     if row.pop("source_incomplete", False) or complete is False or not str(row.get("stem") or "").strip():
                         issue = _issue("q1", "stem", "recognition_partial", "blocking", [draft.source_token])

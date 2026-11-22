@@ -644,3 +644,38 @@ async def test_source_gap_without_proven_boundaries_saves_text_but_cannot_genera
     assert any(issue["code"] == "recognition_partial" for issue in rows["q1"]["preparation_issues"])
     assert not rows["q1"].get("reference_answer") and not rows["q1"].get("criterion")
     generate.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_partial_stem_reread_only_requests_the_unfinished_question(monkeypatch):
+    text = "Shared conditions.\nQuestion 1: Compute the limit and explain why.\nQuestion 2: Solve x+1=0."
+    _, _, _, pipeline = await setup(monkeypatch, text=text)
+    sibling = row(2, stem="Solve x+1=0.", criterion="Original rule.")
+    fixed = row(1, stem="Compute the limit and explain why.")
+    extract = AsyncMock(side_effect=[
+        inc._rows([{**row(1, stem="Compute the limit"), "source_incomplete": True}, sibling]),
+        inc._rows([fixed, row(2, stem="Find the x that makes x+1 equal zero.")]),
+    ])
+    monkeypatch.setattr(inc, "_extract_problems_call", extract)
+    draft = pipeline.sources[0][0]
+    key = pipeline._chunk_key(draft, text, 0, "")
+    rows = await pipeline._extract_chunk(key, draft, text, None, "", ("1", "2"), ())
+    assert [(r["number"], r["stem"]) for r in rows.values()] == [("1", fixed["stem"]), ("2", sibling["stem"])]
+    assert rows["q2"]["criterion"] == "Original rule."
+    prompt = extract.await_args_list[1]
+    assert "Shared conditions." in prompt.args[0] and "Question 1:" in prompt.args[0]
+    assert "Question 2:" not in prompt.args[0]
+    assert "1" in prompt.kwargs["repair_reason"]
+
+
+
+@pytest.mark.parametrize("source,excluded", [
+    ("Exercises in prose without unambiguous headings.", {"2"}),
+    ("Question 1: First.\nQuestion 2: Algebra.\nQuestion 2: Geometry.", set()),
+    ("Question 1: Use the result of question 2 below.\nQuestion 2: Algebra.", {"2"}),
+])
+def test_stem_repair_keeps_ambiguous_source_and_respects_repeated_labels(source, excluded):
+    fragment = row(1)
+    fragment["preparation_issues"] = [inc._issue("q1", "stem", "recognition_partial", "blocking", [])]
+    text, reason, verified = inc._stem_repair_request(source, inc._rows([fragment, row(2)]))
+    assert text == source and "1" in reason and verified == excluded
