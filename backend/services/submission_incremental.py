@@ -10,7 +10,7 @@ from dataclasses import replace
 
 from backend.services.programming_submission_mapping import native_source
 from backend.services.question_structure import _PAREN_LABEL_RE, _PURE_LABEL_RE, _is_subpart_marker
-from backend.services.source_question_units import QUESTION_HEADING, question_headings, source_question_units
+from backend.services.source_question_units import NUMBERED_QUESTION_HEADING, QUESTION_HEADING, question_headings, source_question_units
 
 
 def merge_parse_repair(previous, current, question_ids, *, problems):
@@ -298,6 +298,7 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
     failed = set(failed_pages)
     aliases = number_aliases or {}
     text, offsets, body_starts, ends, body_ends, previous = [], [], [], [], [], None
+    heading_numbers = {}
     offset = 0
     for page in pages:
         if previous is not None:
@@ -309,6 +310,13 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
         after_header = _without_page_number_header(raw, page) if page - 1 in failed else raw
         header_length = len(normalized) - len(_page_gap_text(after_header)) if after_header != raw else 0
         body_starts.append(offset + header_length)
+        if page - 1 in failed and after_header.strip():
+            first_line = _page_gap_text(after_header.strip().splitlines()[0])
+            heading = NUMBERED_QUESTION_HEADING.fullmatch(first_line)
+            if heading:
+                base = body_starts[-1]
+                heading_numbers[page] = (unicodedata.normalize("NFKC", heading["number"]),
+                                         base + heading.start("number"), base + heading.end("number"))
         body, _, last_line = raw.rpartition("\n")
         # Keep the original OCR for locating answers. Only an independent
         # trailing marker with the actual page number can shorten the edge.
@@ -321,7 +329,7 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
     source = "".join(text)
     edges = {}
 
-    def locate(content):
+    def locate(content, q_id):
         if not content:
             return None
         match = None
@@ -333,7 +341,9 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
             # Keep matches that include the marker plus actual answer text.
             in_header = end <= body_starts[page_index]
             in_footer = body_ends[page_index] <= start and end <= ends[page_index]
-            if not (in_header or in_footer):
+            heading = heading_numbers.get(pages[page_index])
+            in_own_label = heading and heading[0] in aliases.get(q_id, ()) and heading[1] <= start and end <= heading[2]
+            if not (in_header or in_footer or in_own_label):
                 if match is not None:
                     return None
                 match = start, end
@@ -353,13 +363,14 @@ def page_gap_review_flags(read_pages, failed_pages, leading_headings, answers, n
         lines = [_page_gap_text(line) for line in (answer.get("content") or "").splitlines() if line.strip()]
         if not lines:
             continue
-        span = locate(" ".join(lines))
+        q_id = answer["q_id"]
+        span = locate(" ".join(lines), q_id)
         if span:
             spans = (span,)
         elif len(lines) > 1:
             # The structured answer may join fragments on either side of a
             # failed page. Locate both ends without joining OCR across the gap.
-            start_span, end_span = locate(lines[0]), locate(lines[-1])
+            start_span, end_span = locate(lines[0], q_id), locate(lines[-1], q_id)
             if not (start_span and end_span and start_span[1] <= end_span[0]):
                 continue
             spans = (start_span, end_span)

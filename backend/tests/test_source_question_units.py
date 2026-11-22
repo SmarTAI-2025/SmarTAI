@@ -277,3 +277,10 @@ def test_a_number_or_a_different_questions_heading_does_not_open_a_matched_answe
     answers = [{"q_id": "q2", "content": "The proof resumes here."}]
     for prefix in ("2", "1."):
         assert page_gap_review_flags({2: f"{prefix}\nThe proof resumes here."}, [1], {}, answers, {"q2": ["2"]}) == {}
+
+
+def test_numbered_gap_opening_excludes_only_its_own_heading_number():
+    from backend.services.submission_incremental import page_gap_review_flags
+
+    for page, alias in [("2. 2 and 2", "2"), ("2. 2", "3"), ("2\n2", "2")]:
+        assert page_gap_review_flags({2: page}, [1], {}, [{"q_id": "q", "content": "2"}], {"q": [alias]}) == {}

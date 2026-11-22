@@ -517,7 +517,7 @@ async def test_pdf_page_gap_uses_the_positions_of_matched_answers(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("page_header,first_answer,first_label", [
     ("", "The proof continues here.", "2. "), ("Page 2\n", "The proof continues here.", "2. "),
-    ("Page 2\n", "2", ""),
+    ("Page 2\n", "2", ""), ("", "2", "2. "), ("Page 2\n", "2", "2. "),
 ])
 async def test_pdf_page_header_does_not_hide_the_first_answer_after_a_gap(monkeypatch, page_header, first_answer, first_label):
     from backend.tests.test_recognition_agent import pdf
