@@ -115,7 +115,16 @@ async def test_rate_wait_status_save_does_not_abort_retry(route, outcome, respon
 @pytest.mark.parametrize("route", ROUTES)
 @pytest.mark.parametrize("stage", ["queued", "responding"])
 async def test_status_save_before_request_has_its_own_deadline(route, stage, scheduler, monkeypatch):
-    monkeypatch.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
+    # Shorten only the advisory save. Required operations (including the
+    # cancellation check on a worker thread) retain their real local deadline.
+    async def local_step(awaitable, *, best_effort=False):
+        if not best_effort:
+            return await request_timeouts.provider_local_step(awaitable)
+        with monkeypatch.context() as scoped:
+            scoped.setattr(request_timeouts, "_LOCAL_STEP_SECONDS", .02)
+            return await request_timeouts.provider_local_step(awaitable, best_effort=True)
+
+    monkeypatch.setattr(providers, "provider_local_step", local_step)
     # Advisory persistence has its own allowance, even if the configured
     # model-response budget is shorter. No model call has started yet.
     monkeypatch.setattr(settings, "llm_timeout", .01)
