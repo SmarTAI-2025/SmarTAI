@@ -123,6 +123,7 @@ def _patch_skill_returning(monkeypatch, results_by_provider: dict[str, ExpertRes
                 confidence=er.confidence,
                 comment=er.comment,
                 error_kind=er.error_kind,
+                provider_failure=er.provider_failure,
             )
 
     import backend.agents.multi_expert as me
@@ -748,6 +749,21 @@ async def test_non_transient_failure_is_not_retried(monkeypatch):
     assert calls["n"] == 2  # exactly one pass, no retry
     assert correction.synthesis_method == "all_failed"
     assert correction.confidence == 0.0
+
+
+@pytest.mark.asyncio
+async def test_scoring_evidence_failure_is_reported_without_treating_it_as_a_score(monkeypatch):
+    from backend.models import ProviderFailure
+    provider = _FakeProvider("openai:test")
+    failed = _expert_result(provider.provider_id, 0.0, 0.0, "private details")
+    failed.error_kind = "parse_failed"
+    failed.provider_failure = ProviderFailure(code="grading_evidence_invalid")
+    _patch_skill_returning(monkeypatch, {provider.provider_id: failed})
+    correction = await _grade_single_answer(
+        problem=_problem(), answer=_answer(), student_id="S1", registry=_FakeRegistry([provider]),
+    )
+    assert correction.synthesis_method == "all_failed" and not correction.steps
+    assert "评分依据未通过校验" in correction.comment and "private" not in correction.comment
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,7 @@ import unicodedata
 from collections import Counter
 from typing import Literal
 
+from backend.recognition.quality import has_unreadable_marker
 from backend.services.source_question_units import question_headings
 
 
@@ -43,6 +44,33 @@ def question_number_candidates(number, problems):
     if exact and (not parts or re.search(r"\b(?:section|sec|chapter|chap|ch)\.?\s*\d|[章节]", label)):
         return exact
     return [q_id for q_id, problem in problems.items() if parts and _parts(problem.get("number")) == parts]
+
+
+def blank_questions_needing_source_review(text, problems, blank_ids, *, low_confidence_ocr):
+    """Locate conflicting or unreadable source evidence without assigning student work."""
+    expected = {q_id: _parts(problem.get("number")) for q_id, problem in problems.items()}
+    known = set(expected.values())
+    unexpected = set()
+    headings = question_headings(text, qualified=True)
+    doubtful = set()
+    has_unclear = low_confidence_ocr and has_unreadable_marker(text)
+    if has_unclear and has_unreadable_marker(text[:headings[0].start() if headings else len(text)]):
+        doubtful.update(blank_ids)
+    for i, heading in enumerate(headings):
+        parts = _parts(heading.group("number"))
+        end = headings[i + 1].start() if i + 1 < len(headings) else len(text)
+        body = heading.group("title") + " " + text[heading.end():end]
+        if has_unclear and has_unreadable_marker(body):
+            matches = question_number_candidates(heading.group("number"), problems)
+            doubtful.update(blank_ids.intersection(matches) if len(matches) == 1 else blank_ids)
+        if len(parts) < 3 or parts in known:
+            continue
+        if re.search(r"\w", re.sub(r"^\s*(?:proof|answer|solution|证明|解答)\s*[:：.]*", "", body, flags=re.I)):
+            unexpected.add(parts)
+    return doubtful | {q_id for q_id in blank_ids if (parts := expected.get(q_id)) and any(
+        parts[:-1] == seen[:-1] and len(parts[-1]) == len(seen[-1])
+        and sum(a != b for a, b in zip(parts[-1], seen[-1])) == 1 for seen in unexpected
+    )}
 
 
 def question_number_aliases(problems):

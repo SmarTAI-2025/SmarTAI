@@ -15,7 +15,8 @@ from backend.tests.test_question_preparation_recovery import _claim, _RecoveryRe
 
 
 @pytest.mark.asyncio
-async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(monkeypatch):
+@pytest.mark.parametrize("error_code", ["provider_response_invalid", "question_rubric_review_failed", "question_materials_not_generated"])
+async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(monkeypatch, error_code):
     owner, task, operation, pipeline = await setup(monkeypatch)
     disputed = row("1.10")
     # Actual stored pre-fix issue shape, without any source/student content.
@@ -26,11 +27,19 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
     monkeypatch.setattr(inc, "_extract_problems_call", extract)
     calls = []
     retrying = False
+    missing_both = error_code == "question_materials_not_generated"
 
     async def complete(data, targets, *args, **kwargs):
         number = data["q1"]["number"]
         calls.append((number, [target["target"] for target in targets]))
+        if not retrying and number == "1.8" and missing_both:
+            return []
         if not retrying and number == "1.8" and [target["target"] for target in targets] == ["criterion"]:
+            if error_code == "question_rubric_review_failed":
+                kwargs["review_feedback"]["q1:criterion"] = {
+                    "fields": [], "findings": [{"part": "(a)", "reason": "Two steps reward the same result."}],
+                }
+                return []
             # A provider protocol error still uses the explicit retry view.
             # Exhausted but usable per-field drafts enter question review directly.
             raise ValidationError("The provider returned an invalid response envelope.", code="provider_response_invalid")
@@ -40,14 +49,14 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
     monkeypatch.setattr(inc, "generate_missing_question_materials", complete)
     with pytest.raises(ValidationError) as failure:
         await pipeline.run()
-    assert failure.value.code == "provider_response_invalid"
+    assert failure.value.code == error_code
     saved, rows = persisted(owner, operation)
-    assert saved.checkpoint["preparation_counts"] == dict(questions=3, stems=3, reference_answers=3, rubrics=2)
+    assert saved.checkpoint["preparation_counts"] == dict(questions=3, stems=3, reference_answers=2 if missing_both else 3, rubrics=2)
     progress = public_progress((await pipeline.reporter.snapshot()).model_dump(mode="json"), terminal=True)
     assert progress["total_questions"] == 3
     assert len(progress["completed_question_ids"]) == 2
     review = {r["number"]: r["issues"] for r in progress["preparation_review"]}
-    assert [i["field"] for i in review["1.8"]] == ["rubric"]
+    assert [i["field"] for i in review["1.8"]] == ["rubric"]  # The progress panel lists blocking fields.
     assert "1.10" not in review  # Advisory formula review stays on the review page.
 
     task_facade._fail_operation(task, owner, operation.operation_id, operation.attempt,
@@ -65,7 +74,7 @@ async def test_three_questions_first_failed_rubric_then_retry_uses_saved_fields(
         reporter=ProgressReporter(next_op.operation_id), score_policy=inputs["score_policy"],
         read_source=pipeline.read_source)
     await restored.run()
-    assert calls == [("1.8", ["criterion"])]
+    assert calls == [("1.8", ["reference_answer", "criterion"] if missing_both else ["criterion"])]
     extract.assert_awaited_once()
     progress = await restored.reporter.snapshot()
     assert progress.total_questions == len(progress.completed_question_ids) == 3

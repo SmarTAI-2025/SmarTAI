@@ -90,6 +90,10 @@ export function incompleteSubmissionLabel(answer: StudentAnswerInfo, locale: str
     return [`${description} ${pages.length === 1 ? "page" : "pages"} ${pages.join(", ")}`];
   });
   const failure = pageReasons.join(zh ? "，" : ". ");
+  if (!failure && !answer.content?.trim() && answer.flag?.includes("recognition_incomplete")
+      && answer.flag.some(flag => flag.startsWith("recognition_invalid_fields:") && flag.split(":")[1].split(",").includes("content"))) {
+    return zh ? "暂未确认是否空白，请对照原件补录作答或确认空白。" : "Check the original and enter the answer or confirm it is blank.";
+  }
   const issue = answer.content?.trim()
     ? (zh ? "作答识别不完整" : "Answer transcription is incomplete")
     : (zh ? "作答内容缺失" : "Answer content is missing");
@@ -132,6 +136,7 @@ export function reviewProviderFailureLabel(code: unknown, status: unknown, local
     provider_unreachable: ["模型连接失败或中断", "The model connection failed or was interrupted"],
     provider_rate_limited: ["模型请求受到限流", "The model request was rate limited"],
     provider_response_invalid: ["模型返回的结果格式无法使用", "The model response format could not be used"],
+    grading_evidence_invalid: ["模型的评分依据未通过校验", "The model’s scoring evidence failed validation"],
     recognition_response_invalid: ["识别结果未通过校验", "The recognition response failed validation"],
     provider_recitation_blocked: ["模型因原文复述限制停止输出", "The model stopped under its recitation policy"],
     provider_content_blocked: ["模型因内容策略停止输出", "The model stopped under its content policy"],

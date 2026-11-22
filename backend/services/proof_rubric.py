@@ -79,7 +79,12 @@ is fallible: verify its mathematical implications and domains against the questi
 copying a faulty formula or extra requirement. No student answers are supplied.
 Fund concrete mathematical achievements in the reference strategy and its minor variants.
 Each criterion must say what is established and what evidence suffices, in concise teacher-facing
-language. Preserve hypotheses, quantifiers, required methods and all requested conclusions.
+language. For a result-only question, a single award may point to the adopted answer for
+that part instead of repeating its formula. Resolve it by the source label or supplied answer
+references, and verify the result, domain and requested precision against the question. Do not
+require a duplicate formula or an unrequested derivation. A missing, ambiguous or incorrect
+answer, or a pointer that omits required reasoning, cannot justify the award.
+Preserve hypotheses, quantifiers, required methods and all requested conclusions.
 Cover each part's own requirements; a sibling part's result cannot replace them. Do not merely
 repeat the full question or use generic 'some progress', 'half complete' or 'local error' tiers.
 A sound step may cover related achievements. Assess whether its actual criterion gives fair
@@ -128,7 +133,7 @@ async def audit_proof_steps(provider, task, rules):
             "mathematical obligations and avoid repeating credit already awarded elsewhere. "
             "Return JSON. Schema: " + json.dumps(ProofRubricAudit.model_json_schema())),
         user_prompt=json.dumps({"source": task, "proposal": [
-            {"part_id": p.id, "budget": p.total_pts,
+            {"part_id": p.id, "budget": p.total_pts, "answer_refs": list(p.answer_refs),
              "steps": [s.model_dump(mode="json") for s in p.steps]} for p in rules.parts
         ]}, ensure_ascii=False),
         output_model=ProofRubricAudit, validate_output=validate,
@@ -247,7 +252,8 @@ async def prepare_proof_steps(provider, question, rules, *, reference_answer="",
         "question": question,
         "reference_answer": reference_answer or "",
         "language": language,
-        "parts": [{"part_id": p.id, "source_part": p.stem or question, "budget": p.total_pts}
+        "answer_segments": [segment.model_dump(mode="json") for segment in rules.answer_segments],
+        "parts": [{"part_id": p.id, "label": p.label, "source_part": p.stem or question, "budget": p.total_pts}
                   for p in rules.parts],
     }
     try:

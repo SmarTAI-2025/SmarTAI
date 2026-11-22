@@ -27,7 +27,7 @@ from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
 from backend.services.recognition_timeouts import apply_source_timeout_profile
-from backend.services.question_source_batches import read_question_pdf_batches
+from backend.services.question_source_batches import read_question_pdf_batches, saved_page_evidence
 from backend.services.stage_provider_routing import (
     StageProviderRoute, build_owner_baidu_ocr_skill, stage_provider_configuration_fingerprint,
 )
@@ -218,13 +218,17 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # Broad page hints are read in full; the structure extractor still applies
     # the teacher's target IDs. Never silently truncate an explicit page range.
     locate_targets = bool(scope.targets) and len(scope.pages) <= 24
+    policy = RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope)
+    if purpose == "submissions" and media_type == "application/pdf":
+        policy.version = "submission-pdf-native-raster-v1"
+    elif formula_panel_scan and (locate_targets or total_pages == 1):
+        policy.version = "printed-formula-panels-v2"
     request = RecognitionReadRequestV1(
         source=source, purpose=purpose, scope="targets" if locate_targets else "pages" if scope.pages else "document",
         targets=scope.targets if locate_targets else [], pages=[] if locate_targets else scope.pages,
         page_hints={target: scope.pages for target in scope.targets} if locate_targets and scope.pages else {},
         search_start_page=scope.search_start_page, search_window_pages=scope.search_window_pages,
-        policy=RecognitionPolicyV1(allow_native_fallback=allow_vision, execution_scope=execution_scope,
-            **({"version": "printed-formula-panels-v2"} if formula_panel_scan and (locate_targets or total_pages == 1) else {})),
+        policy=policy,
     )
     async with recognition_engine(owner_id=owner_id, route=route if allow_vision else None, registry=registry,
                                   programming_questions=programming_questions) as engine:
@@ -295,10 +299,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # an apparently unanswered question in the structure parser.
     coverage = document.coverage
     if on_pages is not None:
-        ready = [dict(page_number=page.page_number,
-                    **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
-            text="\n".join(span.final_text for span in page.spans if span.final_text))
-            for page in document.pages if page.page_number in coverage.processed_pages]
+        ready = [saved_page_evidence(page) for page in document.pages if page.page_number in coverage.processed_pages]
         if ready:
             await on_pages(ready)
     incomplete = bool(coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets)

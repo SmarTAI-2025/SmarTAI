@@ -19,6 +19,14 @@ it("shows the affected student, question and specific failure before entering re
   expect(screen.getByText(/进入复核可查看全部/)).toBeVisible();
 });
 
+it("distinguishes rejected scoring evidence from a malformed response", () => {
+  const row = { student_id: "s1", q_id: "q1", score: null, expert_results: [{ provider: "Luna", error_kind: "parse_failed",
+    provider_failure: { code: "grading_evidence_invalid" } }] };
+  render(<GradingFailureDiagnostics locale="zh-CN" progress={{ grading_review: [row] } as unknown as JobProgress} />);
+  expect(screen.getByText(/Luna：模型的评分依据未通过校验/)).toHaveClass("text-red-700");
+  expect(screen.queryByText(/格式无法/)).not.toBeInTheDocument();
+});
+
 it("filters advisory notes and rows before limiting to twenty required responses", () => {
   const warning = { student_id: "advisory", q_id: "q0", score: 8, max_score: 10, confidence: .3,
     expert_results: [], review_reasons: ["low_confidence"], requires_human_review: true } as unknown as Correction;

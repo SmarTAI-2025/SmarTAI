@@ -25,6 +25,21 @@ function source(overrides: Partial<SubmissionSourceOutcome>): SubmissionSourceOu
 }
 
 describe("submission source reason copy", () => {
+  it.each(["zh-CN", "en-US"] as const)("explains saved partial transcriptions on both failure cards (%s)", locale => {
+    const pages = { total_pages: 2, processed_pages: [1, 2], failed_pages: [], unprocessed_pages: [], page_errors: [] };
+    const item = source({ page_diagnostics: pages, answer_diagnostics: [
+      { q_id: "q1", number: "1.1.5", has_content: true, flag: ["unclear_text", "recognition_matching_advisory"] },
+      { q_id: "q2", number: "1.1.7", has_content: true, flag: ["unclear_text"] },
+      { q_id: "q3", number: "1.1.9", has_content: true, flag: ["unclear_text", "recognition_incomplete"] },
+    ] });
+    const copy = getSubmissionSourceReasonCopy(item, locale);
+    expect(copy.description).toContain("1.1.5, 1.1.9");
+    expect(copy.description).not.toContain("1.1.7");
+    expect(classifyRecoverableError("submission_parse_failed", { locale, jobId: item.job_id, submissionSources: [item] }).description).toBe(copy.description);
+    expect(classifyRecoverableError("submission_parse_failed", { locale, jobId: "other", submissionSources: [item] }).description).not.toContain("1.1.5");
+    expect(getSubmissionSourceReasonCopy({ ...item, page_diagnostics: { ...pages, failed_pages: [2] } }, locale).description).not.toContain("1.1.5");
+  });
+
   it.each([
     ["pdf_render_limit_exceeded", "PDF 页面转图超出限制", "PDF page rendering exceeded its limit"],
     ["pdf_structure_limit_exceeded", "PDF 页面结构无法完整读取", "The PDF page structure could not be read"],
@@ -390,4 +405,31 @@ it.each(["zh-CN", "en-US"] as const)("explains retained archives on infrastructu
   const copy = getSubmissionSourceReasonCopy(source({ reason_code: "submission_archive_processing_unavailable", failure_phase: "archive", retryable: true }), locale);
   expect(copy.description).toContain(locale === "zh-CN" ? "原文件已保留" : "original is preserved");
   expect(copy.nextStep).toContain(locale === "zh-CN" ? "稍后重试" : "Retry later");
+});
+
+
+it("uses the saved question diagnostics for incomplete content without reclassifying unrelated files", () => {
+  const item = source({ job_id: "current", reason_code: "submission_parse_invalid",
+    answer_diagnostics: [{ q_id: "q3", number: "1.1.20", has_content: true,
+      flag: ["recognition_incomplete", "recognition_invalid_fields:content"] }] });
+  const copy = getSubmissionSourceReasonCopy(item, "zh-CN");
+  expect(copy.title).toBe("部分题目的作答内容未完整识别");
+  expect(copy.description).toContain("1.1.20");
+  for (const locale of ["zh-CN", "en-US"] as const) {
+    expect(classifyRecoverableError("submission_parse_invalid", { locale, jobId: "current", submissionSources: [item] }))
+      .toMatchObject({ title: getSubmissionSourceReasonCopy(item, locale).title, actionKind: "retry" });
+  }
+  expect(classifyRecoverableError("submission_parse_invalid", { jobId: "other", submissionSources: [item] }).description)
+    .not.toContain("1.1.20");
+});
+
+
+it("asks the teacher to verify a doubtful blank against the original", () => {
+  const record = source({ reason_code: "submission_parse_invalid", answer_diagnostics: [{
+    q_id: "q1", number: "1.1.5", has_content: false, recognition_confidence: .98,
+    flag: ["recognition_incomplete", "recognition_manual_pending", "recognition_invalid_fields:content"],
+  }] });
+  const copy = getSubmissionSourceReasonCopy(record, "zh-CN");
+  expect(copy.title).toContain("暂未确认是否空白");
+  expect(copy.description).toContain("1.1.5");
 });

@@ -138,6 +138,7 @@ class PdfIndexPage(EvidenceModel):
 
 class PdfDetailPage(PdfIndexPage):
     page_index: int = Field(ge=0, le=9999)
+    native_size_raster: bool = Field(default=False, strict=True, exclude_if=lambda value: not value)
     native_text: str = Field(max_length=500_000)
     blocks: list[PdfBlock] = Field(max_length=10000)
 
@@ -344,7 +345,7 @@ def recognition_page_render(page: PdfDetailPage, region: Region, purpose: str) -
                                 scale=fit_full_page_scale(width, height, min(5, max(2, 1500 / width))))
     if purpose != "submissions" or region != (0, 0, 1, 1):
         return request
-    scale = fit_full_page_scale(page.width_points, page.height_points, request.scale)
+    scale = fit_full_page_scale(page.width_points, page.height_points, 1 if page.native_size_raster else request.scale)
     return PdfRenderRequest(page_number=page.page_number, region=region, scale=scale)
 
 

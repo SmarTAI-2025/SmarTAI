@@ -19,6 +19,57 @@ from backend.services.workflow_worker import LeasedOperation
 from backend.tests.test_task_background_workflows import _BackgroundTasks, _Registry, _seed_task
 
 
+@pytest.mark.parametrize(("text", "reasons", "confidence", "blocked"), [
+    ("[unclear] [unclear] in handwritten equations", ["low_confidence_content"], None, True),
+    ("[unclear] in handwriting without a legible heading", ["low_confidence_content"], 1, True),
+    ("1.1.5. Proof: [unclear]", ["low_confidence_content"], 1, True),
+    ("1.1.7. Proof: [unclear]", ["low_confidence_content"], 1, False),
+    ("1.1.7. Proof: [unclear]", ["low_confidence_content"], None, False),
+    ("Manuscript: [ILLEGIBLE]", ["low_confidence_content"], 1, True),
+    ("1.1.5. Proof: [unreadable]", ["low_confidence_content"], 1, True),
+    ("1.1.7. Proof: [unreadable]", ["low_confidence_content"], 1, False),
+    ("[unclear authorship: legible margin note]", ["low_confidence_content"], 1, False),
+    ("[unclear] near handwriting", [], 1, False),
+    ("A legible different answer", [], None, False),
+    ("1.1.6. Proof: from x = 0, its inverse does not exist.", [], .98, True),
+    ("1.1.6. Proof:", [], .98, False),
+    ("1.2.6. Answer: 7", [], .98, False),
+    ("1.1.7. Answer: 3", [], .98, False),
+])
+def test_an_empty_answer_requires_confirmation_only_when_the_source_contradicts_it(text, reasons, confidence, blocked):
+    from backend.agents.ingest_agent import _IndependentStudentSubmission, _independent_submission_payload
+    problems = {"q1": {"number": "1.1.5"}, "q2": {"number": "1.1.7"}}
+    source = SimpleNamespace(text=text, filename="work.pdf", recognition={"confidence_reasons": reasons})
+    answers = [dict(q_id="q1", number="1.1.5", type="推理题", content="", recognition_confidence=confidence),
+               dict(q_id="q2", number="1.1.7", type="推理题", content="student work")]
+    raw = _IndependentStudentSubmission(stu_id="s1", stu_name="Sample", stu_ans=answers)
+    result, _ = _independent_submission_payload(raw, source, problems, set(problems))
+    assert result["recognition"]["repair_question_ids"] == (["q1"] if blocked else [])
+    assert ("recognition_manual_pending" in result["stu_ans"][0]["flag"]) is blocked
+    assert result["stu_ans"][1]["content"] == "student work" and not result["stu_ans"][1]["flag"]
+
+
+def test_repair_of_a_doubtful_blank_uses_the_recovered_answers_confidence_and_flags():
+    from backend.agents.ingest_agent import _IndependentStudentSubmission, _independent_submission_payload, SubmissionSourceParseResult
+    from backend.services.submission_incremental import merge_parse_repair
+
+    problems = {"q1": {"number": "1.1.5", "stem": "Does zero have an inverse?"}}
+    source = SimpleNamespace(text="1.1.6. Proof: zero has no inverse.", filename="s.pdf", recognition={"confidence": "medium"})
+
+    def parsed(content, confidence, flags):
+        answer = dict(q_id="q1", number="1.1.5", type="推理题", content=content, recognition_confidence=confidence, flag=flags)
+        raw = _IndependentStudentSubmission(stu_id="s", stu_name="Sample", stu_ans=[answer])
+        student, _ = _independent_submission_payload(raw, source, problems, set(problems))
+        student.update(identity_status="matched", identity_match_method="filename")
+        return SubmissionSourceParseResult("src", "file", "s.pdf", "parsed", student, "s", 1, (), None, None, False)
+
+    old = parsed("", .98, [])
+    recovered = parsed(source.text, .62, ["question_identifier_conflict"])
+    answer = merge_parse_repair(old, recovered, set(problems), problems=problems).student["stu_ans"][0]
+    assert answer["content"] == source.text and answer["recognition_confidence"] == .62
+    assert "question_identifier_conflict" in answer["flag"] and "recognition_incomplete" not in answer["flag"]
+
+
 def _registry(monkeypatch, invoke):
     registry = _Registry()
     registry.provider = SimpleNamespace(provider_id="test-provider", supports_vision=False,
@@ -40,6 +91,98 @@ def _response(q_id="q1", content="Saved answer"):
 def _claim(owner, job):
     row = workflow_repository.claim_operation(job, owner_id=owner, worker_id="test", lease_seconds=60)
     return LeasedOperation(row, worker_id="test", lease_seconds=60)
+
+
+def test_running_archive_counts_discovered_members_before_registration(monkeypatch):
+    owner, task = _seed_task(with_question=True)
+    registry = _registry(monkeypatch, lambda _: None)
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w") as files:
+        for i in range(12):
+            files.writestr(f"s{i}.txt", "Q1: answer")
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="answers.zip",
+        content=archive.getvalue(), content_type="application/zip", registry=registry)
+    operation = _claim(owner, queued["job_id"])
+    record = workflow_repository.get_operation(operation.operation_id, owner_id=owner)
+    record.progress = {"stage_metrics": {"files_total": 12}}
+    monkeypatch.setattr(workflow_repository, "get_operation", lambda *args, **kwargs: record)
+    workflow = workflow_repository.get_workflow(task, owner_id=owner)
+    summary, sources = task_facade._submission_source_projection(workflow, owner)
+    assert len(sources) < 12
+    assert summary == {"uploaded": 12, "pending": 12, "parsed": 0, "failed": 0, "identity_needs_review": 0}
+    record.status = "done"
+    assert task_facade._submission_source_projection(workflow, owner)[0]["pending"] == 0
+
+
+@pytest.mark.parametrize("review_ids, extra_flags, expected", [
+    (["q7"], [], False), ([], [], True), (["q7"], ["recognition_failed_pages:2"], True),
+])
+def test_retry_preserves_complete_answer_awaiting_question_number_review(review_ids, extra_flags, expected):
+    student = {"recognition": {"model_review_question_ids": review_ids}, "stu_ans": [{
+        "q_id": "q7", "type": "推理题", "content": "A complete transcription.",
+        "flag": ["question_identifier_conflict", "recognition_manual_pending", *extra_flags]}]}
+    assert task_facade._submission_result_incomplete(SimpleNamespace(student=student)) is expected
+
+
+@pytest.mark.parametrize("incoming_flags,reviews,matched", [
+    ([], [], 2), (["recognition_manual_pending", "question_identifier_conflict"], ["q2"], 2),
+    (["recognition_manual_pending"], ["q2"], 1),
+    (["recognition_manual_pending"], [], 1),
+    (["recognition_manual_pending", "recognition_invalid_fields:content"], ["q2"], 1),
+])
+def test_partial_retry_keeps_advisory_sibling_and_counts_only_real_failures(incoming_flags, reviews, matched):
+    from dataclasses import replace
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+
+    def answer(qid, content, flags):
+        return {"q_id": qid, "type": "推理题", "content": content, "flag": flags}
+
+    kept = answer("q1", "Previously recognized", ["recognition_manual_pending", "question_identifier_conflict"])
+    failed = answer("q2", "Earlier fragment", ["recognition_manual_pending", "recognition_invalid_fields:content"])
+    original = {"stu_id": "s", "identity_status": "matched", "stu_ans": [kept, failed],
+                "recognition": {"model_review_question_ids": ["q1"]}}
+    saved = SubmissionSourceParseResult("src", "file", "input.pdf", "parse_failed", original,
+                                        "s", 1, (), "submission_parse_invalid", "recognition", True)
+    new = answer("q2", "New transcription", incoming_flags)
+    parsed = replace(saved, status="parsed", stable_error_code=None, failure_phase=None, retryable=False,
+                     student={**original, "stu_ans": [new], "recognition": {"model_review_question_ids": reviews}})
+    merged = task_facade._merge_submission_retry_answers(parsed, saved, {"q2"},
+        [SimpleNamespace(q_id=qid) for qid in ("q1", "q2")])
+    assert merged.student["stu_ans"][0] == kept
+    assert merged.student["recognition"]["model_review_question_ids"] == ["q1", *reviews]
+    assert merged.matched_answer_count == matched
+    assert merged.status == ("parsed" if matched == 2 else "parse_failed")
+    assert task_facade._submission_result_incomplete(merged) is (matched == 1)
+    if matched == 2:
+        assert merged.student["stu_ans"][1]["content"] == "New transcription"
+
+
+@pytest.mark.parametrize("text,flags,blocking", [
+    ("[unclear] fragment", ["recognition_manual_pending"], True),
+    ("a legible answer with [unclear]", ["unclear_text"], False),
+    ("a complete answer", ["recognition_manual_pending", "question_identifier_conflict"], False),
+])
+def test_retry_of_doubtful_blank_preserves_unresolved_content_on_manual_handoff(text, flags, blocking):
+    from dataclasses import replace
+    from backend.agents.ingest_agent import SubmissionSourceParseResult
+    from backend.services.submission_manual_review import fill_manual_answers
+
+    question = SimpleNamespace(q_id="q1", number="1", type="推理题")
+    old = {"q_id": "q1", "type": question.type, "content": "",
+           "flag": ["recognition_manual_pending", "recognition_incomplete", "recognition_invalid_fields:content"]}
+    student = {"stu_id": "s", "identity_status": "matched", "stu_ans": [old]}
+    saved = SubmissionSourceParseResult("src", "file", "s.pdf", "parse_failed", student, "s", 0, (),
+                                        "submission_parse_invalid", "recognition", True)
+    answer = {**old, "content": text, "flag": flags}
+    current = replace(saved, status="parsed", stable_error_code=None, failure_phase=None, retryable=False,
+        student={**student, "stu_ans": [answer], "recognition": {"model_review_question_ids": ["q1"]}})
+    result = task_facade._merge_submission_retry_answers(current, saved, {"q1"}, [question])
+    fill_manual_answers(result.student, [question])
+    retained = result.student["stu_ans"][0]
+    public = task_facade._public_answer_flags(retained["flag"], content=text, answer_type=question.type)
+    assert retained["content"] == text
+    assert ("recognition_invalid_fields:content" in public) is blocking
+    assert (result.status == "parse_failed") is blocking
 
 
 def _saved_signal(monkeypatch):
@@ -723,6 +866,9 @@ async def test_pdf_gap_handoff_advises_only_at_failed_page_edges(
     else:
         assert not answers["1.1.29"]["flag"]
     assert len(calls) == 1 and ("source_opening" in calls[0]) == unread
+    assert ("an unread page cuts off this answer" in calls[0]) == unread
+    assert ("Keep an unfinished student answer as written" in calls[0]) != unread
+    assert ("flag recognition_failed and preserve visible fragments" in calls[0]) != unread
 
 
 @pytest.mark.asyncio
@@ -1237,3 +1383,52 @@ async def test_manual_source_diagnostics_follow_new_conflicts_and_repairs_withou
     assert load_source_states(workflow_repository.get_operation(operation.id, owner_id=owner)) == history
     assert source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt) == outcomes
     registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_pdf_page_units_do_not_accept_low_confidence_unreadable_work_as_blank(monkeypatch, recovers):
+    from backend.services.question_source_batches import saved_page_evidence
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    for index in range(1, 4):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=str(index), type="concept", stem=f"Question {index}", criterion="Award 10 points", max_score=10)
+    pages = [saved_page_evidence(SimpleNamespace(page_number=number, spans=[
+        SimpleNamespace(final_text=text, confidence=confidence)])) for number, text, confidence in [
+            (1, "Question 1: [unreadable]\nQuestion 2: ", "low"), (2, "Question 3: Legible work.", "medium")]]
+    async def read(**kwargs):
+        await kwargs["on_pages"](pages)
+        return SimpleNamespace(text="\n".join(page["text"] for page in pages),
+                               recognition={"confidence_reasons": ["low_confidence_content"]})
+    calls = []
+    async def invoke(messages):
+        ids = [item["q_id"] for item in _questions(messages)]
+        calls.append(ids)
+        contents = {"q3": "Legible work."}
+        if recovers and ids == ["q1"]:
+            contents["q1"] = "Recovered work."
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
+            dict(q_id=qid, number=qid[1:], type="concept", content=contents.get(qid, ""),
+                 flag=[], recognition_confidence=1) for qid in ids])))
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1.pdf",
+        content=pdf([p["text"] for p in pages]), content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    saved = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    if not recovers:
+        assert saved["submission_sources"][0]["status"] != "parsed"
+        await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                                expected_revision=saved["workflow_revision"])
+        saved = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {a["q_id"]: a for a in saved["student_data"]["S1"]["stu_ans"]}
+    assert answers["q1"]["content"] == ("Recovered work." if recovers else "")
+    assert ("recognition_manual_pending" in answers["q1"]["flag"]) is not recovers
+    assert "recognition_manual_pending" not in answers["q2"]["flag"]
+    assert answers["q3"]["content"] == "Legible work."
+    assert calls.count(["q1"]) == (1 if recovers else 2)
+    assert sum("q2" in ids for ids in calls) == sum("q3" in ids for ids in calls) == 1
+    assert ("submission_recognition_blocked" in task_facade.grading_readiness(
+        task_id=task, owner_id=owner)["blocking_issues"]) is not recovers

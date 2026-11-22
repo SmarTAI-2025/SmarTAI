@@ -244,6 +244,19 @@ it("keeps the required-answer count outside details in a mixed successful/failed
   expect(screen.getByText("第 1 题").closest("details")).toHaveAttribute("open");
 });
 
+it("uses the original diagnostics for the failed file explanation when advisory rows are hidden", () => {
+  render(<MemoryRouter><SubmissionSourceOutcomePanel requiredOnly locale="zh-CN" sources={[{
+    ...sources[0], status: "failed", reason_code: "submission_parse_failed",
+    page_diagnostics: { total_pages: 1, processed_pages: [1], failed_pages: [], unprocessed_pages: [], page_errors: [] },
+    answer_required_diagnostic_count: 0, answer_diagnostics: [
+      { q_id: "q1", number: "1.1.5", has_content: true, flag: ["unclear_text", "recognition_matching_advisory"] },
+    ],
+  }]} /></MemoryRouter>);
+  expect(screen.getByText("页面已读完，部分作答仍需核对")).toBeVisible();
+  expect(screen.getByText(/1\.1\.5 题的转写/)).toBeVisible();
+  expect(screen.queryByText("第 1.1.5 题")).not.toBeInTheDocument();
+});
+
 it("renders both responses with the same conflicted question ID without duplicate-key errors", () => {
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
