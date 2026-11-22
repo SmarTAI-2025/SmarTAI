@@ -184,7 +184,23 @@ describe("AddSubmissionsPage OCR uploads", () => {
     mutateAsync.mockRejectedValueOnce(new APIError(409, "question_review_blocked", { error: { code: "question_review_blocked" } }));
     fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
     expect(await screen.findByText(/请返回「审核题目资料」/, { selector: "p[role='alert']" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "审核题目资料" })).toHaveAttribute("href", "/tasks/task-1/questions");
+    expect(screen.queryByText(/若仍失败，请联系管理员/)).not.toBeInTheDocument();
     expect(screen.getByText("answer.txt")).toBeInTheDocument();
+  });
+
+  it("clears the pixel-limit warning when a replacement submission is selected", async () => {
+    const { container } = renderPage();
+    const input = container.querySelector('input[type="file"]')!;
+    fireEvent.change(input, { target: { files: [new File(["original"], "large.png")] } });
+    await waitFor(() => expect(screen.getByLabelText("作答识别模型")).toHaveValue("provider-default"));
+    mutateAsync.mockRejectedValueOnce(new APIError(413, "image_pixel_limit_exceeded", { detail: { code: "image_pixel_limit_exceeded", max_pixels: 30000000 } }));
+    fireEvent.click(screen.getByRole("button", { name: "submissionUploadStart" }));
+    await screen.findByText(/图片总像素.*30,000,000/, { selector: "p[role='alert']" });
+    fireEvent.change(input, { target: { files: [new File(["replacement"], "smaller.png")] } });
+    expect(screen.getByText("smaller.png")).toBeInTheDocument();
+    expect(screen.queryAllByText(/图片总像素/)).toHaveLength(0);
+    expect(mutateAsync).toHaveBeenCalledOnce();
   });
 
   it("shows the same supported-format guidance when the server rejects a submission", async () => {

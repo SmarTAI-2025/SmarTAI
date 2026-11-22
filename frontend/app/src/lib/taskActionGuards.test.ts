@@ -66,6 +66,17 @@ describe("task contract compatibility", () => {
     expect(info.actionKind).toBe("retry");
     expect(info.description).toContain(locale === "zh-CN" ? "尚未向模型发送" : "not sent to the model");
   });
+  it.each([
+    [{ max_side: 8192 }, "最长边超过 8192", "longest image edge exceeds 8192"],
+    [{ max_pixels: 16000000 }, "宽 × 高）超过 16,000,000", "16,000,000 total pixels"],
+    [{ max_pixels: 30000000 }, "宽 × 高）超过 30,000,000", "30,000,000 total pixels"],
+    [{}, "总像素（宽 × 高）或最长边", "total pixel count or longest image edge"],
+  ] as const)("uses the image limit reported by the upload service", (detail, zh, en) => {
+    const error = new APIError(413, "image_pixel_limit_exceeded", { detail: { code: "image_pixel_limit_exceeded", ...detail } });
+    expect(classifyRecoverableError(error).description).toContain(zh);
+    expect(classifyRecoverableError(error, { locale: "en-US" }).description).toContain(en);
+  });
+
   it("offers scope correction without claiming a missing question was recognized", () => {
     const info = classifyRecoverableError("question_targets_incomplete", { locale: "zh-CN", taskId: "task" });
     expect(info.title).toBe("未找齐指定题目");

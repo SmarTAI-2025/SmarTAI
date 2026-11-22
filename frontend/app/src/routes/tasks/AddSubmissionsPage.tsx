@@ -199,6 +199,9 @@ function AddSubmissionsForm({ taskQuery, submittedInput }: { taskQuery: ReturnTy
       return;
     }
     setSelectedFile(file);
+    if (submissionErrorCode(recognitionError) === "image_pixel_limit_exceeded") {
+      setRecognitionError(null);
+    }
     setUploadPercent(0);
     setFormError(null);
     setNeedsModel(false);

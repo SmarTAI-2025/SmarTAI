@@ -112,6 +112,23 @@ def test_pixel_limit_precedes_decoding(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit_name", ["max_pixels", "max_side"])
+async def test_upload_reports_the_specific_image_dimension_limit(limit_name):
+    if limit_name == "max_side":
+        limit = image_evidence_worker.MAX_SIDE
+        size = (limit + 1, 1)
+    else:
+        limit = image_evidence_worker.MAX_PIXELS
+        size = (6000, limit // 6000 + 1)
+    with Image.new("1", size) as image, io.BytesIO() as output:
+        image.save(output, format="PNG")
+        with pytest.raises(HTTPException) as caught:
+            await validate_media_content(output.getvalue(), "image/png")
+    assert caught.value.status_code == 413
+    assert caught.value.detail == {"code": "image_pixel_limit_exceeded", limit_name: limit}
+
+
+@pytest.mark.asyncio
 async def test_rejects_multiframe_image():
     with Image.new("RGB", (12, 8), "white") as first, Image.new("RGB", (12, 8), "black") as second, io.BytesIO() as output:
         first.save(output, format="TIFF", save_all=True, append_images=[second])

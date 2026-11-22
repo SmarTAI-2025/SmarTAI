@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from backend.domain.errors import RecognitionError
 from backend.services.submission_work_budget import current_budget, wait_for_admission
-from backend.tools.image_evidence_worker import FORMATS, MAX_INPUT_BYTES as MAX_IMAGE_BYTES
+from backend.tools.image_evidence_worker import FORMATS, MAX_INPUT_BYTES as MAX_IMAGE_BYTES, MAX_PIXELS, MAX_SIDE
 from backend.tools.pdf_worker_lifecycle import reap_pdf_worker
 
 MAX_PDF_BYTES = 100 * 1024 * 1024
@@ -102,7 +102,13 @@ async def validate_media_content(
                 if code in _INVALID_CODES:
                     raise HTTPException(400, detail={"code": code})
                 if code in _LIMIT_CODES:
-                    raise HTTPException(413, detail={"code": code})
+                    detail = {"code": code}
+                    if code == "image_pixel_limit_exceeded":
+                        if payload.get("limit_name") == "max_pixels":
+                            detail["max_pixels"] = MAX_PIXELS
+                        elif payload.get("limit_name") == "max_side":
+                            detail["max_side"] = MAX_SIDE
+                    raise HTTPException(413, detail=detail)
                 raise HTTPException(400, detail={"code": "media_inspection_failed"})
             dimensions = ("width", "height") if image else ("page_count",)
             if (payload.get("content_type") != detected_content_type

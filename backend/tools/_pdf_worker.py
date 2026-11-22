@@ -42,6 +42,8 @@ def _inspect_upload(content_type: str, max_pdf_pages: int) -> dict:
     if content_type in image_evidence_worker.FORMATS:
         try:
             return {"status": "ok", **image_evidence_worker.inspect_image(body, content_type)}
+        except image_evidence_worker.ImagePixelLimit as exc:
+            return {"status": "error", "code": exc.code, "limit_name": exc.limit_name}
         except image_evidence_worker.ImageFailure as exc:
             return {"status": "error", "code": exc.code}
         except (MemoryError, OverflowError, RecursionError):
