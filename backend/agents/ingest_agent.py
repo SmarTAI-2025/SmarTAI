@@ -17,6 +17,7 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
@@ -1267,9 +1268,9 @@ def normalize_submission_source_identities(results):
 
 
 # Accept identity labels at a field boundary, including adjacent fields on one line.
-_OCR_FIELD_START = r"(?:^[ \t]*|[,，;；][ \t]*|(?<=\S)[ \t]+(?=(?:学号|姓名|student[ \t]+id|name)[ \t]*[:：]))"
+_OCR_FIELD_START = r"(?:^[ \t]*|[,，、;；][ \t]*|(?<=\S)[ \t]+(?=(?:学号|姓名|student[ \t]+id|name)[ \t]*[:：]))"
 _OCR_FIELD_SEPARATOR = r"(?:[ \t]*[:：][ \t]*|[ \t]+)"
-_OCR_FIELD_VALUE = (r"(?P<value>[^\r\n]{1,160}?)(?=(?:[,，;；][ \t]*|[ \t]+)(?:学号|姓名|student[ \t]+id|name)(?=[:： \t])"
+_OCR_FIELD_VALUE = (r"(?P<value>[^\r\n]{1,160}?)(?=(?:[,，、;；][ \t]*|[ \t]+)(?:学号|姓名|student[ \t]+id|name)(?=[:： \t])"
                     r"|[ \t]*\r?$)")
 _OCR_STUDENT_ID = re.compile(_OCR_FIELD_START + r"(?:学号|student[ \t]*id)" + _OCR_FIELD_SEPARATOR + _OCR_FIELD_VALUE,
                              re.I | re.M)
@@ -1289,11 +1290,26 @@ def _ocr_identity_value(pattern, text):
     return ""
 
 
+def _is_date_only_stem(stem: str) -> bool:
+    # Bare digits can be a student ID. Require a separated calendar date.
+    match = re.fullmatch(r"[0-9]{1,4}(?P<sep>[-._ ])[0-9]{1,2}(?P=sep)[0-9]{1,4}", stem)
+    if not match:
+        return False
+    normalized = stem.replace(match["sep"], "-")
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"):
+        try:
+            datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        return True
+    return False
+
+
 def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
     stem = PurePath(filename).stem
-    parts = re.split(r"[_\s-]+", stem, maxsplit=1)
+    parts = [] if _is_date_only_stem(stem) else re.split(r"[_\s-]+", stem, maxsplit=1)
     student_id = student_name = ""
-    if _FILENAME_STUDENT_ID.fullmatch(parts[0]):
+    if parts and _FILENAME_STUDENT_ID.fullmatch(parts[0]):
         student_id = parts[0]
         student_name = parts[1].split("_", 1)[0].strip() if len(parts) == 2 else ""
     elif len(parts) == 2 and _FILENAME_STUDENT_ID.fullmatch(parts[1]):

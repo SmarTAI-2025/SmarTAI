@@ -673,17 +673,21 @@ async def test_baidu_media_limits_run_in_killable_worker():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("header,expected_id,expected_name,blocked", [
-    ("张三，学号 000123", "000123", "张三", False),
-    ("学号 000123", "000123", "作业1-提交.txt", True),
-    ("姓名：张三", "作业1-提交.txt", "张三", True),
+@pytest.mark.parametrize("filename,header,expected_id,expected_name,blocked", [
+    ("作业1-提交.txt", "张三，学号 000123", "000123", "张三", False),
+    ("作业1-提交.txt", "学号 000123", "000123", "作业1-提交.txt", True),
+    ("作业1-提交.txt", "姓名：张三", "作业1-提交.txt", "张三", True),
+    ("2026-11-22.txt", "姓名：张三、学号：000123", "000123", "张三", False),
+    ("2026-11-22.txt", "姓名：张三", "2026-11-22.txt", "张三", True),
+    ("2026-11-22.txt", "学号：000123", "000123", "2026-11-22.txt", True),
+    ("2026-11-22.txt", "答题纸", "2026-11-22.txt", "2026-11-22.txt", True),
 ])
-async def test_baidu_direct_text_identity_and_grading_gate(monkeypatch, header, expected_id, expected_name, blocked):
+async def test_baidu_direct_text_identity_and_grading_gate(monkeypatch, filename, header, expected_id, expected_name, blocked):
     owner, task = _seed_task(with_question=True)
     _, route = _store_ocr_route(owner)
     registry = _StageRegistry()
     monkeypatch.setattr(task_facade, "_registry_for_owner", lambda _: registry)
-    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="作业1-提交.txt",
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename=filename,
         content=(header + "\n1. Clear answer.").encode(), content_type="text/plain",
         registry=registry, recognition_provider_id=route)
     claimed = workflow_repository.claim_operation(queued["job_id"], owner_id=owner, worker_id="txt", lease_seconds=60)
