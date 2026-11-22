@@ -17,14 +17,16 @@ import re
 from collections import defaultdict
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import PurePath
 from typing import Any, Callable, Dict, List, Literal, Optional, TYPE_CHECKING
 
 from langchain_core.messages import SystemMessage, HumanMessage
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.config import settings
+from backend.services.submission_identity import apply_filename_fallbacks, identity_filename
 from backend.domain.code_output import RUBRIC_INSTRUCTION, bind_code_output, code_output_rubric_context
 from backend.models import (
     StudentSubmission,
@@ -192,7 +194,7 @@ PROB_SYSTEM_PROMPT = """You are a professional AI teaching assistant with gradua
 
 HW_SYSTEM_PROMPT = """You are a professional AI teaching assistant. Analyze a single student's submission file and complete:
 
-1. **Identity Recognition**: Look for `stu_id` (student ID) and `stu_name` (name) in the **[Student Submission Content]** first. If not found in the content, try to extract them from the **[Filename]**. If you cannot find them in either place, set `stu_name` to "[Unknown Student]" and `stu_id` to the filename.
+1. **Identity Recognition**: For `stu_id` (student ID) and `stu_name` (name), look for each field independently in the **[Filename]** first. Use the **[Student Submission Content]** only if the corresponding field cannot be identified in the filename. Copy each identified value verbatim from its source, preserving characters, spelling, capitalization, internal spaces, punctuation, and leading zeros. Do not translate, transliterate, normalize, correct, infer, or invent either value. When neither source identifies a field, return an empty string for that field only. The server displays the original filename and requires teacher confirmation for each unresolved identity. Keep any identified sibling field verbatim.
 
 2. **Answer Segmentation**: Based on the provided [Question Data], extract each student answer. If a student skipped a question, set "content" to empty string. Preserve content completely — do not delete or translate. Preserve the OCR Markdown structure instead of flattening it: keep superscripts, subscripts, fractions, radicals, integral bounds, transposes, and norms as valid LaTeX. Enclose inline LaTeX in `$...$` and display LaTeX in `$$...$$`; do not leave bare LaTeX commands in prose or add math delimiters inside code blocks. Do not introduce hard line breaks inside one equation or sentence. Preserve fenced code and its indentation, using real decoded newlines rather than visible `\\n` text.
 
@@ -775,6 +777,15 @@ class SubmissionSourceParseResult:
     retryable: bool
 
 
+class _RecognizedSubmission(StudentSubmission):
+    @model_validator(mode="before")
+    @classmethod
+    def allow_missing_identity(cls, data):
+        if isinstance(data, dict):
+            return {**data, **{field: "" for field in ("stu_id", "stu_name") if data.get(field) is None}}
+        return data
+
+
 class _IndependentStudentSubmission(BaseModel):
     """Validate the response container before validating independent fields."""
 
@@ -786,18 +797,20 @@ class _IndependentStudentSubmission(BaseModel):
 def _independent_submission_payload(parsed, source, problems_data, known_question_ids):
     """Keep bounded verified fields; never convert a malformed answer to blank work."""
     fallback_id, fallback_name, _ = _ocr_identity_candidate(source.text or "", source.filename)
-    payload = dict(stu_id=fallback_id, stu_name=fallback_name, stu_ans=[])
+    fallback = identity_filename(source.filename)
+    payload = dict(stu_id=fallback, stu_name=fallback, stu_ans=[])
     invalid_identity = []
     for field in ("stu_id", "stu_name"):
         try:
             checked = StudentSubmission.model_validate({"stu_id": "", "stu_name": "", "stu_ans": [],
                                                         field: getattr(parsed, field)})
             value = getattr(checked, field)
-            if not value.strip():
-                raise ValueError("Missing identity field")
-            payload[field] = value
+            if value.strip():
+                payload[field] = value
         except (ValueError, TypeError):
             invalid_identity.append(field)
+            if getattr(parsed, field) is not None:
+                payload[field] = fallback_id if field == "stu_id" else fallback_name
 
     answers, invalid_ids, unknown = {}, set(), []
     openings = getattr(source, "opening_candidates", None) or {}
@@ -943,8 +956,8 @@ async def parse_student_answer_sources(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then the submission content "
-            "only when the filename has no usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)
@@ -1038,7 +1051,7 @@ async def parse_student_answer_sources(
             try:
                 from backend.tools.structured_llm import parse_with_format_repair
                 parsed, response = await parse_with_format_repair(provider, messages, response,
-                    _IndependentStudentSubmission if independent_answers else StudentSubmission,
+                    _IndependentStudentSubmission if independent_answers else _RecognizedSubmission,
                     invoke=ainvoke_with_rate_retry if single_attempt else None)
             except StructuredOutputBoundsError as exc:
                 logger.warning(
@@ -1088,27 +1101,7 @@ async def parse_student_answer_sources(
             payload["source_id"] = source.source_id
             payload["stored_file_id"] = source.stored_file_id
             payload["identity_match_method"] = identity_mode
-            if identity_mode == "roster":
-                match = _match_roster_identity(payload, source.filename, safe_roster)
-                if match is not None:
-                    payload["stu_id"] = match["stu_id"]
-                    payload["stu_name"] = match["stu_name"]
-                    payload["identity_status"] = "matched"
-                else:
-                    payload["identity_status"] = "needs_review"
-            elif identity_mode == "manual_review":
-                payload["identity_status"] = "needs_review"
-            else:
-                unknown_name = str(payload.get("stu_name") or "").strip() in {
-                    "", "[Unknown Student]"
-                }
-                candidate_id = str(payload.get("stu_id") or "").strip()
-                fallback_id = candidate_id in {"", source.filename}
-                payload["identity_status"] = (
-                    "needs_review" if unknown_name or fallback_id else "matched"
-                )
-            if (payload.get("recognition") or {}).get("identity_invalid_fields"):
-                payload["identity_status"] = "needs_review"
+            _resolve_recognized_identity(payload, source.filename, identity_mode, safe_roster)
 
             candidate = str(payload.get("stu_id") or "").strip() or None
             all_answers = list(payload.get("stu_ans") or [])
@@ -1237,6 +1230,16 @@ async def parse_student_answer_sources(
 
 def normalize_submission_source_identities(results):
     """Apply identity conflicts after all independent sources are available."""
+    results = list(results)
+    for index, result in enumerate(results):
+        if not result.student:
+            continue
+        student = dict(result.student)
+        if apply_filename_fallbacks(student, result.filename):
+            result = replace(result, student=student, student_candidate=student["stu_id"])
+            if result.status == "parsed":
+                result = replace(result, status="identity_conflict", stable_error_code="identity_needs_review", failure_phase="identity")
+            results[index] = result
     candidate_groups: dict[str, list[int]] = defaultdict(list)
     for index, result in enumerate(results):
         if result.student is not None and result.student_candidate:
@@ -1264,35 +1267,63 @@ def normalize_submission_source_identities(results):
     return normalized
 
 
-_OCR_STUDENT_ID = re.compile(
-    r"(?im)^\s*(?:学号|student\s*id)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
-)
-_OCR_STUDENT_NAME = re.compile(
-    r"(?im)^\s*(?:姓名|name)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
-)
+# Accept identity labels at a field boundary, including adjacent fields on one line.
+_OCR_FIELD_START = r"(?:^[ \t]*|[,，、;；][ \t]*|(?<=\S)[ \t]+(?=(?:学号|姓名|student[ \t]+id|name)[ \t]*[:：]))"
+_OCR_FIELD_SEPARATOR = r"(?:[ \t]*[:：][ \t]*|[ \t]+)"
+_OCR_FIELD_VALUE = (r"(?P<value>[^\r\n]{1,160}?)(?=(?:[,，、;；][ \t]*|[ \t]+)(?:学号|姓名|student[ \t]+id|name)(?=[:： \t])"
+                    r"|[ \t]*\r?$)")
+_OCR_STUDENT_ID = re.compile(_OCR_FIELD_START + r"(?:学号|student[ \t]*id)" + _OCR_FIELD_SEPARATOR + _OCR_FIELD_VALUE,
+                             re.I | re.M)
+_OCR_STUDENT_NAME = re.compile(_OCR_FIELD_START + r"(?:姓名" + _OCR_FIELD_SEPARATOR + r"|name[ \t]*[:：][ \t]*)"
+                               + _OCR_FIELD_VALUE, re.I | re.M)
+_OCR_NAME_BEFORE_ID = re.compile(r"(?m)^[ \t]*(?P<value>[\u3400-\u9fff]{2,4})[ \t]*[,，][ \t]*学号(?=[:： \t])")
+_OCR_UNREADABLE_IDENTITY = re.compile(r"\[(?:unclear|unreadable|illegible|无法辨认)\]", re.I)
+_FILENAME_STUDENT_ID = re.compile(r"(?:\d{1,20}|(?:[a-z]|stu|student|id)\d{1,20}|[a-z]{2,4}\d{5,20})", re.I)
+_GENERIC_SUBMISSION_LABEL = re.compile(r"(?:作业|提交|答案|练习|homework|submission|work|answer)s?\d*", re.I)
+
+
+def _ocr_identity_value(pattern, text):
+    for match in pattern.finditer(text):
+        value = match["value"].strip()
+        if value and not _OCR_UNREADABLE_IDENTITY.search(value) and not _GENERIC_SUBMISSION_LABEL.fullmatch(value):
+            return value
+    return ""
+
+
+def _is_date_only_stem(stem: str) -> bool:
+    # Bare digits can be a student ID. Require a separated calendar date.
+    match = re.fullmatch(r"[0-9]{1,4}(?P<sep>[-._ ])[0-9]{1,2}(?P=sep)[0-9]{1,4}", stem)
+    if not match:
+        return False
+    normalized = stem.replace(match["sep"], "-")
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%m-%d-%Y"):
+        try:
+            datetime.strptime(normalized, fmt)
+        except ValueError:
+            continue
+        return True
+    return False
 
 
 def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
-    sample = text[:20_000]
-    id_match = _OCR_STUDENT_ID.search(sample)
-    name_match = _OCR_STUDENT_NAME.search(sample)
-    student_id = id_match.group("value").strip() if id_match else ""
-    student_name = name_match.group("value").strip() if name_match else ""
-    stem = PurePath(filename).stem[:160]
-    filename_parts = [
-        part.strip()
-        for part in re.split(r"[_\-\s]+", stem)
-        if part.strip()
-    ]
-    if not student_id and filename_parts and any(ch.isdigit() for ch in filename_parts[0]):
-        student_id = filename_parts[0][:160]
-    if not student_name and len(filename_parts) > 1:
-        student_name = filename_parts[1][:160]
-    return (
-        student_id or stem or "[Unknown Student]",
-        student_name or "[Unknown Student]",
-        bool(student_id and student_name),
-    )
+    stem = PurePath(filename).stem
+    parts = [] if _is_date_only_stem(stem) else re.split(r"[_\s-]+", stem, maxsplit=1)
+    student_id = student_name = ""
+    if parts and _FILENAME_STUDENT_ID.fullmatch(parts[0]):
+        student_id = parts[0]
+        student_name = parts[1].split("_", 1)[0].strip() if len(parts) == 2 else ""
+    elif len(parts) == 2 and _FILENAME_STUDENT_ID.fullmatch(parts[1]):
+        student_id, student_name = parts[1], parts[0]
+    if len(student_name) > 160 or _GENERIC_SUBMISSION_LABEL.fullmatch(student_name):
+        student_name = ""
+
+    # Recover each missing field from the saved transcription, including
+    # later legible labels when the first occurrence was unreadable.
+    student_id = student_id or _ocr_identity_value(_OCR_STUDENT_ID, text)
+    student_name = (student_name or _ocr_identity_value(_OCR_STUDENT_NAME, text)
+                    or _ocr_identity_value(_OCR_NAME_BEFORE_ID, text))
+    fallback = identity_filename(filename)
+    return student_id or fallback, student_name or fallback, bool(student_id and student_name)
 
 
 def _sanitize_transcribed_programming_answers(student, problems):
@@ -1304,12 +1335,27 @@ def _sanitize_transcribed_programming_answers(student, problems):
             answer["flag"] = list(dict.fromkeys(flags))
 
 
+def _resolve_recognized_identity(student, filename, mode, roster):
+    if mode == "roster":
+        match = _match_roster_identity(student, filename, roster)
+        if match:
+            student["stu_id"] = match["stu_id"]
+            if match.get("stu_name"):
+                student["stu_name"] = match["stu_name"]
+        student["identity_status"] = "matched" if match else "needs_review"
+    else:
+        student["identity_status"] = "needs_review" if mode == "manual_review" else "matched"
+    apply_filename_fallbacks(student, filename)
+    if (student.get("recognition") or {}).get("identity_invalid_fields"):
+        student["identity_status"] = "needs_review"
+
+
 def _source_identity(text, filename, identity_mode, roster):
     student_id, student_name, matched = _ocr_identity_candidate(text, filename)
     if identity_mode == "roster":
         entry = _match_roster_identity({"stu_id": student_id, "stu_name": student_name}, filename, roster)
         if entry:
-            return entry["stu_id"], entry["stu_name"], True
+            return entry["stu_id"], entry.get("stu_name") or student_name, bool(entry.get("stu_name") or student_name != identity_filename(filename))
         matched = False
     elif identity_mode == "manual_review":
         matched = False
@@ -1633,8 +1679,8 @@ async def parse_student_answers(
         )
     else:
         identity_instruction = (
-            "Use the filename as the primary identity source, then use submission content "
-            "only when the filename does not contain a usable student ID or name."
+            "Check the filename first for each field. Use the submission content only when "
+            "that field cannot be identified in the filename. Copy identified values verbatim."
         )
 
     semaphore = asyncio.Semaphore(20)
@@ -1666,25 +1712,12 @@ async def parse_student_answers(
 
             try:
                 response = await ainvoke_with_retry(provider, messages)
-                parsed = extract_and_parse_json(response.content, StudentSubmission)
+                parsed = extract_and_parse_json(response.content, _RecognizedSubmission)
                 logger.info("parse_student_answers: finished one submission")
                 payload = parsed.model_dump()
                 payload["source_filename"] = filename
                 payload["identity_match_method"] = identity_mode
-                if identity_mode == "roster":
-                    match = _match_roster_identity(payload, filename, safe_roster)
-                    if match is not None:
-                        payload["stu_id"] = match["stu_id"]
-                        payload["stu_name"] = match["stu_name"]
-                        payload["identity_status"] = "matched"
-                    else:
-                        payload["identity_status"] = "needs_review"
-                elif identity_mode == "manual_review":
-                    payload["identity_status"] = "needs_review"
-                else:
-                    unknown_name = payload.get("stu_name") in {"", "[Unknown Student]"}
-                    fallback_id = str(payload.get("stu_id") or "").strip() in {"", filename}
-                    payload["identity_status"] = "needs_review" if unknown_name or fallback_id else "matched"
+                _resolve_recognized_identity(payload, filename, identity_mode, safe_roster)
                 if reporter:
                     identity_metric = (
                         "identities_matched"

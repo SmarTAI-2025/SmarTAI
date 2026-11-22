@@ -3,7 +3,7 @@ import uuid
 import asyncio
 import time
 from copy import deepcopy
-from pathlib import PurePosixPath
+from backend.services.submission_identity import apply_filename_fallbacks, identity_filename
 
 from fastapi.concurrency import run_in_threadpool
 
@@ -167,9 +167,7 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
             else:
                 use_pdf_filename = source.stored_file_id in failed_pdf_files
                 if use_pdf_filename:
-                    path = PurePosixPath(source.filename.replace("\\", "/"))
-                    # Identity fields are bounded to 160 characters, including the extension.
-                    candidate_id = candidate_name = f"{path.stem[:160 - len(path.suffix)]}{path.suffix}"
+                    candidate_id = candidate_name = identity_filename(source.filename)
                 elif source.filename in owners:
                     hint = owners[source.filename]
                     candidate_id, candidate_name = hint.student_id, hint.name or "[Unknown Student]"
@@ -183,9 +181,11 @@ async def continue_manually(*, task_id: str, owner_id: str, job_id: str, expecte
                                                        saved.failure_phase if saved else "recognition")
                 outcome = dict(status="parse_failed", stable_error_code=reason,
                     failure_phase=phase, matched_answer_count=0)
+            if not unknown_count and student.get("identity_status") != "matched":
+                apply_filename_fallbacks(student, source.filename)
             if student["stu_id"] in used_ids or (not had_saved_identity and student["stu_id"] in saved_ids):
                 suffix = f"-{source.source_id[-8:]}"
-                candidate_id = student["stu_id"][:160 - len(suffix)] if use_pdf_filename else student["stu_id"]
+                candidate_id = student["stu_id"][:160 - len(suffix)]
                 student["stu_id"] = candidate_id + suffix
                 student["identity_status"] = "needs_review"
             used_ids.add(student["stu_id"])

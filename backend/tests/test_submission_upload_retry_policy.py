@@ -131,11 +131,12 @@ async def test_mixed_upload_recovers_model_failure_keeps_success_and_then_blocks
                 continue
             calls.append(source.filename)
             failed = source.filename == "recover.txt" and round_number == 0
-            student = None if failed else {"stu_id": source.filename, "stu_name": source.filename,
+            candidate = source.filename.removesuffix(".txt")
+            student = None if failed else {"stu_id": candidate, "stu_name": f"Student {candidate}",
                 "stu_ans": [{"q_id": "q1", "content": source.text, "flag": []}], "identity_status": "matched",
                 "source_id": source.source_id, "stored_file_id": source.stored_file_id, "source_filename": source.filename}
             results.append(SubmissionSourceParseResult(source.source_id, source.stored_file_id, source.filename,
-                "parse_failed" if failed else "parsed", student, None if failed else source.filename,
+                "parse_failed" if failed else "parsed", student, None if failed else candidate,
                 0 if failed else 1, (), failure_code if failed else None, "recognition" if failed else None,
                 failed and failure_code == "provider_rate_limited"))
         return results
