@@ -8,6 +8,13 @@ from backend.services.recognition_timeouts import apply_source_timeout_profile
 from backend.skills.recognition_reader import PROMPT_VERSION
 
 
+def saved_page_evidence(page):
+    return dict(page_number=page.page_number,
+                text="\n".join(span.final_text for span in page.spans if span.final_text),
+                **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
+                **({"low_confidence_content": True} if any(getattr(span, "confidence", None) == "low" for span in page.spans) else {}))
+
+
 def _usage(runs, attribute):
     values = [getattr(run, attribute) for run in runs]
     fields = RecognitionUsageV1.model_fields
@@ -103,9 +110,7 @@ async def read_question_pdf_batches(*, service, request, content, engine, total_
         for page in document.pages:
             if page.page_number in document.coverage.processed_pages:
                 pages[page.page_number] = page
-                ready.append(dict(page_number=page.page_number,
-                    **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
-                    text="\n".join(span.final_text for span in page.spans if span.final_text)))
+                ready.append(saved_page_evidence(page))
         if ready and on_pages is not None:
             # service.run has already persisted and verified these page results.
             # A page completion is deliberately not a question-boundary claim.

@@ -1336,3 +1336,52 @@ async def test_manual_source_diagnostics_follow_new_conflicts_and_repairs_withou
     assert load_source_states(workflow_repository.get_operation(operation.id, owner_id=owner)) == history
     assert source_outcome_repository.list_source_results(operation_id=operation.id, owner_id=owner, attempt=operation.attempt) == outcomes
     registry.provider.ainvoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recovers", [False, True])
+async def test_pdf_page_units_do_not_accept_low_confidence_unreadable_work_as_blank(monkeypatch, recovers):
+    from backend.services.question_source_batches import saved_page_evidence
+    from backend.tests.test_recognition_agent import pdf
+
+    owner, task = _seed_task()
+    for index in range(1, 4):
+        add_reviewed_question(task, teacher_id=owner, q_id=f"q{index}", order_index=index - 1,
+            number=str(index), type="concept", stem=f"Question {index}", criterion="Award 10 points", max_score=10)
+    pages = [saved_page_evidence(SimpleNamespace(page_number=number, spans=[
+        SimpleNamespace(final_text=text, confidence=confidence)])) for number, text, confidence in [
+            (1, "Question 1: [unreadable]\nQuestion 2: ", "low"), (2, "Question 3: Legible work.", "medium")]]
+    async def read(**kwargs):
+        await kwargs["on_pages"](pages)
+        return SimpleNamespace(text="\n".join(page["text"] for page in pages),
+                               recognition={"confidence_reasons": ["low_confidence_content"]})
+    calls = []
+    async def invoke(messages):
+        ids = [item["q_id"] for item in _questions(messages)]
+        calls.append(ids)
+        contents = {"q3": "Legible work."}
+        if recovers and ids == ["q1"]:
+            contents["q1"] = "Recovered work."
+        return SimpleNamespace(content=json.dumps(dict(stu_id="S1", stu_name="Student One", stu_ans=[
+            dict(q_id=qid, number=qid[1:], type="concept", content=contents.get(qid, ""),
+                 flag=[], recognition_confidence=1) for qid in ids])))
+    registry = _registry(monkeypatch, invoke)
+    monkeypatch.setattr(task_facade, "read_question_source", read)
+    queued = task_facade.queue_task_submission_parsing(task_id=task, owner_id=owner, filename="S1.pdf",
+        content=pdf([p["text"] for p in pages]), content_type="application/pdf", registry=registry)
+    await task_facade.run_durable_submission_recognition(_claim(owner, queued["job_id"]))
+    saved = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    if not recovers:
+        assert saved["submission_sources"][0]["status"] != "parsed"
+        await continue_manually(task_id=task, owner_id=owner, job_id=queued["job_id"],
+                                expected_revision=saved["workflow_revision"])
+        saved = task_facade.get_task(task_id=task, owner_id=owner, full=True)
+    answers = {a["q_id"]: a for a in saved["student_data"]["S1"]["stu_ans"]}
+    assert answers["q1"]["content"] == ("Recovered work." if recovers else "")
+    assert ("recognition_manual_pending" in answers["q1"]["flag"]) is not recovers
+    assert "recognition_manual_pending" not in answers["q2"]["flag"]
+    assert answers["q3"]["content"] == "Legible work."
+    assert calls.count(["q1"]) == (1 if recovers else 2)
+    assert sum("q2" in ids for ids in calls) == sum("q3" in ids for ids in calls) == 1
+    assert ("submission_recognition_blocked" in task_facade.grading_readiness(
+        task_id=task, owner_id=owner)["blocking_issues"]) is not recovers

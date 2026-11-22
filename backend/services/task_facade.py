@@ -3810,6 +3810,7 @@ async def run_task_submission_parsing(
                 return retained
 
             page_texts, incremental_tasks = {}, {}
+            low_confidence_pages = {}
             async def schedule_pages(source_id, stored_file_id, source_filename, source_content_type,
                                      *, complete=False, end_page=None):
                 from backend.services.source_question_units import QUESTION_HEADING, source_question_units, source_page_groups
@@ -3862,12 +3863,20 @@ async def run_task_submission_parsing(
                         continue
                     source = PreparedSubmissionSource(source_id, stored_file_id, source_filename, source_content_type,
                         "\n\n".join(part for part in (prefix, unit.text) if part),
-                        recognition={"complete_question_ids": sorted(ids), "source_pages": list(unit.pages)})
+                        recognition={"complete_question_ids": sorted(ids), "source_pages": list(unit.pages),
+                                     "confidence_reasons": ["low_confidence_content"] if
+                                     low_confidence_pages.get(source_id, set()).intersection(unit.pages) else []})
                     task = asyncio.create_task(parse_unit(source, ids))
                     dispatched.update({q_id: task for q_id in ids})
 
             async def on_saved_pages(raw, stored_file_id, pages):
                 source_id = source_contexts[(stored_file_id, raw.filename)]
+                confidence = low_confidence_pages.setdefault(source_id, set())
+                for page in pages:
+                    if page.get("low_confidence_content"):
+                        confidence.add(page["page_number"])
+                    else:
+                        confidence.discard(page["page_number"])
                 page_texts.setdefault(source_id, {}).update({page["page_number"]: page["text"] for page in pages})
                 await schedule_pages(source_id, stored_file_id, raw.filename, raw.content_type)
 

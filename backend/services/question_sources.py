@@ -27,7 +27,7 @@ from backend.recognition.runtime import RecognitionCapacity
 from backend.services.recognition_artifacts import RecognitionArtifactStore
 from backend.services.recognition_runs import RecognitionRunService
 from backend.services.recognition_timeouts import apply_source_timeout_profile
-from backend.services.question_source_batches import read_question_pdf_batches
+from backend.services.question_source_batches import read_question_pdf_batches, saved_page_evidence
 from backend.services.stage_provider_routing import (
     StageProviderRoute, build_owner_baidu_ocr_skill, stage_provider_configuration_fingerprint,
 )
@@ -299,10 +299,7 @@ async def read_question_source(*, owner_id, task_id, content, filename, content_
     # an apparently unanswered question in the structure parser.
     coverage = document.coverage
     if on_pages is not None:
-        ready = [dict(page_number=page.page_number,
-                    **({"formula_conflicts": page.formula_conflicts} if getattr(page, "formula_conflicts", None) else {}),
-            text="\n".join(span.final_text for span in page.spans if span.final_text))
-            for page in document.pages if page.page_number in coverage.processed_pages]
+        ready = [saved_page_evidence(page) for page in document.pages if page.page_number in coverage.processed_pages]
         if ready:
             await on_pages(ready)
     incomplete = bool(coverage.failed_pages or coverage.unprocessed_pages or coverage.missing_targets)
