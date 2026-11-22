@@ -126,7 +126,7 @@ async def align_methods(problem, answer, experts, assessments, traces, plan, coo
                     "repair_scope": "Correct only the requested part IDs using the supplied sources and frozen rules."})
                 raise error from exc
 
-        async with prepared_grading(provider), _progress(reporter, student_id, problem, provider):
+        async with prepared_grading(provider, review=True), _progress(reporter, student_id, problem, provider):
             result, _ = await structured_llm_call(provider, output_model=output_model,
                 system_prompt=build_system_prompt(instruction + "\nJSON Schema:\n" +
                     grading._json(output_model.model_json_schema()), language, grading_setup),
