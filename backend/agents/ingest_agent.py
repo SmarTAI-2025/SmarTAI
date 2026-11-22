@@ -1266,28 +1266,46 @@ def normalize_submission_source_identities(results):
     return normalized
 
 
-_OCR_STUDENT_ID = re.compile(
-    r"(?im)^\s*(?:学号|student\s*id)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
-)
-_OCR_STUDENT_NAME = re.compile(
-    r"(?im)^\s*(?:姓名|name)\s*[:：]\s*(?P<value>[^\n]{1,160})$"
-)
+# Accept identity labels at a field boundary, including adjacent fields on one line.
+_OCR_FIELD_START = r"(?:^[ \t]*|[,，;；][ \t]*|(?<=\S)[ \t]+(?=(?:学号|姓名|student[ \t]+id|name)[ \t]*[:：]))"
+_OCR_FIELD_SEPARATOR = r"(?:[ \t]*[:：][ \t]*|[ \t]+)"
+_OCR_FIELD_VALUE = (r"(?P<value>[^\r\n]{1,160}?)(?=(?:[,，;；][ \t]*|[ \t]+)(?:学号|姓名|student[ \t]+id|name)(?=[:： \t])"
+                    r"|[ \t]*\r?$)")
+_OCR_STUDENT_ID = re.compile(_OCR_FIELD_START + r"(?:学号|student[ \t]*id)" + _OCR_FIELD_SEPARATOR + _OCR_FIELD_VALUE,
+                             re.I | re.M)
+_OCR_STUDENT_NAME = re.compile(_OCR_FIELD_START + r"(?:姓名" + _OCR_FIELD_SEPARATOR + r"|name[ \t]*[:：][ \t]*)"
+                               + _OCR_FIELD_VALUE, re.I | re.M)
+_OCR_NAME_BEFORE_ID = re.compile(r"(?m)^[ \t]*(?P<value>[\u3400-\u9fff]{2,4})[ \t]*[,，][ \t]*学号(?=[:： \t])")
+_OCR_UNREADABLE_IDENTITY = re.compile(r"\[(?:unclear|unreadable|illegible|无法辨认)\]", re.I)
+_FILENAME_STUDENT_ID = re.compile(r"(?:\d{1,20}|(?:[a-z]|stu|student|id)\d{1,20}|[a-z]{2,4}\d{5,20})", re.I)
+_GENERIC_SUBMISSION_LABEL = re.compile(r"(?:作业|提交|答案|练习|homework|submission|work|answer)s?\d*", re.I)
+
+
+def _ocr_identity_value(pattern, text):
+    for match in pattern.finditer(text):
+        value = match["value"].strip()
+        if value and not _OCR_UNREADABLE_IDENTITY.search(value) and not _GENERIC_SUBMISSION_LABEL.fullmatch(value):
+            return value
+    return ""
 
 
 def _ocr_identity_candidate(text: str, filename: str) -> tuple[str, str, bool]:
-    sample = text[:20_000]
-    id_match = _OCR_STUDENT_ID.search(sample)
-    name_match = _OCR_STUDENT_NAME.search(sample)
-    student_id = id_match.group("value").strip() if id_match else ""
-    student_name = name_match.group("value").strip() if name_match else ""
     stem = PurePath(filename).stem
     parts = re.split(r"[_\s-]+", stem, maxsplit=1)
-    if parts[0] and any(ch.isdigit() for ch in parts[0]):
-        student_id = parts[0] if len(parts[0]) <= 160 else student_id
-        if len(parts) == 2:
-            name = parts[1].split("_", 1)[0].strip()
-            if name and len(name) <= 160:
-                student_name = name
+    student_id = student_name = ""
+    if _FILENAME_STUDENT_ID.fullmatch(parts[0]):
+        student_id = parts[0]
+        student_name = parts[1].split("_", 1)[0].strip() if len(parts) == 2 else ""
+    elif len(parts) == 2 and _FILENAME_STUDENT_ID.fullmatch(parts[1]):
+        student_id, student_name = parts[1], parts[0]
+    if len(student_name) > 160 or _GENERIC_SUBMISSION_LABEL.fullmatch(student_name):
+        student_name = ""
+
+    # Recover each missing field from the saved transcription, including
+    # later legible labels when the first occurrence was unreadable.
+    student_id = student_id or _ocr_identity_value(_OCR_STUDENT_ID, text)
+    student_name = (student_name or _ocr_identity_value(_OCR_STUDENT_NAME, text)
+                    or _ocr_identity_value(_OCR_NAME_BEFORE_ID, text))
     fallback = identity_filename(filename)
     return student_id or fallback, student_name or fallback, bool(student_id and student_name)
 

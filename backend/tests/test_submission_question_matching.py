@@ -398,3 +398,33 @@ async def test_model_matching_uncertainty_survives_type_repair_and_saved_grading
         assert confirmed['content'] == answers['q1']['content'] and confirmed['review_status'] == 'confirmed'
         assert 'submission_recognition_blocked' not in task_facade.grading_readiness(task_id=task, owner_id=owner)['blocking_issues']
         assert calls == [['q1', 'q2'], ['q1']]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename,header,expected", [
+    ("作业1-提交.txt", "张三，学号 000123", ("000123", "张三", "matched")),
+    ("work.txt", "姓名：张三，学号：000123", ("000123", "张三", "matched")),
+    ("作业1-提交.txt", "学号 000123", ("000123", "作业1-提交.txt", "needs_review")),
+    ("作业1-提交.txt", "姓名：张三", ("作业1-提交.txt", "张三", "needs_review")),
+    ("000456.txt", "张三，学号 000123", ("000456", "张三", "matched")),
+    ("李四_000456.txt", "张三，学号 000123", ("000456", "李四", "matched")),
+    ("000456_李四.txt", "张三，学号 000123", ("000456", "李四", "matched")),
+    ("work.txt", "姓名：张三 学号：000123", ("000123", "张三", "matched")),
+    ("work.txt", "姓名：[unclear]\n姓名：张三\n学号：000123", ("000123", "张三", "matched")),
+    ("work.txt", "Name: Smith, Jr.\nStudent ID: A-001", ("A-001", "Smith, Jr.", "matched")),
+    ("work.txt", "Name two properties of primes.", ("work.txt", "work.txt", "needs_review")),
+    ("S001_提交.txt", "姓名：[unclear]", ("S001", "S001_提交.txt", "needs_review")),
+    ("作业1-提交.txt", "Answer sheet", ("作业1-提交.txt", "作业1-提交.txt", "needs_review")),
+])
+async def test_baidu_identity_from_filename_and_inline_header(filename, header, expected):
+    from dataclasses import replace
+    original = replace(source(header + "\n1. Student answer."), filename=filename)
+    result, = await ingest_agent.parse_student_answer_sources_from_ocr_markdown([original], problems())
+    assert tuple(result.student[key] for key in ("stu_id", "stu_name", "identity_status")) == expected
+    assert result.student["stu_ans"][0]["content"] == "Student answer."
+    assert (result.stable_error_code == "identity_needs_review") == (expected[2] == "needs_review")
+
+
+def test_ocr_finds_a_missing_field_later_in_the_same_transcription():
+    text = "姓名：张三\n" + "x" * 20_000 + "\n学号：000123\n姓名：李四"
+    assert ingest_agent._ocr_identity_candidate(text, "作业1-提交.txt") == ("000123", "张三", True)
