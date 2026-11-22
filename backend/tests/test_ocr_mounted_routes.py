@@ -15,6 +15,7 @@ from backend.tests.test_question_preparation_recovery import _RecoveryRegistry
 @pytest.fixture
 def client_registry():
     registry = _RecoveryRegistry()
+    registry.provider = registry.Provider()  # Route tests replace methods on this instance.
     previous = app.dependency_overrides.get(get_scoped_expert_registry)
     app.dependency_overrides[get_scoped_expert_registry] = lambda: registry
     try:
